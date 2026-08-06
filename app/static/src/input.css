@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    /* scrollbar-gutter only takes effect on a scroll container (overflow:
+       auto/scroll) — html's default overflow is visible, so it must be set
+       explicitly or the gutter reservation below is silently ignored. */
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+}

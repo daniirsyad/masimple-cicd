@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Login - Hamilton</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='dist/output.css') }}"
+    />
+  </head>
+  <body class="min-h-screen bg-base-200">
+    <div class="flex min-h-screen items-center justify-center p-4">
+      <div class="card w-full max-w-sm bg-base-100 shadow-xl">
+        <div class="card-body">
+          <h1 class="text-center text-2xl font-bold">Hamilton</h1>
+          <p class="text-center text-sm text-base-content/60">
+            Sign in to continue
+          </p>
+
+          {% with messages = get_flashed_messages(with_categories=true) %} {% if
+          messages %}
+          <div class="mt-2 flex flex-col gap-2">
+            {% for category, message in messages %}
+            <div
+              class="alert alert-{{ 'error' if category == 'error' else category }} py-2 text-sm"
+            >
+              <span>{{ message }}</span>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %} {% endwith %}
+
+          <form method="post" novalidate class="mt-2 flex flex-col gap-3">
+            {{ form.hidden_tag() }}
+
+            <label class="form-control">
+              {{ form.username.label(class="label-text text-sm") }} {{
+              form.username(class="input input-bordered input-sm w-full" + ("
+              input-error" if form.username.errors else "")) }} {% for error in
+              form.username.errors %}
+              <span class="mt-1 text-sm text-error">{{ error }}</span>
+              {% endfor %}
+            </label>
+
+            <label class="form-control">
+              {{ form.password.label(class="label-text text-sm") }} {{
+              form.password(class="input input-bordered input-sm w-full" + ("
+              input-error" if form.password.errors else "")) }} {% for error in
+              form.password.errors %}
+              <span class="mt-1 text-sm text-error">{{ error }}</span>
+              {% endfor %}
+            </label>
+
+            {{ form.submit(class="btn btn-primary btn-sm mt-2 w-full") }}
+          </form>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

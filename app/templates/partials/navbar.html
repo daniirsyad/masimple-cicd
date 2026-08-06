@@ -1,0 +1,42 @@
+<div
+  class="navbar sticky top-0 z-20 bg-base-100 border-b border-base-200 min-h-12 py-1"
+>
+  <div class="flex-none">
+    <button
+      type="button"
+      id="sidebar-toggle"
+      aria-label="Toggle sidebar"
+      class="btn btn-square btn-ghost btn-sm"
+    >
+      <span class="text-xl">&#9776;</span>
+    </button>
+  </div>
+
+  <div class="flex-1">
+    <a href="{{ url_for('main.index') }}" class="ml-2 text-lg font-semibold"
+      >Hamilton</a
+    >
+  </div>
+
+  <div class="flex-none gap-2">
+    {% if navbar_menu %}
+    <ul class="menu menu-horizontal menu-sm hidden px-1 md:flex">
+      {% for item in navbar_menu %}
+      <li><a href="{{ item.url }}">{{ item.label }}</a></li>
+      {% endfor %}
+    </ul>
+    {% endif %} {% if current_user.is_authenticated %}
+    <div class="dropdown dropdown-end">
+      <div tabindex="0" role="button" class="btn btn-ghost btn-sm">
+        {{ current_user.full_name or current_user.username }}
+      </div>
+      <ul
+        tabindex="0"
+        class="menu menu-sm dropdown-content z-1 mt-3 w-40 rounded-box bg-base-100 p-2 shadow"
+      >
+        <li><a href="{{ url_for('auth.logout') }}">Logout</a></li>
+      </ul>
+    </div>
+    {% endif %}
+  </div>
+</div>

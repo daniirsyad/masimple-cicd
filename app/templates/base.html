@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}Hamilton{% endblock %}</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='dist/output.css') }}"
+    />
+  </head>
+  <body data-open-modal="{{ open_modal|default('') }}">
+    <div class="drawer lg:drawer-open" id="app-drawer-wrapper">
+      <input id="app-drawer" type="checkbox" class="drawer-toggle" />
+
+      <div class="drawer-content flex min-h-screen flex-col">
+        {% include "partials/navbar.html" %}
+
+        <main class="flex-1 p-4">
+          {% with messages = get_flashed_messages(with_categories=true) %} {% if
+          messages %}
+          <div class="mb-4 flex flex-col gap-2">
+            {% for category, message in messages %}
+            <div
+              class="alert alert-{{ 'error' if category == 'error' else category }}"
+            >
+              <span>{{ message }}</span>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %} {% endwith %} {% block content %}{% endblock %}
+        </main>
+      </div>
+
+      <div class="drawer-side z-10">
+        <label
+          for="app-drawer"
+          aria-label="close sidebar"
+          class="drawer-overlay"
+        ></label>
+        {% include "partials/sidebar.html" %}
+      </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/sidebar.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modal-form.js') }}"></script>
+  </body>
+</html>

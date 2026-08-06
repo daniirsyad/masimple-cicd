@@ -1,0 +1,101 @@
+{% extends "base.html" %} {% block title %}Activity Logs - Hamilton{% endblock
+%} {% block content %}
+<h1 class="text-2xl font-bold">Activity Logs</h1>
+
+<form method="get" class="mt-4 flex flex-wrap items-end gap-3">
+  <div>
+    <label class="label text-sm">User</label>
+    <select name="user_id" class="select select-bordered select-sm">
+      <option value="">All</option>
+      {% for user in users %}
+      <option value="{{ user.id }}" {{ 'selected' if selected_user_id == user.id|string else '' }}>
+        {{ user.username }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="label text-sm">Action</label>
+    <select name="action" class="select select-bordered select-sm">
+      <option value="">All</option>
+      {% for action_option in actions %}
+      <option value="{{ action_option }}" {{ 'selected' if selected_action == action_option else '' }}>
+        {{ action_option }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="label text-sm">From</label>
+    <input
+      type="date"
+      name="date_from"
+      value="{{ date_from }}"
+      class="input input-bordered input-sm"
+    />
+  </div>
+
+  <div>
+    <label class="label text-sm">To</label>
+    <input
+      type="date"
+      name="date_to"
+      value="{{ date_to }}"
+      class="input input-bordered input-sm"
+    />
+  </div>
+
+  <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+  <a href="{{ url_for('logs.view_logs') }}" class="btn btn-ghost btn-sm">Reset</a>
+</form>
+
+<div class="mt-4 overflow-x-auto">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>User</th>
+        <th>Action</th>
+        <th>Target</th>
+        <th>Description</th>
+        <th>IP</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for log in logs %}
+      <tr>
+        <td>{{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td>{{ log.user.username if log.user else 'System' }}</td>
+        <td><span class="badge badge-ghost badge-sm">{{ log.action }}</span></td>
+        <td>
+          {{ log.target_type }}{% if log.target_id %} #{{ log.target_id[:8] }}{%
+          endif %}
+        </td>
+        <td>{{ log.description }}</td>
+        <td>{{ log.ip_address }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="6">No activity logs found.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pagination.pages > 1 %}
+<div class="join mt-4">
+  {% for page_num in pagination.iter_pages() %} {% if page_num %}
+  <a
+    href="{{ url_for('logs.view_logs', page=page_num, user_id=selected_user_id, action=selected_action, date_from=date_from, date_to=date_to) }}"
+    class="join-item btn btn-sm {{ 'btn-active' if page_num == pagination.page else '' }}"
+  >
+    {{ page_num }}
+  </a>
+  {% else %}
+  <span class="join-item btn btn-sm btn-disabled">…</span>
+  {% endif %} {% endfor %}
+</div>
+{% endif %} {% endblock %}

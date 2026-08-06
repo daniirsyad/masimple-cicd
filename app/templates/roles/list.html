@@ -1,0 +1,207 @@
+{% extends "base.html" %} {% block title %}Roles - Hamilton{% endblock %} {%
+block content %}
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold">Roles</h1>
+  <button
+    type="button"
+    class="btn btn-primary btn-sm"
+    onclick="document.getElementById('create-modal').showModal()"
+  >
+    New Role
+  </button>
+</div>
+
+<div class="mt-4 overflow-x-auto">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Description</th>
+        <th>Permissions</th>
+        <th>Type</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for role in roles %}
+      <tr>
+        <td>{{ role.name }}</td>
+        <td>{{ role.description }}</td>
+        <td>{{ role.permissions | length }}</td>
+        <td>
+          <span
+            class="badge badge-sm {{ 'badge-neutral' if role.is_system else 'badge-ghost' }}"
+          >
+            {{ 'System' if role.is_system else 'Custom' }}
+          </span>
+        </td>
+        <td class="flex gap-2">
+          <button
+            type="button"
+            class="btn btn-sm"
+            onclick="document.getElementById('edit-modal-{{ role.id }}').showModal()"
+          >
+            Edit
+          </button>
+          {% if not role.is_system %}
+          <button
+            type="button"
+            class="btn btn-sm btn-error"
+            onclick="document.getElementById('delete-modal-{{ role.id }}').showModal()"
+          >
+            Delete
+          </button>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="5">No roles found.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<dialog id="create-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">New Role</h3>
+
+    <form
+      method="post"
+      action="{{ url_for('roles.create_role') }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ create_form.hidden_tag() }}
+
+      <div>
+        {{ create_form.name.label(class="label text-sm") }} {{
+        create_form.name(class="input input-bordered input-sm w-full") }} {%
+        for error in create_form.name.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div>
+        {{ create_form.description.label(class="label text-sm") }} {{
+        create_form.description(class="textarea textarea-bordered
+        textarea-sm w-full") }}
+      </div>
+
+      <div>
+        <span class="label text-sm">Permissions</span>
+        <div class="grid grid-cols-2 gap-2">
+          {% for subfield in create_form.permissions %}
+          <label class="flex items-center gap-2 text-sm">
+            {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="modal-action">
+        <button
+          type="button"
+          class="btn btn-sm"
+          onclick="this.closest('dialog').close()"
+        >
+          Cancel
+        </button>
+        {{ create_form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+{% for role in roles %}
+<dialog id="edit-modal-{{ role.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">Edit Role: {{ role.name }}</h3>
+    {% if role.is_system %}
+    <p class="mt-1 text-sm opacity-70">
+      This is a built-in system role and cannot be deleted.
+    </p>
+    {% endif %}
+
+    {% set form = edit_forms[role.id] %}
+    <form
+      method="post"
+      action="{{ url_for('roles.edit_role', role_id=role.id) }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ form.hidden_tag() }}
+
+      <div>
+        {{ form.name.label(class="label text-sm") }} {{
+        form.name(class="input input-bordered input-sm w-full") }} {% for
+        error in form.name.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div>
+        {{ form.description.label(class="label text-sm") }} {{
+        form.description(class="textarea textarea-bordered textarea-sm
+        w-full") }}
+      </div>
+
+      <div>
+        <span class="label text-sm">Permissions</span>
+        <div class="grid grid-cols-2 gap-2">
+          {% for subfield in form.permissions %}
+          <label class="flex items-center gap-2 text-sm">
+            {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="modal-action">
+        <button
+          type="button"
+          class="btn btn-sm"
+          onclick="this.closest('dialog').close()"
+        >
+          Cancel
+        </button>
+        {{ form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+{% if not role.is_system %}
+<dialog id="delete-modal-{{ role.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-sm">
+    <h3 class="text-lg font-bold">Delete Role</h3>
+    <p class="py-4 text-sm">
+      Are you sure you want to delete the role "{{ role.name }}"? This cannot
+      be undone.
+    </p>
+    <div class="modal-action">
+      <button
+        type="button"
+        class="btn btn-sm"
+        onclick="this.closest('dialog').close()"
+      >
+        Cancel
+      </button>
+      <form method="post" action="{{ url_for('roles.delete_role', role_id=role.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+        <button type="submit" class="btn btn-sm btn-error">Delete</button>
+      </form>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+{% endif %} {% endfor %} {% endblock %}

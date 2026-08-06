@@ -1,0 +1,250 @@
+{% extends "base.html" %} {% block title %}Users - Hamilton{% endblock %} {%
+block content %}
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold">Users</h1>
+  <button
+    type="button"
+    class="btn btn-primary btn-sm"
+    onclick="document.getElementById('create-modal').showModal()"
+  >
+    New User
+  </button>
+</div>
+
+<form method="get" class="mt-4 flex flex-wrap gap-2">
+  <input
+    type="text"
+    name="q"
+    value="{{ search }}"
+    placeholder="Search username"
+    class="input input-bordered input-sm"
+  />
+  <select name="role_id" class="select select-bordered select-sm">
+    <option value="">All roles</option>
+    {% for role in roles %}
+    <option value="{{ role.id }}" {{ 'selected' if selected_role_id == role.id|string else '' }}>
+      {{ role.name }}
+    </option>
+    {% endfor %}
+  </select>
+  <select name="status" class="select select-bordered select-sm">
+    <option value="">All statuses</option>
+    <option value="active" {{ 'selected' if selected_status == 'active' else '' }}>
+      Active
+    </option>
+    <option value="inactive" {{ 'selected' if selected_status == 'inactive' else '' }}>
+      Inactive
+    </option>
+  </select>
+  <button type="submit" class="btn btn-sm">Filter</button>
+</form>
+
+<div class="mt-4 overflow-x-auto">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Username</th>
+        <th>Full Name</th>
+        <th>Role</th>
+        <th>Status</th>
+        <th>Last Login</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for user in users %}
+      <tr>
+        <td>{{ user.username }}</td>
+        <td>{{ user.full_name }}</td>
+        <td>{{ user.role.name if user.role else "—" }}</td>
+        <td>
+          <span
+            class="badge badge-sm {{ 'badge-success' if user.is_active else 'badge-error' }}"
+          >
+            {{ 'Active' if user.is_active else 'Inactive' }}
+          </span>
+        </td>
+        <td>
+          {{ user.last_login_at.strftime("%Y-%m-%d %H:%M") if user.last_login_at
+          else "Never" }}
+        </td>
+        <td class="flex gap-2">
+          <button
+            type="button"
+            class="btn btn-sm"
+            onclick="document.getElementById('edit-modal-{{ user.id }}').showModal()"
+          >
+            Edit
+          </button>
+          <form
+            method="post"
+            action="{{ url_for('users.toggle_active', user_id=user.id) }}"
+          >
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+            <button type="submit" class="btn btn-sm btn-warning">
+              {{ 'Deactivate' if user.is_active else 'Activate' }}
+            </button>
+          </form>
+          {% if user.id != current_user.id %}
+          <button
+            type="button"
+            class="btn btn-sm btn-error"
+            onclick="document.getElementById('delete-modal-{{ user.id }}').showModal()"
+          >
+            Delete
+          </button>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="6">No users found.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<dialog id="create-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-md">
+    <h3 class="text-lg font-bold">New User</h3>
+
+    <form
+      method="post"
+      action="{{ url_for('users.create_user') }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ create_form.hidden_tag() }}
+
+      <div>
+        {{ create_form.username.label(class="label text-sm") }} {{
+        create_form.username(class="input input-bordered input-sm w-full") }}
+        {% for error in create_form.username.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div>
+        {{ create_form.password.label(class="label text-sm") }} {{
+        create_form.password(class="input input-bordered input-sm w-full") }}
+        {% for error in create_form.password.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div>
+        {{ create_form.full_name.label(class="label text-sm") }} {{
+        create_form.full_name(class="input input-bordered input-sm w-full") }}
+      </div>
+
+      <div>
+        {{ create_form.role_id.label(class="label text-sm") }} {{
+        create_form.role_id(class="select select-bordered select-sm w-full")
+        }} {% for error in create_form.role_id.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div class="modal-action">
+        <button
+          type="button"
+          class="btn btn-sm"
+          onclick="this.closest('dialog').close()"
+        >
+          Cancel
+        </button>
+        {{ create_form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+{% for user in users %}
+<dialog id="edit-modal-{{ user.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-md">
+    <h3 class="text-lg font-bold">Edit User: {{ user.username }}</h3>
+
+    {% set form = edit_forms[user.id] %}
+    <form
+      method="post"
+      action="{{ url_for('users.edit_user', user_id=user.id) }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ form.hidden_tag() }}
+
+      <div>
+        {{ form.full_name.label(class="label text-sm") }} {{
+        form.full_name(class="input input-bordered input-sm w-full") }}
+      </div>
+
+      <div>
+        {{ form.role_id.label(class="label text-sm") }} {{
+        form.role_id(class="select select-bordered select-sm w-full") }} {%
+        for error in form.role_id.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div class="flex items-center gap-2">
+        {{ form.is_active(class="checkbox checkbox-sm") }} {{
+        form.is_active.label(class="text-sm") }}
+      </div>
+
+      <div>
+        {{ form.new_password.label(class="label text-sm") }} {{
+        form.new_password(class="input input-bordered input-sm w-full") }}
+        <p class="text-sm opacity-70">Leave blank to keep the current password.</p>
+        {% for error in form.new_password.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div class="modal-action">
+        <button
+          type="button"
+          class="btn btn-sm"
+          onclick="this.closest('dialog').close()"
+        >
+          Cancel
+        </button>
+        {{ form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+{% if user.id != current_user.id %}
+<dialog id="delete-modal-{{ user.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-sm">
+    <h3 class="text-lg font-bold">Delete User</h3>
+    <p class="py-4 text-sm">
+      Are you sure you want to delete "{{ user.username }}"? This cannot be
+      undone.
+    </p>
+    <div class="modal-action">
+      <button
+        type="button"
+        class="btn btn-sm"
+        onclick="this.closest('dialog').close()"
+      >
+        Cancel
+      </button>
+      <form method="post" action="{{ url_for('users.delete_user', user_id=user.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+        <button type="submit" class="btn btn-sm btn-error">Delete</button>
+      </form>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+{% endif %} {% endfor %} {% endblock %}

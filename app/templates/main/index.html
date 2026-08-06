@@ -1,0 +1,48 @@
+{% extends "base.html" %} {% block title %}Dashboard - Hamilton{% endblock %} {%
+block content %}
+<h1 class="text-2xl font-bold">
+  Welcome, {{ current_user.full_name or current_user.username }}
+</h1>
+
+<div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+  <div class="stat rounded-box bg-base-100 shadow">
+    <div class="stat-title">Active Users</div>
+    <div class="stat-value">{{ active_users_count }}</div>
+  </div>
+  <div class="stat rounded-box bg-base-100 shadow">
+    <div class="stat-title">Roles</div>
+    <div class="stat-value">{{ roles_count }}</div>
+  </div>
+</div>
+
+<h2 class="mt-8 text-xl font-semibold">Recent Activity</h2>
+<div class="mt-2 overflow-x-auto">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>Action</th>
+        <th>Target</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for log in recent_logs %}
+      <tr>
+        <td>{{ log.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+        <td><span class="badge badge-sm">{{ log.action }}</span></td>
+        <td>
+          {{ log.target_type }}{% if log.target_id %} #{{ log.target_id }}{%
+          endif %}
+        </td>
+        <td>{{ log.description }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="4">No activity yet.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

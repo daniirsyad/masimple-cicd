@@ -1,0 +1,172 @@
+{% extends "base.html" %} {% block title %}Permissions - Hamilton{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold">Permissions</h1>
+  <button
+    type="button"
+    class="btn btn-primary btn-sm"
+    onclick="document.getElementById('create-modal').showModal()"
+  >
+    New Permission
+  </button>
+</div>
+
+<div class="mt-4 overflow-x-auto">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Code</th>
+        <th>Description</th>
+        <th>Roles</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for permission in permissions %}
+      <tr>
+        <td><code>{{ permission.code }}</code></td>
+        <td>{{ permission.description }}</td>
+        <td>{{ permission.roles | length }}</td>
+        <td class="flex gap-2">
+          <button
+            type="button"
+            class="btn btn-sm"
+            onclick="document.getElementById('edit-modal-{{ permission.id }}').showModal()"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm btn-error"
+            onclick="document.getElementById('delete-modal-{{ permission.id }}').showModal()"
+          >
+            Delete
+          </button>
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="4">No permissions found.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<dialog id="create-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">New Permission</h3>
+
+    <form
+      method="post"
+      action="{{ url_for('permissions.create_permission') }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ create_form.hidden_tag() }}
+
+      <div>
+        {{ create_form.code.label(class="label text-sm") }} {{
+        create_form.code(class="input input-bordered input-sm w-full",
+        placeholder="e.g. reports.view") }} {% for error in
+        create_form.code.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div>
+        {{ create_form.description.label(class="label text-sm") }} {{
+        create_form.description(class="input input-bordered input-sm
+        w-full") }}
+      </div>
+
+      <div class="modal-action">
+        <button
+          type="button"
+          class="btn btn-sm"
+          onclick="this.closest('dialog').close()"
+        >
+          Cancel
+        </button>
+        {{ create_form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+{% for permission in permissions %}
+<dialog id="edit-modal-{{ permission.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">Edit Permission: {{ permission.code }}</h3>
+
+    {% set form = edit_forms[permission.id] %}
+    <form
+      method="post"
+      action="{{ url_for('permissions.edit_permission', permission_id=permission.id) }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ form.hidden_tag() }}
+
+      <div>
+        {{ form.code.label(class="label text-sm") }} {{ form.code(class="input
+        input-bordered input-sm w-full") }} {% for error in form.code.errors
+        %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div>
+        {{ form.description.label(class="label text-sm") }} {{
+        form.description(class="input input-bordered input-sm w-full") }}
+      </div>
+
+      <div class="modal-action">
+        <button
+          type="button"
+          class="btn btn-sm"
+          onclick="this.closest('dialog').close()"
+        >
+          Cancel
+        </button>
+        {{ form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+<dialog id="delete-modal-{{ permission.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-sm">
+    <h3 class="text-lg font-bold">Delete Permission</h3>
+    <p class="py-4 text-sm">
+      Are you sure you want to delete "{{ permission.code }}"? This cannot be
+      undone.
+    </p>
+    <div class="modal-action">
+      <button
+        type="button"
+        class="btn btn-sm"
+        onclick="this.closest('dialog').close()"
+      >
+        Cancel
+      </button>
+      <form
+        method="post"
+        action="{{ url_for('permissions.delete_permission', permission_id=permission.id) }}"
+      >
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+        <button type="submit" class="btn btn-sm btn-error">Delete</button>
+      </form>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+{% endfor %} {% endblock %}

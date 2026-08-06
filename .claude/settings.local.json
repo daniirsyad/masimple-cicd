@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:5000/login)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:5000/)",
+      "Bash(curl -s http://127.0.0.1:5000/login)",
+      "Read(//tmp/pages/**)",
+      "Bash(timeout 6 bash -c 'cat < /dev/tcp/192.168.1.9/5432')",
+      "Bash(echo \"db reachable exit: $?\")",
+      "Bash(grep -o '.\\\\{0,60\\\\}\\\\.active.\\\\{0,80\\\\}' app/static/dist/output.css)",
+      "Bash(cd *)"
+    ]
+  }
+}

@@ -1,0 +1,110 @@
+{% set has_children = has_children_map[item.id] %}
+<dialog id="edit-modal-{{ item.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">Edit Menu: {{ item.label }}</h3>
+    {% if has_children %}
+    <p class="mt-1 text-sm opacity-70">
+      This menu has sub-items, so it must stay a top-level item (max nesting
+      depth is 1).
+    </p>
+    {% endif %}
+
+    {% set form = edit_forms[item.id] %}
+    <form
+      method="post"
+      action="{{ url_for('menus.edit_menu', menu_id=item.id) }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ form.hidden_tag() }}
+
+      <div>
+        {{ form.label.label(class="label text-sm") }} {{
+        form.label(class="input input-bordered input-sm w-full") }} {% for
+        error in form.label.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div>
+        {{ form.icon.label(class="label text-sm") }} {{
+        form.icon(class="textarea textarea-bordered textarea-sm w-full
+        font-mono", rows=3) }}
+        <p class="mt-1 text-xs text-base-content/60">
+          Paste inline SVG markup, e.g.
+          <code>&lt;svg viewBox="0 0 24 24"&gt;...&lt;/svg&gt;</code>. Shown
+          next to the label in the sidebar. Use
+          <code>fill="currentColor"</code> (not a hardcoded color) so the icon
+          follows the sidebar's text color in both light and dark mode.
+        </p>
+      </div>
+
+      <div>
+        {{ form.url.label(class="label text-sm") }} {{ form.url(class="input
+        input-bordered input-sm w-full") }}
+      </div>
+
+      <div>
+        {{ form.parent_id.label(class="label text-sm") }} {{
+        form.parent_id(class="select select-bordered select-sm w-full",
+        disabled=has_children) }}
+      </div>
+
+      <div>
+        {{ form.permission_code.label(class="label text-sm") }} {{
+        form.permission_code(class="select select-bordered select-sm w-full")
+        }}
+      </div>
+
+      <label class="flex items-center gap-2 text-sm">
+        {{ form.show_in_navbar(class="checkbox checkbox-sm") }} {{
+        form.show_in_navbar.label.text }}
+      </label>
+
+      <label class="flex items-center gap-2 text-sm">
+        {{ form.show_in_sidebar(class="checkbox checkbox-sm") }} {{
+        form.show_in_sidebar.label.text }}
+      </label>
+
+      <div class="modal-action">
+        <button
+          type="button"
+          class="btn btn-sm"
+          onclick="this.closest('dialog').close()"
+        >
+          Cancel
+        </button>
+        {{ form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+<dialog id="delete-modal-{{ item.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-sm">
+    <h3 class="text-lg font-bold">Delete Menu Item</h3>
+    <p class="py-4 text-sm">
+      Are you sure you want to delete "{{ item.label }}"? This cannot be
+      undone.
+    </p>
+    <div class="modal-action">
+      <button
+        type="button"
+        class="btn btn-sm"
+        onclick="this.closest('dialog').close()"
+      >
+        Cancel
+      </button>
+      <form method="post" action="{{ url_for('menus.delete_menu', menu_id=item.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+        <button type="submit" class="btn btn-sm btn-error">Delete</button>
+      </form>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
