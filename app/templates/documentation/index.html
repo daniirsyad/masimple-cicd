@@ -1,0 +1,152 @@
+{% extends "base.html" %} {% block title %}Documentation -
+Hamilton{% endblock %} {% block content %}
+<h1 class="text-2xl font-bold">Documentation</h1>
+<p class="mt-2 text-sm text-base-content/60">
+  Every fully successful build batch, most recent first — a batch is only
+  documented once every image in it built and pushed successfully.
+</p>
+
+<form method="get" class="mt-4 flex flex-wrap items-end gap-3">
+  <div>
+    <label class="label text-sm">Version</label>
+    <select name="version_id" class="select select-bordered select-sm">
+      <option value="">All</option>
+      {% for value, label in versions %}
+      <option value="{{ value }}" {{ 'selected' if selected_version_id == value else '' }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="label text-sm">Version String</label>
+    <input
+      type="text"
+      name="version_string"
+      value="{{ selected_version_string }}"
+      placeholder="e.g. DEV.2.0"
+      class="input input-bordered input-sm"
+    />
+  </div>
+
+  <div>
+    <label class="label text-sm">Change Type</label>
+    <select name="change_type_id" class="select select-bordered select-sm">
+      <option value="">All</option>
+      {% for value, label in change_type_choices %}
+      <option value="{{ value }}" {{ 'selected' if selected_change_type_id == value else '' }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="label text-sm">Object</label>
+    <input
+      type="text"
+      name="object"
+      value="{{ selected_object }}"
+      list="documentation-object-suggestions"
+      class="input input-bordered input-sm"
+    />
+    <datalist id="documentation-object-suggestions">
+      {% for suggestion in object_suggestions %}
+      <option value="{{ suggestion }}"></option>
+      {% endfor %}
+    </datalist>
+  </div>
+
+  <div>
+    <label class="label text-sm">Built by</label>
+    <select name="built_by" class="select select-bordered select-sm">
+      <option value="">All</option>
+      {% for value, label in built_by_choices %}
+      <option value="{{ value }}" {{ 'selected' if selected_built_by == value else '' }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="label text-sm">Status</label>
+    <select name="status" class="select select-bordered select-sm">
+      <option value="">All</option>
+      <option value="documented" {{ 'selected' if selected_status == 'documented' else '' }}>Documented</option>
+      <option value="pending" {{ 'selected' if selected_status == 'pending' else '' }}>Documentation Pending</option>
+    </select>
+  </div>
+
+  <div>
+    <label class="label text-sm">From</label>
+    <input type="date" name="date_from" value="{{ date_from }}" class="input input-bordered input-sm" />
+  </div>
+
+  <div>
+    <label class="label text-sm">To</label>
+    <input type="date" name="date_to" value="{{ date_to }}" class="input input-bordered input-sm" />
+  </div>
+
+  <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+  <a href="{{ url_for('documentation.list_documentation') }}" class="btn btn-ghost btn-sm">Reset</a>
+</form>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Version</th>
+            <th>Change Type</th>
+            <th>Object</th>
+            <th>Built by</th>
+            <th>Date</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for batch in batches %} {% set doc = batch.documentation %}
+          <tr>
+            <td><code class="text-xs">{{ batch.full_version_string }}</code></td>
+            <td>
+              {% if doc.change_type %}
+              <span class="badge badge-ghost badge-sm">{{ doc.change_type.name }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td>{{ doc.object or "—" }}</td>
+            <td>{{ doc.built_by_user.username if doc.built_by_user else "—" }}</td>
+            <td class="text-xs text-base-content/60">{{ batch.created_at | localtime("%Y-%m-%d %H:%M") }}</td>
+            <td>
+              <a
+                href="{{ url_for('documentation.view_documentation', batch_id=batch.id) }}"
+                class="badge badge-sm {{ 'badge-success' if doc.is_complete else 'badge-warning' }}"
+              >
+                {{ 'Documented' if doc.is_complete else 'Documentation Pending' }}
+              </a>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="6">
+              {{ 'No documented batches match these filters.' if has_filters else 'No documented batches yet.' }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% if pagination.pages > 1 %}
+<div class="join mt-4">
+  {% for page_num in pagination.iter_pages() %} {% if page_num %}
+  <a
+    href="{{ url_for('documentation.list_documentation', page=page_num, version_id=selected_version_id, version_string=selected_version_string, change_type_id=selected_change_type_id, object=selected_object, built_by=selected_built_by, status=selected_status, date_from=date_from, date_to=date_to) }}"
+    class="join-item btn btn-sm {{ 'btn-active' if page_num == pagination.page else '' }}"
+  >
+    {{ page_num }}
+  </a>
+  {% else %}
+  <span class="join-item btn btn-sm btn-disabled">…</span>
+  {% endif %} {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

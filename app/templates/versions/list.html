@@ -1,0 +1,227 @@
+{% extends "base.html" %} {% block title %}Versions -
+Hamilton{% endblock %} {% block content %}
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold">Versions</h1>
+  <button
+    type="button"
+    class="btn btn-primary btn-sm"
+    onclick="document.getElementById('create-version-modal').showModal()"
+  >
+    New Version
+  </button>
+</div>
+<p class="mt-2 text-sm text-base-content/60">
+  A Version is created standalone here — it's attached to one or more Builders
+  later, when those are created.
+</p>
+
+{# Shared by every Version Type field's searchable-history dropdown below
+   (the create form plus one per Version's edit form) — see versions.js. Not
+   an HTML attribute (data-suggestions="...") because tojson's escaping
+   targets <script> content, not quoted attributes, and breaks on any
+   version type name containing a literal double quote. #}
+<script type="application/json" id="version-type-suggestions-data">
+  {{ version_type_names | tojson }}
+</script>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Current</th>
+            <th>Last Batch</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for version in versions %} {% set latest =
+          latest_batches.get(version.id) %}
+          <tr>
+            <td>{{ version.name }}</td>
+            <td><span class="badge badge-ghost badge-sm">{{ version.version_type.name }}</span></td>
+            <td>{{ version.major }}.{{ version.minor }}.{{ version.patch }}</td>
+            <td>
+              {% if latest %}
+              <code class="text-xs">{{ latest.full_version_string or "pending" }}</code>
+              <div class="text-xs text-base-content/60">
+                {{ latest.created_at | localtime("%Y-%m-%d %H:%M") }}
+              </div>
+              {% else %}
+              <span class="text-xs text-base-content/60">No batches yet</span>
+              {% endif %}
+            </td>
+            <td class="flex gap-2">
+              <button
+                type="button"
+                class="btn btn-sm"
+                onclick="document.getElementById('edit-version-modal-{{ version.id }}').showModal()"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm btn-error"
+                onclick="document.getElementById('delete-version-modal-{{ version.id }}').showModal()"
+              >
+                Delete
+              </button>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="5">No versions created yet.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<dialog id="create-version-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-2xl">
+    <h3 class="text-lg font-bold">New Version</h3>
+
+    <form
+      method="post"
+      action="{{ url_for('versions.create_version') }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ create_form.hidden_tag() }}
+
+      <div>
+        {{ create_form.name.label(class="label text-sm") }} {{
+        create_form.name(class="input input-bordered input-sm w-full",
+        placeholder="e.g. backend-service") }} {% for error in
+        create_form.name.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div class="relative">
+        {{ create_form.version_type.label(class="label text-sm") }} {{
+        create_form.version_type(class="version-type-input input
+        input-bordered input-sm w-full", autocomplete="off",
+        placeholder="e.g. DEV") }}
+        <ul class="version-type-dropdown menu absolute z-20 mt-1 hidden max-h-48 w-full flex-nowrap overflow-y-auto rounded-box bg-base-100 p-1 shadow-lg"></ul>
+        {% for error in create_form.version_type.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div class="flex gap-3">
+        <div>
+          {{ create_form.major.label(class="label text-sm") }} {{
+          create_form.major(class="input input-bordered input-sm w-20") }}
+        </div>
+        <div>
+          {{ create_form.minor.label(class="label text-sm") }} {{
+          create_form.minor(class="input input-bordered input-sm w-20") }}
+        </div>
+        <div>
+          {{ create_form.patch.label(class="label text-sm") }} {{
+          create_form.patch(class="input input-bordered input-sm w-20") }}
+        </div>
+      </div>
+
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
+          Cancel
+        </button>
+        {{ create_form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+{% for version in versions %}
+<dialog id="edit-version-modal-{{ version.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-2xl">
+    <h3 class="text-lg font-bold">Edit Version: {{ version.name }}</h3>
+
+    {% set form = edit_forms[version.id] %}
+    <form
+      method="post"
+      action="{{ url_for('versions.edit_version', version_id=version.id) }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ form.hidden_tag() }}
+
+      <div>
+        {{ form.name.label(class="label text-sm") }} {{
+        form.name(class="input input-bordered input-sm w-full") }} {% for
+        error in form.name.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div class="relative">
+        {{ form.version_type.label(class="label text-sm") }} {{
+        form.version_type(class="version-type-input input input-bordered
+        input-sm w-full", autocomplete="off") }}
+        <ul class="version-type-dropdown menu absolute z-20 mt-1 hidden max-h-48 w-full flex-nowrap overflow-y-auto rounded-box bg-base-100 p-1 shadow-lg"></ul>
+        {% for error in form.version_type.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div class="flex gap-3">
+        <div>
+          {{ form.major.label(class="label text-sm") }} {{
+          form.major(class="input input-bordered input-sm w-20") }}
+        </div>
+        <div>
+          {{ form.minor.label(class="label text-sm") }} {{
+          form.minor(class="input input-bordered input-sm w-20") }}
+        </div>
+        <div>
+          {{ form.patch.label(class="label text-sm") }} {{
+          form.patch(class="input input-bordered input-sm w-20") }}
+        </div>
+      </div>
+
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
+          Cancel
+        </button>
+        {{ form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+<dialog id="delete-version-modal-{{ version.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-sm">
+    <h3 class="text-lg font-bold">Delete Version</h3>
+    <p class="py-4 text-sm">
+      Are you sure you want to delete "{{ version.name }}"? Any Builder still attached to it will block this.
+    </p>
+    <div class="modal-action">
+      <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
+        Cancel
+      </button>
+      <form method="post" action="{{ url_for('versions.delete_version', version_id=version.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+        <button type="submit" class="btn btn-sm btn-error">Delete</button>
+      </form>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+{% endfor %}
+<script src="{{ url_for('static', filename='js/versions.js') }}"></script>
+{% endblock %}

@@ -6,3 +6,8 @@ Flask-WTF
 python-dotenv
 psycopg2-binary
 gunicorn
+GitPython
+docker
+cryptography
+requests
+tzdata

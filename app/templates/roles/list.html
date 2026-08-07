@@ -1,5 +1,29 @@
 {% extends "base.html" %} {% block title %}Roles - Hamilton{% endblock %} {%
 block content %}
+
+{% macro permission_picker(form) %}
+<div class="flex flex-col gap-3">
+  {% for group in permission_groups %}
+  <div>
+    <h4 class="text-xs font-semibold uppercase tracking-wide opacity-60">{{ group.label }}</h4>
+    <div class="mt-1 grid grid-cols-2 gap-x-4 gap-y-1">
+      {% for permission in group.permissions %}
+      <label class="flex items-center gap-2 text-sm" title="{{ permission.code }}">
+        <input
+          type="checkbox"
+          name="{{ form.permissions.name }}"
+          value="{{ permission.id }}"
+          class="checkbox checkbox-sm"
+          {{ 'checked' if permission.id|string in (form.permissions.data or []) else '' }}
+        />
+        {{ permission.description or permission.code }}
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endmacro %}
 <div class="flex items-center justify-between">
   <h1 class="text-2xl font-bold">Roles</h1>
   <button
@@ -64,7 +88,7 @@ block content %}
 </div>
 
 <dialog id="create-modal" class="modal">
-  <div class="modal-box w-11/12 max-w-lg">
+  <div class="modal-box w-11/12 max-w-2xl">
     <h3 class="text-lg font-bold">New Role</h3>
 
     <form
@@ -91,13 +115,7 @@ block content %}
 
       <div>
         <span class="label text-sm">Permissions</span>
-        <div class="grid grid-cols-2 gap-2">
-          {% for subfield in create_form.permissions %}
-          <label class="flex items-center gap-2 text-sm">
-            {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
-          </label>
-          {% endfor %}
-        </div>
+        {{ permission_picker(create_form) }}
       </div>
 
       <div class="modal-action">
@@ -119,7 +137,7 @@ block content %}
 
 {% for role in roles %}
 <dialog id="edit-modal-{{ role.id }}" class="modal">
-  <div class="modal-box w-11/12 max-w-lg">
+  <div class="modal-box w-11/12 max-w-2xl">
     <h3 class="text-lg font-bold">Edit Role: {{ role.name }}</h3>
     {% if role.is_system %}
     <p class="mt-1 text-sm opacity-70">
@@ -152,13 +170,7 @@ block content %}
 
       <div>
         <span class="label text-sm">Permissions</span>
-        <div class="grid grid-cols-2 gap-2">
-          {% for subfield in form.permissions %}
-          <label class="flex items-center gap-2 text-sm">
-            {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
-          </label>
-          {% endfor %}
-        </div>
+        {{ permission_picker(form) }}
       </div>
 
       <div class="modal-action">

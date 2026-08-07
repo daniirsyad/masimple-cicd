@@ -26,6 +26,10 @@ flask db upgrade
 echo "Seeding initial data..."
 python seeds/seed_admin.py
 python seeds/seed_menu.py
+python seeds/seed_change_types.py
+python seeds/seed_version_types.py
+python seeds/seed_ai_provider.py
+python seeds/seed_system_config.py
 
 echo "Starting application..."
 exec gunicorn --bind 0.0.0.0:8000 --workers 3 run:app

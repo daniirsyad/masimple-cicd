@@ -65,7 +65,7 @@ block content %}
           </span>
         </td>
         <td>
-          {{ user.last_login_at.strftime("%Y-%m-%d %H:%M") if user.last_login_at
+          {{ user.last_login_at | localtime("%Y-%m-%d %H:%M") if user.last_login_at
           else "Never" }}
         </td>
         <td class="flex gap-2">

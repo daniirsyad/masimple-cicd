@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from flask import flash, redirect, render_template, request, url_for
+from flask import flash, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_required, login_user, logout_user
 from werkzeug.security import check_password_hash
 
@@ -34,6 +34,7 @@ def login():
             return render_template("auth/login.html", form=form)
 
         login_user(user)
+        session.permanent = True
         user.last_login_at = datetime.utcnow()
         db.session.commit()
 

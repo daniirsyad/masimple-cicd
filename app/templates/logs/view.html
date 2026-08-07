@@ -2,6 +2,11 @@
 %} {% block content %}
 <h1 class="text-2xl font-bold">Activity Logs</h1>
 
+<div role="tablist" class="tabs tabs-boxed mt-4 w-fit">
+  <a role="tab" class="tab tab-active">Activity</a>
+  <a role="tab" href="{{ url_for('logs.view_error_logs') }}" class="tab">Errors</a>
+</div>
+
 <form method="get" class="mt-4 flex flex-wrap items-end gap-3">
   <div>
     <label class="label text-sm">User</label>
@@ -66,7 +71,7 @@
     <tbody>
       {% for log in logs %}
       <tr>
-        <td>{{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td>{{ log.created_at | localtime }}</td>
         <td>{{ log.user.username if log.user else 'System' }}</td>
         <td><span class="badge badge-ghost badge-sm">{{ log.action }}</span></td>
         <td>

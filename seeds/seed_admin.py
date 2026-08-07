@@ -33,6 +33,17 @@ BASE_PERMISSIONS = [
     ("permission.create", "Create permissions"),
     ("permission.edit", "Edit permissions"),
     ("permission.delete", "Delete permissions"),
+    ("version.view", "View versions"),
+    ("version.manage", "Create and edit versions"),
+    ("image.view", "View built images"),
+    ("builder.view", "View builders"),
+    ("builder.manage", "Create and edit builders"),
+    ("builder.build", "Trigger image builds"),
+    ("aiprovider.manage", "Manage AI provider settings and prompt templates"),
+    ("gitsource.manage", "Manage GitHub connections and registered repositories"),
+    ("registry.manage", "Manage container registry targets"),
+    ("documentation.edit", "View and edit build batch documentation"),
+    ("system.manage", "Manage system configuration (timezone, session timeout)"),
 ]
 
 SUPER_ADMIN_ROLE_NAME = "Super Admin"

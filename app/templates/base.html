@@ -4,6 +4,18 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{% block title %}Hamilton{% endblock %}</title>
+    <script>
+      // Runs synchronously before first paint (blocking, in <head>) so the
+      // page never flashes the wrong theme for a split second — must happen
+      // before the stylesheet's [data-theme] rules are evaluated, so it
+      // can't be deferred to a bottom-of-body script like the rest of the
+      // app's JS.
+      (function () {
+        var stored = localStorage.getItem("theme");
+        var theme = stored || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", theme);
+      })();
+    </script>
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='dist/output.css') }}"
@@ -44,5 +56,6 @@
 
     <script src="{{ url_for('static', filename='js/sidebar.js') }}"></script>
     <script src="{{ url_for('static', filename='js/modal-form.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
   </body>
 </html>

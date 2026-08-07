@@ -7,14 +7,14 @@
         <li>
           <details name="sidebar-accordion" {% if item.has_active_child %}open{% endif %}>
             <summary class="{{ 'font-semibold text-primary' if item.has_active_child else '' }}">
-              {% if item.icon %}<span class="shrink-0 [&>svg]:h-4 [&>svg]:w-4">{{ item.icon | safe }}</span>{% endif %}
+              {% if item.icon %}<span class="sidebar-icon shrink-0 [&>svg]:h-4 [&>svg]:w-4">{{ item.icon | safe }}</span>{% endif %}
               {{ item.label }}
             </summary>
             <ul>
               {% for child in item.children %}
                 <li>
                   <a href="{{ child.url }}" class="{{ 'active' if child.active else '' }}">
-                    {% if child.icon %}<span class="shrink-0 [&>svg]:h-4 [&>svg]:w-4">{{ child.icon | safe }}</span>{% endif %}
+                    {% if child.icon %}<span class="sidebar-icon shrink-0 [&>svg]:h-4 [&>svg]:w-4">{{ child.icon | safe }}</span>{% endif %}
                     {{ child.label }}
                   </a>
                 </li>
@@ -25,7 +25,7 @@
       {% else %}
         <li>
           <a href="{{ item.url }}" class="{{ 'active' if item.active else '' }}">
-            {% if item.icon %}<span class="shrink-0 [&>svg]:h-4 [&>svg]:w-4">{{ item.icon | safe }}</span>{% endif %}
+            {% if item.icon %}<span class="sidebar-icon shrink-0 [&>svg]:h-4 [&>svg]:w-4">{{ item.icon | safe }}</span>{% endif %}
             {{ item.label }}
           </a>
         </li>

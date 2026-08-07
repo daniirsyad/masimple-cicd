@@ -10,8 +10,59 @@ from app.utils.decorators import permission_required
 from app.utils.logger import log_activity
 
 
+# Friendly section headings for the role permission picker (roles/list.html),
+# keyed by the resource prefix of a permission code (e.g. "builder.manage" ->
+# "builder"). Anything not listed here (e.g. a new module's permissions added
+# later) falls back to a title-cased version of the prefix itself.
+RESOURCE_LABELS = {
+    "user": "Users",
+    "role": "Roles",
+    "permission": "Permissions",
+    "menu": "Menus",
+    "logs": "Logs",
+    "system": "System",
+    "version": "Versions",
+    "builder": "Builders",
+    "image": "Images",
+    "gitsource": "Git Sources",
+    "registry": "Registries",
+    "documentation": "Documentation",
+    "aiprovider": "AI Providers",
+}
+# Display order for the sections above — mirrors the app's own sidebar
+# grouping (core admin, then Image Builder) rather than alphabetical, since
+# that's the order an admin actually thinks about these in.
+RESOURCE_ORDER = list(RESOURCE_LABELS.keys())
+
+
+def _resource_label(code):
+    prefix = code.split(".", 1)[0]
+    return RESOURCE_LABELS.get(prefix, prefix.replace("_", " ").title())
+
+
 def _permission_choices():
     return [(str(permission.id), permission.code) for permission in Permission.query.order_by(Permission.code).all()]
+
+
+def _permission_groups():
+    """Permissions grouped by resource with friendly descriptions, for the
+    role create/edit checkbox picker — a flat list of ~25 raw permission
+    codes like "builder.manage" isn't friendly to pick from, so this groups
+    them under headings like "Builders" and displays each permission's
+    human-readable description instead of its code.
+    """
+    by_prefix = {}
+    for permission in Permission.query.order_by(Permission.code).all():
+        prefix = permission.code.split(".", 1)[0]
+        by_prefix.setdefault(prefix, []).append(permission)
+
+    def sort_key(prefix):
+        return (RESOURCE_ORDER.index(prefix) if prefix in RESOURCE_ORDER else len(RESOURCE_ORDER), prefix)
+
+    return [
+        {"label": _resource_label(prefix), "permissions": by_prefix[prefix]}
+        for prefix in sorted(by_prefix, key=sort_key)
+    ]
 
 
 def _edit_prefix(role_id):
@@ -42,6 +93,7 @@ def _render_roles_list(create_form=None, open_modal=None, invalid_edit=None):
         roles=roles,
         create_form=create_form,
         edit_forms=edit_forms,
+        permission_groups=_permission_groups(),
         open_modal=open_modal,
     )
 

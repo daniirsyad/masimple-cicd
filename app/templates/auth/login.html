@@ -4,6 +4,16 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Login - Hamilton</title>
+    <script>
+      // Same pre-paint theme detection as base.html — the login page is a
+      // standalone template (no app chrome shown before authenticating), so
+      // it doesn't inherit base.html's <head> and needs its own copy.
+      (function () {
+        var stored = localStorage.getItem("theme");
+        var theme = stored || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", theme);
+      })();
+    </script>
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='dist/output.css') }}"

@@ -1,0 +1,149 @@
+{% extends "base.html" %} {% block title %}Documentation -
+Hamilton{% endblock %} {% block content %}
+<div class="flex flex-wrap items-center justify-between gap-2">
+  <h1 class="text-2xl font-bold">Documentation: <code>{{ batch.full_version_string }}</code></h1>
+  <span class="badge badge-sm {{ 'badge-success' if doc.is_complete else 'badge-warning' }}">
+    {{ 'Documentation Complete' if doc.is_complete else 'Documentation Pending' }}
+  </span>
+</div>
+<a href="{{ url_for('documentation.list_documentation') }}" class="link link-primary text-sm">&larr; Back to Documentation</a>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">Images in this Batch</h2>
+    <div class="mt-2 overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Builder</th>
+            <th>Branch</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for image in batch.image_builds %}
+          <tr>
+            <td>{{ image.builder.name }}</td>
+            <td>{{ image.branch_used }}</td>
+            <td>
+              <span
+                class="badge badge-sm {{
+                  'badge-success' if image.status == 'success'
+                  else 'badge-error' if image.status == 'failed'
+                  else 'badge-warning' if image.status == 'running'
+                  else 'badge-ghost'
+                }}"
+              >
+                {{ image.status }}
+              </span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">Documentation</h2>
+
+    <form method="post" novalidate class="mt-2 flex flex-col gap-3">
+      {{ form.hidden_tag() }}
+
+      <div class="flex flex-wrap gap-6">
+        <div>
+          <span class="label text-sm">Built by</span>
+          <p class="text-sm">{{ doc.built_by_user.username if doc.built_by_user else "—" }}</p>
+        </div>
+        <div>
+          <span class="label text-sm">Version</span>
+          <p class="text-sm"><code>{{ batch.full_version_string }}</code></p>
+        </div>
+        <div>
+          <span class="label text-sm">Branches used</span>
+          <p class="text-sm">{{ branches_used or "—" }}</p>
+        </div>
+      </div>
+
+      <div>
+        {{ form.object.label(class="label text-sm") }} {{
+        form.object(class="input input-bordered input-sm w-full", list="object-suggestions") }}
+        <datalist id="object-suggestions">
+          {% for suggestion in object_suggestions %}
+          <option value="{{ suggestion }}"></option>
+          {% endfor %}
+        </datalist>
+      </div>
+
+      <div>
+        {{ form.change_type_id.label(class="label text-sm") }} {{
+        form.change_type_id(class="select select-bordered select-sm w-full") }}
+      </div>
+
+      <div id="ai-generate" data-generate-url="{{ url_for('documentation.generate_description', batch_id=batch.id) }}" data-csrf="{{ csrf_token() }}" class="rounded border border-base-300 p-3">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <span class="text-sm font-semibold">AI Description Assistant</span>
+          <div class="flex items-center gap-2">
+            {% if provider_choices %}
+            <select id="ai-provider-select" class="select select-bordered select-xs">
+              {% for value, label in provider_choices %}
+              <option value="{{ value }}" {{ 'selected' if value == default_provider_type else '' }}>{{ label }}</option>
+              {% endfor %}
+            </select>
+            {% endif %}
+            <button type="button" id="generate-description-btn" class="btn btn-primary btn-xs">Generate Draft</button>
+          </div>
+        </div>
+
+        <div class="mt-2">
+          <label class="label text-xs">Prompt (editable for this generation only)</label>
+          <textarea id="ai-prompt-preview" class="textarea textarea-bordered textarea-xs w-full" rows="4">{{ rendered_prompt }}</textarea>
+        </div>
+
+        <p id="ai-generate-error" class="text-error text-xs mt-1 hidden"></p>
+
+        <div id="ai-draft-container" class="mt-2 {{ '' if doc.ai_description else 'hidden' }}">
+          <label class="label text-xs">AI Draft</label>
+          <pre id="ai-draft-preview" class="whitespace-pre-wrap rounded bg-base-200 p-2 text-xs">{{ doc.ai_description or '' }}</pre>
+          <button type="button" id="use-ai-draft-btn" class="btn btn-sm mt-1">Use this draft</button>
+        </div>
+      </div>
+
+      {{ form.ai_description() }} {{ form.ai_provider_used() }}
+
+      <div>
+        {{ form.description.label(class="label text-sm") }} {{
+        form.description(class="textarea textarea-bordered textarea-sm w-full", rows="4") }}
+      </div>
+
+      <div>
+        <span class="label text-sm">Linked Batches</span>
+        <div class="max-h-48 overflow-y-auto rounded border border-base-300 p-2 flex flex-col gap-1">
+          {% for value, label in form.linked_batch_ids.choices %}
+          <label class="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              name="linked_batch_ids"
+              value="{{ value }}"
+              class="checkbox checkbox-sm"
+              {{ 'checked' if value in (form.linked_batch_ids.data or []) else '' }}
+            />
+            <code>{{ label }}</code>
+          </label>
+          {% else %}
+          <span class="text-xs text-base-content/60">No other batches yet.</span>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div>
+        {{ form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/ai-generate.js') }}"></script>
+{% endblock %}

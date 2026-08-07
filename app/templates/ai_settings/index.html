@@ -1,0 +1,426 @@
+{% extends "base.html" %} {% block title %}AI Provider Settings -
+Hamilton{% endblock %} {% block content %}
+<h1 class="text-2xl font-bold">AI Provider Settings</h1>
+<p class="mt-2 text-sm text-base-content/60">
+  Only Qwen is fully implemented right now — Claude, Gemini, and Custom API
+  can be configured here for later, but attempting to generate with one of
+  them will show a clear "not implemented yet" error until they're wired up.
+</p>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <div class="flex items-center justify-between">
+      <h2 class="card-title text-base">AI Providers</h2>
+      <button
+        type="button"
+        class="btn btn-primary btn-sm"
+        onclick="document.getElementById('create-provider-modal').showModal()"
+      >
+        New Provider
+      </button>
+    </div>
+
+    <div class="mt-2 overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Model</th>
+            <th>API Key</th>
+            <th>Default</th>
+            <th>Active</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for provider in providers %}
+          <tr>
+            <td>{{ provider.provider_type }}</td>
+            <td>{{ provider.model_name }}</td>
+            <td>
+              {% if provider.encrypted_api_key %}
+              <span class="badge badge-success badge-sm">Set</span>
+              {% else %}
+              <span class="badge badge-ghost badge-sm">Not set (env var fallback)</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if provider.is_default %}<span class="badge badge-primary badge-sm">Default</span>{% endif %}
+            </td>
+            <td>
+              <span class="badge badge-sm {{ 'badge-success' if provider.is_active else 'badge-ghost' }}">
+                {{ 'Active' if provider.is_active else 'Inactive' }}
+              </span>
+            </td>
+            <td class="flex gap-2">
+              <button
+                type="button"
+                class="btn btn-sm"
+                onclick="document.getElementById('edit-provider-modal-{{ provider.id }}').showModal()"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm btn-error"
+                onclick="document.getElementById('delete-provider-modal-{{ provider.id }}').showModal()"
+              >
+                Delete
+              </button>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="6">No AI providers configured yet.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <div class="flex items-center justify-between">
+      <h2 class="card-title text-base">Prompt Templates</h2>
+      <button
+        type="button"
+        class="btn btn-primary btn-sm"
+        onclick="document.getElementById('create-template-modal').showModal()"
+      >
+        New Template
+      </button>
+    </div>
+    <p class="mt-1 text-xs text-base-content/60">
+      Placeholders: <code>{{ '{{branch_name}}' }}</code>,
+      <code>{{ '{{type}}' }}</code>, <code>{{ '{{object}}' }}</code>, and
+      <code>{{ '{{commit_messages}}' }}</code> get substituted before the
+      prompt is sent to the AI provider.
+    </p>
+
+    <div class="mt-2 overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Default</th>
+            <th>Active</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for template in templates %}
+          <tr>
+            <td>{{ template.name }}</td>
+            <td>
+              {% if template.is_default %}<span class="badge badge-primary badge-sm">Default</span>{% endif %}
+            </td>
+            <td>
+              <span class="badge badge-sm {{ 'badge-success' if template.is_active else 'badge-ghost' }}">
+                {{ 'Active' if template.is_active else 'Inactive' }}
+              </span>
+            </td>
+            <td class="flex gap-2">
+              <button
+                type="button"
+                class="btn btn-sm"
+                onclick="document.getElementById('edit-template-modal-{{ template.id }}').showModal()"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm btn-error"
+                onclick="document.getElementById('delete-template-modal-{{ template.id }}').showModal()"
+              >
+                Delete
+              </button>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="4">No prompt templates configured yet.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<dialog id="create-provider-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">New AI Provider</h3>
+
+    <form
+      method="post"
+      action="{{ url_for('ai_settings.create_provider') }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ provider_create_form.hidden_tag() }}
+
+      <div>
+        {{ provider_create_form.provider_type.label(class="label text-sm") }}
+        {{ provider_create_form.provider_type(class="select select-bordered select-sm") }}
+      </div>
+
+      <div>
+        {{ provider_create_form.model_name.label(class="label text-sm") }} {{
+        provider_create_form.model_name(class="input input-bordered
+        input-sm w-full", placeholder="e.g. qwen-plus") }} {% for error in
+        provider_create_form.model_name.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div>
+        {{ provider_create_form.endpoint_url.label(class="label text-sm") }}
+        {{ provider_create_form.endpoint_url(class="input input-bordered
+        input-sm w-full") }}
+      </div>
+
+      <div>
+        {{ provider_create_form.api_key.label(class="label text-sm") }} {{
+        provider_create_form.api_key(class="input input-bordered input-sm
+        w-full", autocomplete="new-password") }}
+        <p class="mt-1 text-xs text-base-content/60">
+          Leave blank to fall back to the <code>{PROVIDER}_API_KEY</code>
+          environment variable.
+        </p>
+      </div>
+
+      <label class="flex items-center gap-2 text-sm">
+        {{ provider_create_form.is_default(class="checkbox checkbox-sm") }}
+        {{ provider_create_form.is_default.label.text }}
+      </label>
+      <label class="flex items-center gap-2 text-sm">
+        {{ provider_create_form.is_active(class="checkbox checkbox-sm") }} {{
+        provider_create_form.is_active.label.text }}
+      </label>
+
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
+          Cancel
+        </button>
+        {{ provider_create_form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+{% for provider in providers %}
+<dialog id="edit-provider-modal-{{ provider.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">Edit Provider: {{ provider.provider_type }}</h3>
+
+    {% set form = provider_edit_forms[provider.id] %}
+    <form
+      method="post"
+      action="{{ url_for('ai_settings.edit_provider', provider_id=provider.id) }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ form.hidden_tag() }}
+
+      <div>
+        {{ form.provider_type.label(class="label text-sm") }} {{
+        form.provider_type(class="select select-bordered select-sm") }}
+      </div>
+
+      <div>
+        {{ form.model_name.label(class="label text-sm") }} {{
+        form.model_name(class="input input-bordered input-sm w-full") }} {%
+        for error in form.model_name.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div>
+        {{ form.endpoint_url.label(class="label text-sm") }} {{
+        form.endpoint_url(class="input input-bordered input-sm w-full") }}
+      </div>
+
+      <div>
+        {{ form.api_key.label(class="label text-sm") }} {{
+        form.api_key(class="input input-bordered input-sm w-full",
+        autocomplete="new-password") }}
+        <p class="mt-1 text-xs text-base-content/60">
+          {% if provider.encrypted_api_key %}Leave blank to keep the current key.{% else %}Leave blank to fall back to the environment variable.{% endif %}
+        </p>
+      </div>
+
+      <label class="flex items-center gap-2 text-sm">
+        {{ form.is_default(class="checkbox checkbox-sm") }} {{
+        form.is_default.label.text }}
+      </label>
+      <label class="flex items-center gap-2 text-sm">
+        {{ form.is_active(class="checkbox checkbox-sm") }} {{
+        form.is_active.label.text }}
+      </label>
+
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
+          Cancel
+        </button>
+        {{ form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+<dialog id="delete-provider-modal-{{ provider.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-sm">
+    <h3 class="text-lg font-bold">Delete Provider</h3>
+    <p class="py-4 text-sm">
+      Are you sure you want to delete the "{{ provider.provider_type }}" provider config? This
+      cannot be undone.
+    </p>
+    <div class="modal-action">
+      <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
+        Cancel
+      </button>
+      <form method="post" action="{{ url_for('ai_settings.delete_provider', provider_id=provider.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+        <button type="submit" class="btn btn-sm btn-error">Delete</button>
+      </form>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+{% endfor %}
+
+<dialog id="create-template-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-2xl">
+    <h3 class="text-lg font-bold">New Prompt Template</h3>
+
+    <form
+      method="post"
+      action="{{ url_for('ai_settings.create_template') }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ template_create_form.hidden_tag() }}
+
+      <div>
+        {{ template_create_form.name.label(class="label text-sm") }} {{
+        template_create_form.name(class="input input-bordered input-sm
+        w-full") }} {% for error in template_create_form.name.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div>
+        {{ template_create_form.template_text.label(class="label text-sm") }}
+        {{ template_create_form.template_text(class="textarea
+        textarea-bordered textarea-sm w-full font-mono", rows=8) }} {% for
+        error in template_create_form.template_text.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <label class="flex items-center gap-2 text-sm">
+        {{ template_create_form.is_default(class="checkbox checkbox-sm") }}
+        {{ template_create_form.is_default.label.text }}
+      </label>
+      <label class="flex items-center gap-2 text-sm">
+        {{ template_create_form.is_active(class="checkbox checkbox-sm") }} {{
+        template_create_form.is_active.label.text }}
+      </label>
+
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
+          Cancel
+        </button>
+        {{ template_create_form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+{% for template in templates %}
+<dialog id="edit-template-modal-{{ template.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-2xl">
+    <h3 class="text-lg font-bold">Edit Template: {{ template.name }}</h3>
+
+    {% set form = template_edit_forms[template.id] %}
+    <form
+      method="post"
+      action="{{ url_for('ai_settings.edit_template', template_id=template.id) }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ form.hidden_tag() }}
+
+      <div>
+        {{ form.name.label(class="label text-sm") }} {{
+        form.name(class="input input-bordered input-sm w-full") }} {% for
+        error in form.name.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div>
+        {{ form.template_text.label(class="label text-sm") }} {{
+        form.template_text(class="textarea textarea-bordered textarea-sm
+        w-full font-mono", rows=8) }} {% for error in
+        form.template_text.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <label class="flex items-center gap-2 text-sm">
+        {{ form.is_default(class="checkbox checkbox-sm") }} {{
+        form.is_default.label.text }}
+      </label>
+      <label class="flex items-center gap-2 text-sm">
+        {{ form.is_active(class="checkbox checkbox-sm") }} {{
+        form.is_active.label.text }}
+      </label>
+
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
+          Cancel
+        </button>
+        {{ form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+<dialog id="delete-template-modal-{{ template.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-sm">
+    <h3 class="text-lg font-bold">Delete Template</h3>
+    <p class="py-4 text-sm">
+      Are you sure you want to delete "{{ template.name }}"? This cannot be undone.
+    </p>
+    <div class="modal-action">
+      <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
+        Cancel
+      </button>
+      <form method="post" action="{{ url_for('ai_settings.delete_template', template_id=template.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+        <button type="submit" class="btn btn-sm btn-error">Delete</button>
+      </form>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+{% endfor %} {% endblock %}

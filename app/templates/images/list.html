@@ -1,0 +1,145 @@
+{% extends "base.html" %} {% block title %}Images -
+Hamilton{% endblock %} {% block content %}
+<h1 class="text-2xl font-bold">Images</h1>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">Build Status</h2>
+    <div id="images-status-content" class="mt-2">
+      <span class="text-sm text-base-content/60">Loading...</span>
+    </div>
+  </div>
+</div>
+
+<form method="get" class="mt-4 flex flex-wrap items-end gap-3">
+  <div>
+    <label class="label text-sm">Status</label>
+    <select name="status" class="select select-bordered select-sm">
+      <option value="">All</option>
+      {% for choice in status_choices %}
+      <option value="{{ choice }}" {{ 'selected' if selected_status == choice else '' }}>
+        {{ choice }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+  <a href="{{ url_for('images.list_images') }}" class="btn btn-ghost btn-sm">Reset</a>
+</form>
+
+<div class="mt-4 flex flex-col gap-4">
+  {% for batch in batches %} {% set doc = batch.documentation %}
+  <div class="card bg-base-100 shadow-sm">
+    <div class="card-body p-4">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <code class="text-sm font-semibold">{{ batch.full_version_string or "pending" }}</code>
+          {% if batch.status == 'running' %}
+          <span class="loading loading-spinner loading-xs text-warning"></span>
+          {% endif %}
+          <span
+            class="badge badge-sm {{
+              'badge-success' if batch.status == 'success'
+              else 'badge-error' if batch.status in ('failed', 'partial_failure')
+              else 'badge-warning' if batch.status in ('running', 'queued')
+              else 'badge-ghost'
+            }}"
+          >
+            {{ batch.status }}
+          </span>
+          <span class="badge badge-ghost badge-sm">bump: {{ batch.bump_type }}</span>
+          {% if doc %}
+          <a
+            href="{{ url_for('documentation.view_documentation', batch_id=batch.id) }}"
+            class="badge badge-sm {{ 'badge-success' if doc.is_complete else 'badge-warning' }}"
+          >
+            {{ 'Documented' if doc.is_complete else 'Documentation Pending' }}
+          </a>
+          {% endif %}
+        </div>
+        <div class="text-xs text-base-content/60">
+          {{ batch.requester.username if batch.requester else "—" }} ·
+          {{ batch.created_at | localtime("%Y-%m-%d %H:%M") }}
+        </div>
+      </div>
+
+      <div class="mt-2 overflow-x-auto">
+        <table class="table table-sm">
+          <thead>
+            <tr>
+              <th>Builder</th>
+              <th>Branch</th>
+              <th>Status</th>
+              <th>Image Tag</th>
+              <th>Size</th>
+              <th>Registry</th>
+              <th>Started</th>
+              <th>Finished</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for image in batch.image_builds %}
+            <tr>
+              <td>{{ image.builder.name }}</td>
+              <td>{{ image.branch_used }}</td>
+              <td>
+                <span class="flex items-center gap-1.5">
+                  {% if image.status == 'running' %}
+                  <span class="loading loading-spinner loading-xs text-warning"></span>
+                  {% endif %}
+                  <span
+                    class="badge badge-sm {{
+                      'badge-success' if image.status == 'success'
+                      else 'badge-error' if image.status == 'failed'
+                      else 'badge-warning' if image.status == 'running'
+                      else 'badge-ghost'
+                    }}"
+                  >
+                    {{ image.status }}
+                  </span>
+                </span>
+              </td>
+              <td>
+                {% if image.image_tag %}<code class="text-xs">{{ image.image_tag }}</code>{% else %}—{% endif %}
+              </td>
+              <td>{{ human_sizes.get(image.id) }}</td>
+              <td>
+                {% set link = registry_links.get(image.id) %} {% if link %}
+                <a href="{{ link }}" target="_blank" rel="noopener" class="link link-primary text-xs">
+                  {{ image.registry_name }}
+                </a>
+                {% else %}{{ image.registry_name or "—" }}{% endif %}
+              </td>
+              <td>{{ image.started_at | localtime("%Y-%m-%d %H:%M") if image.started_at else "—" }}</td>
+              <td>{{ image.finished_at | localtime("%Y-%m-%d %H:%M") if image.finished_at else "—" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="card bg-base-100 shadow-sm">
+    <div class="card-body p-4 text-sm text-base-content/60">No batches found.</div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if pagination.pages > 1 %}
+<div class="join mt-4">
+  {% for page_num in pagination.iter_pages() %} {% if page_num %}
+  <a
+    href="{{ url_for('images.list_images', page=page_num, status=selected_status) }}"
+    class="join-item btn btn-sm {{ 'btn-active' if page_num == pagination.page else '' }}"
+  >
+    {{ page_num }}
+  </a>
+  {% else %}
+  <span class="join-item btn btn-sm btn-disabled">…</span>
+  {% endif %} {% endfor %}
+</div>
+{% endif %}
+
+<script src="{{ url_for('static', filename='js/images-status.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,68 @@
+{% extends "base.html" %} {% block title %}System Configuration -
+Hamilton{% endblock %} {% block content %}
+<h1 class="text-2xl font-bold">System Configuration</h1>
+<p class="mt-2 text-sm text-base-content/60">
+  App-wide settings. The timezone applies to every timestamp shown across the
+  app; the session timeout controls how long a signed-in session stays valid
+  without activity.
+</p>
+
+<div class="card mt-4 max-w-lg bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">General</h2>
+
+    <form method="post" novalidate class="mt-2 flex flex-col gap-4">
+      {{ form.hidden_tag() }}
+
+      <div class="form-control">
+        <label class="label" for="{{ form.timezone.id }}">
+          <span class="label-text">Timezone</span>
+        </label>
+        {{ form.timezone(class="select select-bordered select-sm") }}
+        {% for error in form.timezone.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div class="form-control">
+        <label class="label" for="{{ form.session_timeout_minutes.id }}">
+          <span class="label-text">Session Timeout (minutes)</span>
+        </label>
+        {{ form.session_timeout_minutes(class="input input-bordered input-sm w-full") }}
+        {% for error in form.session_timeout_minutes.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div class="form-control">
+        <label class="label" for="{{ form.build_engine.id }}">
+          <span class="label-text">Build Engine</span>
+        </label>
+        {{ form.build_engine(class="select select-bordered select-sm") }}
+        <p class="mt-1 text-xs text-base-content/60">
+          Used by the Image Builder to build and push triggered batches. Docker
+          needs the host's Docker socket mounted into this container; Kaniko
+          builds and pushes without a daemon or socket access.
+        </p>
+        {% for error in form.build_engine.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div class="form-control">
+        <label class="label cursor-pointer justify-start gap-2" for="{{ form.hide_navbar_title_when_sidebar_open.id }}">
+          {{ form.hide_navbar_title_when_sidebar_open(class="checkbox checkbox-sm") }}
+          <span class="label-text">Hide duplicate app title</span>
+        </label>
+        <p class="mt-1 text-xs text-base-content/60">
+          The app title shows in both the top navbar and the sidebar — when
+          enabled, the navbar's copy is hidden whenever the sidebar is open,
+          so it's never shown twice at once.
+        </p>
+      </div>
+
+      <div>{{ form.submit(class="btn btn-primary btn-sm") }}</div>
+    </form>
+  </div>
+</div>
+{% endblock %}

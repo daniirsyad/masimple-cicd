@@ -1,16 +1,19 @@
 from functools import wraps
 
-from flask import abort
+from flask import abort, current_app
 from flask_login import current_user
 
 
 def permission_required(code):
-    """Abort with 403 unless the current user's role grants the given permission code."""
+    """Redirect to login if unauthenticated (e.g. expired session); abort 403 if
+    the current user's role doesn't grant the given permission code."""
 
     def decorator(view_func):
         @wraps(view_func)
         def wrapped(*args, **kwargs):
-            if not current_user.is_authenticated or not current_user.has_permission(code):
+            if not current_user.is_authenticated:
+                return current_app.login_manager.unauthorized()
+            if not current_user.has_permission(code):
                 abort(403)
             return view_func(*args, **kwargs)
 
@@ -20,12 +23,15 @@ def permission_required(code):
 
 
 def role_required(name):
-    """Abort with 403 unless the current user's role matches the given role name."""
+    """Redirect to login if unauthenticated (e.g. expired session); abort 403 if
+    the current user's role doesn't match the given role name."""
 
     def decorator(view_func):
         @wraps(view_func)
         def wrapped(*args, **kwargs):
-            if not current_user.is_authenticated or not current_user.has_role(name):
+            if not current_user.is_authenticated:
+                return current_app.login_manager.unauthorized()
+            if not current_user.has_role(name):
                 abort(403)
             return view_func(*args, **kwargs)
 

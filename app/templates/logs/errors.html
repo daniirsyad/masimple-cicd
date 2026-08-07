@@ -1,0 +1,182 @@
+{% extends "base.html" %} {% block title %}Error Logs - Hamilton{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-bold">Error Logs</h1>
+
+<div role="tablist" class="tabs tabs-boxed mt-4 w-fit">
+  <a role="tab" href="{{ url_for('logs.view_logs') }}" class="tab">Activity</a>
+  <a role="tab" class="tab tab-active">Errors</a>
+</div>
+
+<form method="get" class="mt-4 flex flex-wrap items-end gap-3">
+  <div>
+    <label class="label text-sm">Source</label>
+    <select name="source" class="select select-bordered select-sm">
+      <option value="">All</option>
+      {% for source_option in sources %}
+      <option value="{{ source_option }}" {{ 'selected' if selected_source == source_option else '' }}>
+        {{ source_option }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="label text-sm">From</label>
+    <input
+      type="date"
+      name="date_from"
+      value="{{ date_from }}"
+      class="input input-bordered input-sm"
+    />
+  </div>
+
+  <div>
+    <label class="label text-sm">To</label>
+    <input
+      type="date"
+      name="date_to"
+      value="{{ date_to }}"
+      class="input input-bordered input-sm"
+    />
+  </div>
+
+  <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+  <a href="{{ url_for('logs.view_error_logs') }}" class="btn btn-ghost btn-sm">Reset</a>
+</form>
+
+<div class="mt-4 overflow-x-auto">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>User</th>
+        <th>Source</th>
+        <th>Request</th>
+        <th>Message</th>
+        <th>IP</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for log in logs %}
+      <tr>
+        <td class="whitespace-nowrap">{{ log.created_at | localtime }}</td>
+        <td>{{ log.user.username if log.user else 'System' }}</td>
+        <td><span class="badge badge-error badge-sm">{{ log.source }}</span></td>
+        <td class="whitespace-nowrap">
+          {% if log.method %}<code class="text-xs">{{ log.method }} {{ log.path }}</code>{% else %}—{% endif %}
+        </td>
+        <td class="max-w-xs truncate" title="{{ log.message }}">{{ log.message }}</td>
+        <td>{{ log.ip_address or "—" }}</td>
+        <td>
+          <button
+            type="button"
+            class="btn btn-xs"
+            onclick="document.getElementById('error-detail-modal-{{ log.id }}').showModal()"
+          >
+            Details
+          </button>
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="7">No error logs found.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% for log in logs %}
+<dialog id="error-detail-modal-{{ log.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-3xl">
+    <h3 class="text-lg font-bold">Error Detail</h3>
+
+    <div class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+      <div><span class="text-base-content/60">Time:</span> {{ log.created_at | localtime }}</div>
+      <div><span class="text-base-content/60">Source:</span> <span class="badge badge-error badge-sm">{{ log.source }}</span></div>
+      <div><span class="text-base-content/60">User:</span> {{ log.user.username if log.user else 'System' }}</div>
+      <div><span class="text-base-content/60">IP:</span> {{ log.ip_address or "—" }}</div>
+      <div class="col-span-2">
+        <span class="text-base-content/60">Request:</span>
+        {% if log.method %}<code class="text-xs">{{ log.method }} {{ log.path }}</code>{% else %}—{% endif %}
+      </div>
+    </div>
+
+    <div class="mt-4">
+      <div class="label text-sm">Message</div>
+      <pre class="max-h-40 overflow-auto rounded bg-base-300 p-2 text-xs whitespace-pre-wrap">{{ log.message }}</pre>
+    </div>
+
+    <div class="mt-4">
+      <div class="flex items-center justify-between">
+        <div class="label text-sm">Traceback</div>
+        {% if log.traceback %}
+        <button
+          type="button"
+          class="copy-traceback-btn btn btn-xs btn-square"
+          data-copy-target="traceback-{{ log.id }}"
+          title="Copy traceback"
+          aria-label="Copy traceback"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            class="copy-icon h-4 w-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+            />
+          </svg>
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            class="check-icon hidden h-4 w-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+        </button>
+        {% endif %}
+      </div>
+      {% if log.traceback %}
+      <pre id="traceback-{{ log.id }}" class="max-h-96 overflow-auto rounded bg-base-300 p-2 text-xs whitespace-pre-wrap">{{ log.traceback }}</pre>
+      {% else %}
+      <p class="text-xs text-base-content/60">No traceback captured for this error.</p>
+      {% endif %}
+    </div>
+
+    <div class="modal-action">
+      <form method="dialog"><button class="btn btn-sm">Close</button></form>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+{% endfor %}
+
+{% if pagination.pages > 1 %}
+<div class="join mt-4">
+  {% for page_num in pagination.iter_pages() %} {% if page_num %}
+  <a
+    href="{{ url_for('logs.view_error_logs', page=page_num, source=selected_source, date_from=date_from, date_to=date_to) }}"
+    class="join-item btn btn-sm {{ 'btn-active' if page_num == pagination.page else '' }}"
+  >
+    {{ page_num }}
+  </a>
+  {% else %}
+  <span class="join-item btn btn-sm btn-disabled">…</span>
+  {% endif %} {% endfor %}
+</div>
+{% endif %}
+
+<script src="{{ url_for('static', filename='js/copy-to-clipboard.js') }}"></script>
+{% endblock %}

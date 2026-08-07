@@ -1,0 +1,535 @@
+{% extends "base.html" %} {% block title %}Builders -
+Hamilton{% endblock %} {% block content %}
+{# Shared by every Group field's searchable-history dropdown below (the create
+   form plus one per Builder's edit form) — see builders.js. Not an HTML
+   attribute (data-suggestions="...") because tojson's escaping targets
+   <script> content, not quoted attributes, and breaks on any group name
+   containing a literal double quote. #}
+<script type="application/json" id="group-name-suggestions-data">
+  {{ group_name_suggestions | tojson }}
+</script>
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold">Builders</h1>
+  <button
+    type="button"
+    class="btn btn-primary btn-sm"
+    onclick="document.getElementById('create-builder-modal').showModal()"
+  >
+    New Builder
+  </button>
+</div>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">Build Status</h2>
+    <div id="builder-status-content" class="mt-2">
+      <span class="text-sm text-base-content/60">Loading...</span>
+    </div>
+  </div>
+</div>
+
+<form method="get" class="mt-4 flex items-end gap-3">
+  <div>
+    <label class="label text-sm">Filter by Version</label>
+    <select name="version_id" class="select select-bordered select-sm" onchange="this.form.submit()">
+      <option value="">All</option>
+      {% for version in versions %}
+      <option value="{{ version.id }}" {{ 'selected' if selected_version_id == version.id|string else '' }}>
+        {{ version.name }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+</form>
+
+{% macro builder_row(builder, show_build_button=True) %}
+{% set last = last_builds.get(builder.id) %}
+<tr
+  class="builder-row"
+  data-builder-id="{{ builder.id }}"
+  data-builder-name="{{ builder.name }}"
+  data-default-branch="{{ builder.default_branch or '' }}"
+>
+  <td>{{ builder.name }}</td>
+  <td><span class="badge badge-ghost badge-sm">{{ builder.version.name }}</span></td>
+  <td>{{ builder.repository.full_name }}</td>
+  <td>{{ builder.default_branch or "—" }}</td>
+  <td>{{ builder.registry_target.name }}</td>
+  <td>
+    {% if builder.allowed_roles %}
+    {% for role in builder.allowed_roles %}
+    <span class="badge badge-ghost badge-sm">{{ role.name }}</span>
+    {% endfor %}
+    {% else %}
+    <span class="text-xs text-base-content/60">Admins only</span>
+    {% endif %}
+  </td>
+  <td>
+    {% if last %}
+    <code class="text-xs">{{ last.batch.full_version_string or "pending" }}</code>
+    {% if last.status == 'running' %}
+    <span class="loading loading-spinner loading-xs text-warning"></span>
+    {% endif %}
+    <span
+      class="badge badge-sm {{ 'badge-success' if last.status == 'success' else ('badge-error' if last.status == 'failed' else 'badge-warning') }}"
+    >
+      {{ last.status }}
+    </span>
+    <div class="text-xs text-base-content/60">
+      {{ last.created_at | localtime("%Y-%m-%d %H:%M") }}
+    </div>
+    {% else %}
+    <span class="text-xs text-base-content/60">Never built</span>
+    {% endif %}
+  </td>
+  <td class="flex gap-2">
+    {% if show_build_button %}
+    <button
+      type="button"
+      class="build-one-btn btn btn-sm btn-primary"
+      data-builder-id="{{ builder.id }}"
+      data-builder-name="{{ builder.name }}"
+      data-default-branch="{{ builder.default_branch or '' }}"
+    >
+      Build
+    </button>
+    {% endif %}
+    <button
+      type="button"
+      class="btn btn-sm"
+      onclick="document.getElementById('edit-builder-modal-{{ builder.id }}').showModal()"
+    >
+      Edit
+    </button>
+    <button
+      type="button"
+      class="btn btn-sm btn-error"
+      onclick="document.getElementById('delete-builder-modal-{{ builder.id }}').showModal()"
+    >
+      Delete
+    </button>
+  </td>
+</tr>
+{% endmacro %}
+
+{% for group in groups %}
+<div class="card mt-4 bg-base-100 shadow-sm builder-group" data-group-name="{{ group.name }}">
+  <div class="card-body p-4">
+    <div class="flex items-center justify-between">
+      <h2 class="card-title text-base">
+        {{ group.name }}
+        <span class="badge badge-ghost badge-sm">{{ group.builders|length }} builder{{ '' if group.builders|length == 1 else 's' }}</span>
+      </h2>
+      <button type="button" class="build-group-btn btn btn-primary btn-sm">
+        Build Group
+      </button>
+    </div>
+
+    <div class="mt-2 overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Version</th>
+            <th>Repository</th>
+            <th>Branch</th>
+            <th>Registry</th>
+            <th>Access</th>
+            <th>Last Build</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for builder in group.builders %} {{ builder_row(builder, show_build_button=False) }} {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+{% if ungrouped %}
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">
+      Ungrouped
+      <span class="badge badge-ghost badge-sm">{{ ungrouped|length }} builder{{ '' if ungrouped|length == 1 else 's' }}</span>
+    </h2>
+    <p class="text-xs text-base-content/60">Not assigned to a group — build these one at a time.</p>
+
+    <div class="mt-2 overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Version</th>
+            <th>Repository</th>
+            <th>Branch</th>
+            <th>Registry</th>
+            <th>Access</th>
+            <th>Last Build</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for builder in ungrouped %} {{ builder_row(builder) }} {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if not groups and not ungrouped %}
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">No builders created yet.</div>
+</div>
+{% endif %}
+
+<dialog id="create-builder-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-2xl">
+    <h3 class="text-lg font-bold">New Builder</h3>
+
+    <form
+      method="post"
+      action="{{ url_for('builders.create_builder') }}"
+      novalidate
+      class="builder-form mt-4 flex flex-col gap-3"
+    >
+      {{ create_form.hidden_tag() }}
+
+      <div>
+        {{ create_form.name.label(class="label text-sm") }} {{
+        create_form.name(class="input input-bordered input-sm w-full") }} {%
+        for error in create_form.name.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div class="flex gap-3">
+        <div class="flex-1">
+          {{ create_form.version_id.label(class="label text-sm") }} {{
+          create_form.version_id(class="select select-bordered select-sm
+          w-full") }}
+        </div>
+        <div class="flex-1">
+          {{ create_form.repository_id.label(class="label text-sm") }} {{
+          create_form.repository_id(class="select select-bordered select-sm
+          w-full repo-select") }}
+        </div>
+      </div>
+
+      <div class="flex gap-3">
+        <div class="flex-1">
+          {{ create_form.default_branch.label(class="label text-sm") }} {{
+          create_form.default_branch(class="select select-bordered
+          select-sm w-full branch-select") }}
+          <p class="mt-1 text-xs text-base-content/60">Pick a repository above to load its branches.</p>
+        </div>
+        <div class="flex-1">
+          {{ create_form.dockerfile_path.label(class="label text-sm") }} {{
+          create_form.dockerfile_path(class="input input-bordered input-sm
+          w-full", list="dockerfile-list-create") }}
+          <datalist id="dockerfile-list-create" class="dockerfile-datalist"></datalist>
+        </div>
+      </div>
+
+      <div class="flex gap-3">
+        <div class="relative flex-1">
+          {{ create_form.group_name.label(class="label text-sm") }} {{
+          create_form.group_name(class="group-name-input input
+          input-bordered input-sm w-full", autocomplete="off",
+          placeholder="ungrouped") }}
+          <ul class="group-name-dropdown menu absolute z-20 mt-1 hidden max-h-48 w-full flex-nowrap overflow-y-auto rounded-box bg-base-100 p-1 shadow-lg"></ul>
+          {% for error in create_form.group_name.errors %}
+          <p class="text-error text-sm">{{ error }}</p>
+          {% endfor %}
+        </div>
+        <div class="flex-1">
+          {{ create_form.image_name.label(class="label text-sm") }} {{
+          create_form.image_name(class="input input-bordered input-sm
+          w-full", placeholder="defaults to the repository name") }}
+          {% for error in create_form.image_name.errors %}
+          <p class="text-error text-sm">{{ error }}</p>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div>
+        {{ create_form.registry_target_id.label(class="label text-sm") }} {{
+        create_form.registry_target_id(class="select select-bordered
+        select-sm w-full") }}
+      </div>
+
+      <div>
+        {{ create_form.allowed_role_ids.label(class="label text-sm") }}
+        <div class="grid grid-cols-2 gap-2">
+          {% for subfield in create_form.allowed_role_ids %}
+          <label class="flex items-center gap-2 text-sm">
+            {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div>
+        <span class="label text-sm">Default Build Args</span>
+        <div id="build-args-rows-create" class="flex flex-col gap-2"></div>
+        <button
+          type="button"
+          class="add-build-arg-btn btn btn-sm mt-2"
+          data-rows-for="build-args-rows-create"
+        >
+          + Add build arg
+        </button>
+      </div>
+
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
+          Cancel
+        </button>
+        {{ create_form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+{% for builder in builders %}
+<dialog id="edit-builder-modal-{{ builder.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-2xl">
+    <h3 class="text-lg font-bold">Edit Builder: {{ builder.name }}</h3>
+
+    {% set form = edit_forms[builder.id] %}
+    <form
+      method="post"
+      action="{{ url_for('builders.edit_builder', builder_id=builder.id) }}"
+      novalidate
+      class="builder-form mt-4 flex flex-col gap-3"
+    >
+      {{ form.hidden_tag() }}
+
+      <div>
+        {{ form.name.label(class="label text-sm") }} {{
+        form.name(class="input input-bordered input-sm w-full") }} {% for
+        error in form.name.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div class="flex gap-3">
+        <div class="flex-1">
+          {{ form.version_id.label(class="label text-sm") }} {{
+          form.version_id(class="select select-bordered select-sm w-full") }}
+        </div>
+        <div class="flex-1">
+          {{ form.repository_id.label(class="label text-sm") }} {{
+          form.repository_id(class="select select-bordered select-sm w-full
+          repo-select") }}
+        </div>
+      </div>
+
+      <div class="flex gap-3">
+        <div class="flex-1">
+          {{ form.default_branch.label(class="label text-sm") }} {{
+          form.default_branch(class="select select-bordered select-sm w-full
+          branch-select") }}
+        </div>
+        <div class="flex-1">
+          {{ form.dockerfile_path.label(class="label text-sm") }} {{
+          form.dockerfile_path(class="input input-bordered input-sm w-full",
+          list="dockerfile-list-" ~ builder.id) }}
+          <datalist id="dockerfile-list-{{ builder.id }}" class="dockerfile-datalist">
+            {% for path in repo_info_by_builder[builder.id].dockerfiles %}
+            <option value="{{ path }}"></option>
+            {% endfor %}
+          </datalist>
+        </div>
+      </div>
+
+      <div class="flex gap-3">
+        <div class="relative flex-1">
+          {{ form.group_name.label(class="label text-sm") }} {{
+          form.group_name(class="group-name-input input input-bordered
+          input-sm w-full", autocomplete="off", placeholder="ungrouped") }}
+          <ul class="group-name-dropdown menu absolute z-20 mt-1 hidden max-h-48 w-full flex-nowrap overflow-y-auto rounded-box bg-base-100 p-1 shadow-lg"></ul>
+          {% for error in form.group_name.errors %}
+          <p class="text-error text-sm">{{ error }}</p>
+          {% endfor %}
+        </div>
+        <div class="flex-1">
+          {{ form.image_name.label(class="label text-sm") }} {{
+          form.image_name(class="input input-bordered input-sm w-full",
+          placeholder="defaults to the repository name") }}
+          {% for error in form.image_name.errors %}
+          <p class="text-error text-sm">{{ error }}</p>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div>
+        {{ form.registry_target_id.label(class="label text-sm") }} {{
+        form.registry_target_id(class="select select-bordered select-sm
+        w-full") }}
+      </div>
+
+      <div>
+        {{ form.allowed_role_ids.label(class="label text-sm") }}
+        <div class="grid grid-cols-2 gap-2">
+          {% for subfield in form.allowed_role_ids %}
+          <label class="flex items-center gap-2 text-sm">
+            {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div>
+        <span class="label text-sm">Default Build Args</span>
+        <div id="build-args-rows-{{ builder.id }}" class="flex flex-col gap-2">
+          {% for key, value in (builder.default_build_args or {}).items() %}
+          <div class="flex items-center gap-2">
+            <input
+              type="text"
+              name="build_arg_key"
+              value="{{ key }}"
+              class="input input-bordered input-sm w-1/3"
+            />
+            <input
+              type="text"
+              name="build_arg_value"
+              value="{{ value }}"
+              class="input input-bordered input-sm flex-1"
+            />
+            <button type="button" class="btn btn-sm btn-ghost" onclick="this.closest('div').remove()">
+              &times;
+            </button>
+          </div>
+          {% endfor %}
+        </div>
+        <button
+          type="button"
+          class="add-build-arg-btn btn btn-sm mt-2"
+          data-rows-for="build-args-rows-{{ builder.id }}"
+        >
+          + Add build arg
+        </button>
+      </div>
+
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
+          Cancel
+        </button>
+        {{ form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+<dialog id="delete-builder-modal-{{ builder.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-sm">
+    <h3 class="text-lg font-bold">Delete Builder</h3>
+    <p class="py-4 text-sm">
+      Are you sure you want to delete "{{ builder.name }}"? Builders with any recorded build history can't be deleted.
+    </p>
+    <div class="modal-action">
+      <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
+        Cancel
+      </button>
+      <form method="post" action="{{ url_for('builders.delete_builder', builder_id=builder.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+        <button type="submit" class="btn btn-sm btn-error">Delete</button>
+      </form>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+{% endfor %}
+
+<dialog id="build-trigger-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">Build Selected</h3>
+
+    <form method="post" action="{{ url_for('builders.build') }}" class="mt-4 flex flex-col gap-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+
+      <div>
+        <span class="label text-sm">Builders</span>
+        <div id="build-trigger-builders" class="flex flex-col gap-2"></div>
+      </div>
+
+      <div>
+        <label class="label text-sm">Bump Type</label>
+        <select name="bump_type" class="select select-bordered select-sm" required>
+          <option value="" selected disabled>— Select —</option>
+          {% for bump_type in bump_types %}
+          <option value="{{ bump_type }}">{{ bump_type }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="relative">
+        <label class="label text-sm">Object</label>
+        <input
+          type="text"
+          id="build-trigger-object-input"
+          name="object"
+          class="input input-bordered input-sm w-full"
+          autocomplete="off"
+          required
+        />
+        <ul
+          id="build-trigger-object-dropdown"
+          class="menu absolute z-20 mt-1 hidden max-h-48 w-full flex-nowrap overflow-y-auto rounded-box bg-base-100 p-1 shadow-lg"
+        ></ul>
+        {# json, not an HTML attribute — tojson's escaping targets <script> content (</, &, unicode), not
+           quote-delimited attributes, so embedding it in data-* would break on any suggestion containing a
+           literal double quote. #}
+        <script type="application/json" id="build-trigger-object-suggestions-data">
+          {{ object_suggestions | tojson }}
+        </script>
+        <p class="mt-1 text-xs text-base-content/60">
+          Pick a previously used Object below, or type a new one.
+        </p>
+      </div>
+
+      <div>
+        <label class="label text-sm">Change Type</label>
+        <select name="change_type_id" class="select select-bordered select-sm w-full" required>
+          <option value="" selected disabled>— Select —</option>
+          {% for value, label in change_type_choices %}
+          <option value="{{ value }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div>
+        <label class="label text-sm">Additional Description</label>
+        <textarea name="additional_description" class="textarea textarea-bordered textarea-sm w-full" rows="4"></textarea>
+        <p class="mt-1 text-xs text-base-content/60">
+          Combined automatically with an AI-generated summary once the build succeeds — you can edit the result afterward on the Documentation page.
+        </p>
+      </div>
+
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
+          Cancel
+        </button>
+        <button type="submit" class="btn btn-primary btn-sm">Build</button>
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+<script src="{{ url_for('static', filename='js/builders.js') }}"></script>
+{% endblock %}

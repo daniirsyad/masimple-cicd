@@ -5,6 +5,18 @@ services:
       - .env
     ports:
       - "8000:8000"
+    volumes:
+      # Grants the container root-equivalent access to the host Docker daemon,
+      # required so the image builder module can run `docker build`/`docker push`.
+      # Acceptable here since this is a small, permission-gated internal admin tool.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persistent clones of registered repos (see "Repo registration &
+      # persistent clones") live at REPO_CLONE_ROOT, which defaults to
+      # ./data/repos inside the app itself (see config.py) — no volume is
+      # declared for it here on purpose. Without one, clones just live in the
+      # container's own writable layer and are lost on recreation; mount your
+      # own persistent storage onto /app/data/repos (bind mount, named
+      # volume, etc.) if you need them to survive it.
     depends_on:
       db:
         condition: service_healthy

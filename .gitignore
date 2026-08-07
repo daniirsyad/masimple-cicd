@@ -7,6 +7,10 @@ venv/
 .env.*.local
 instance/
 node_modules/
+
+# Persistent clones of registered repos (REPO_CLONE_ROOT, see config.py) —
+# defaults to here when no external storage is mounted over it.
+/data/
 app/static/dist/
 *.egg-info/
 .pytest_cache/
