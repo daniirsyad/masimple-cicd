@@ -70,8 +70,8 @@ def _summarize_persistentvolumeclaim(item):
 
 
 # Slug (used in URLs) -> how to fetch/summarize that kind. Read-only by
-# design (list + describe only, no delete/edit) — see
-# [[project-hamilton-deployment-module]] for why. Namespaced kinds default
+# design (list + describe only, no delete/edit) — same safety level as the
+# pod Logs/Describe modals, a deliberate scope choice. Namespaced kinds default
 # to --all-namespaces when no ?namespace= filter is given; cluster-scoped
 # kinds (nodes, PVs, namespaces themselves) never pass -n/-A at all.
 RESOURCE_KINDS = {

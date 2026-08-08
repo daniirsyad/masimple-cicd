@@ -36,7 +36,7 @@ class TestingConfig(Config):
     WTF_CSRF_ENABLED = False
     SQLALCHEMY_DATABASE_URI = os.environ.get("TEST_DATABASE_URL", os.environ.get("DATABASE_URL"))
     # Never touch the real app-local clone directory during tests.
-    REPO_CLONE_ROOT = os.path.join(tempfile.gettempdir(), "hamilton-test-repos")
+    REPO_CLONE_ROOT = os.path.join(tempfile.gettempdir(), "masimple-cicd-test-repos")
 
 
 config = {

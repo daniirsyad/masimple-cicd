@@ -1,4 +1,4 @@
-# Hamilton — Application Summary
+# MASIMPLE CICD — Application Summary
 
 Written to hand to a separate AI conversation (that has no access to this
 codebase) as context for planning a new feature. It's self-contained: tech
@@ -8,7 +8,7 @@ in this repo's own `AI_CONTEXT.md`/`SESSION_START.md`, not needed here.
 
 ## What it is
 
-Hamilton is an internal Flask web app with three halves:
+MASIMPLE CICD is an internal Flask web app with three halves:
 
 1. A general-purpose **admin/RBAC foundation** — users, roles, granular
    permissions, a database-driven sidebar/navbar menu, activity logging, and
@@ -39,11 +39,11 @@ different roles) — not a SaaS product with per-customer isolation.
 | Auth | Flask-Login (session-based) + Flask-WTF (CSRF) + Werkzeug password hashing |
 | Frontend | Jinja2 + Tailwind CSS 3 + daisyUI 4 — **no JS framework/SPA**; vanilla JS per page, vendored SortableJS for drag-and-drop |
 | Background work | Python `threading`/`queue` — independent in-process worker threads (one for builds, one for deploys, plus a separate deploy live-status poller thread), no Celery/Redis |
-| Deployment (of Hamilton itself) | Docker (multi-stage: Node build for CSS, then Python/gunicorn), Docker Compose (`web` + `db`) |
+| Deployment (of MASIMPLE CICD itself) | Docker (multi-stage: Node build for CSS, then Python/gunicorn), Docker Compose (`web` + `db`) |
 | Git integration | GitPython, provider-abstracted (`GitProvider` → `GitHubProvider`) |
 | Registry integration | docker-py against Docker Hub, provider-abstracted (`RegistryProvider` → `DockerHubProvider`) |
 | Image builds | shells out to `docker buildx build` or a `kaniko-executor` binary, provider-abstracted (`BuildEngine`) |
-| Kubernetes integration | shells out to the `kubectl` CLI (no `kubernetes` client library), provider-abstracted (`DeploymentProvider` → `KubernetesProvider`/`CustomAPIProvider`) — `kubectl` must be installed wherever Hamilton itself runs |
+| Kubernetes integration | shells out to the `kubectl` CLI (no `kubernetes` client library), provider-abstracted (`DeploymentProvider` → `KubernetesProvider`/`CustomAPIProvider`) — `kubectl` must be installed wherever MASIMPLE CICD itself runs |
 | AI description generation | provider-abstracted (`AIProvider`); Qwen implemented, Claude/Gemini/Custom API are stubs |
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
 | Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), ~425 tests |
@@ -305,7 +305,7 @@ in exception-swallowing code paths).
   each for builds and deploys) — there is no distributed/multi-instance
   deployment story; a feature that needs horizontal scaling would need to
   introduce a real broker first.
-- `kubectl` must be installed on whatever host/container Hamilton itself
+- `kubectl` must be installed on whatever host/container MASIMPLE CICD itself
   runs on (not the end user's machine) — deploys/updates/stops/restarts/pod
   browsing all shell out to it. No `kubernetes` client library is used.
 - The `"api"` `DeploymentServer` connection type (a custom agent instead of

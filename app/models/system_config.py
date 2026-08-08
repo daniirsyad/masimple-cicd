@@ -15,7 +15,7 @@ class SystemConfig(db.Model):
     timezone = db.Column(db.String, nullable=False, default="UTC")
     session_timeout_minutes = db.Column(db.Integer, nullable=False, default=60)
     build_engine = db.Column(db.String, nullable=False, default="docker")
-    # The navbar and sidebar both show the app title ("Hamilton") — redundant
+    # The navbar and sidebar both show the app title ("MASIMPLE CICD") — redundant
     # whenever the sidebar is visible (desktop) since it has its own. When
     # enabled, the navbar's copy is hidden client-side while the sidebar is
     # open (see sidebar.js) so exactly one is ever showing.

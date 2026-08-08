@@ -1,4 +1,4 @@
-# AI Context — Hamilton
+# AI Context — MASIMPLE CICD
 
 Consolidated background/reference material for AI agents working in this repo.
 This single file replaces three previously separate root-level files —
@@ -38,7 +38,7 @@ supersede anything below that it explicitly says was reworked.
 
 # Part 1: Original Foundation Spec
 
-## Project Plan: Hamilton — Build & Deployment Application (Flask Foundation)
+## Project Plan: MASIMPLE CICD — Build & Deployment Application (Flask Foundation)
 
 This document is a **plan/spec** you can use as context for GitHub Copilot (Copilot Chat / Copilot Workspace) so the AI builds the application foundation with a consistent structure.
 
@@ -61,7 +61,7 @@ This document is a **plan/spec** you can use as context for GitHub Copilot (Copi
 ### 2. Folder Structure (recommended)
 
 ```
-hamilton/
+masimple-cicd/
 ├── app/
 │   ├── __init__.py            # App factory
 │   ├── extensions.py          # db, login_manager, migrate, csrf
@@ -233,7 +233,7 @@ Since roles are **dynamic** (admin can create/edit roles), use an **RBAC structu
 ### 7. Home Page
 
 - Lightweight dashboard after login: greeting, summary counts (active users, roles), and a few recent activity log entries.
-- Also serves as the "foundation" for the other features you'll build yourself later (build & deployment for Hamilton).
+- Also serves as the "foundation" for the other features you'll build yourself later (build & deployment for MASIMPLE CICD).
 
 ---
 
@@ -1250,7 +1250,7 @@ In order:
    - **Duplicate app title, now configurable.** New
      `SystemConfig.hide_navbar_title_when_sidebar_open` (bool, default
      `True`, checkbox on `/config`) — when enabled, `sidebar.js` hides the
-     navbar's "Hamilton" title whenever the sidebar is open (desktop or
+     navbar's "MASIMPLE CICD" title whenever the sidebar is open (desktop or
      mobile), re-evaluated on resize too, so exactly one copy ever shows.
    - **Loading animations for running builds** — spinner + real progress bar
      on both live status widgets (`/builders`, `/images`), plus a small

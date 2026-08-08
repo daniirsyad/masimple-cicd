@@ -76,7 +76,7 @@ class KubernetesProvider(DeploymentProvider):
     def delete(self, manifest_yaml):
         try:
             # --ignore-not-found: a resource already gone (e.g. removed by
-            # hand outside Hamilton) shouldn't fail the stop — the end state
+            # hand outside MASIMPLE CICD) shouldn't fail the stop — the end state
             # ("not present") is what we actually wanted.
             process = self._run_kubectl(["delete", "-f", "-", "--ignore-not-found=true"], input_text=manifest_yaml)
         except (OSError, subprocess.TimeoutExpired) as exc:

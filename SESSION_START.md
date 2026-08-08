@@ -4,7 +4,7 @@ Paste the block below into a new chat to pick up this project with full context.
 
 ---
 
-I'm continuing work on this Flask app (Hamilton) at /home/daniirsyad/work/code/hamilton-app-deployment.
+I'm continuing work on this Flask app (MASIMPLE CICD) at /home/daniirsyad/work/code/hamilton-app-deployment.
 
 First, read these files in full before doing anything else:
 
@@ -261,7 +261,7 @@ Then ask me what to work on next rather than assuming.
     match the API server cert's actual SANs. Connection test now gets all
     the way to a network-level timeout — confirmed via a raw TCP probe that
     **this sandbox has no route to that private LAN IP at all**, so "Test
-    Connection" can only be meaningfully verified from wherever Hamilton is
+    Connection" can only be meaningfully verified from wherever MASIMPLE CICD is
     actually deployed, not from this sandbox.
 - **Not yet committed.** This session's Deployment module + follow-up work
   (6 new models, 1 migration, `app/services/deployment/*`, 3 new blueprints

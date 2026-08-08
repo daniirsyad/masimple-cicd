@@ -25,13 +25,13 @@ services:
   db:
     image: postgres:16
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-hamilton}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hamilton}
-      POSTGRES_DB: ${POSTGRES_DB:-hamilton_app_deployment}
+      POSTGRES_USER: ${POSTGRES_USER:-masimple_cicd}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-masimple_cicd}
+      POSTGRES_DB: ${POSTGRES_DB:-masimple_cicd}
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hamilton}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-masimple_cicd}"]
       interval: 5s
       timeout: 5s
       retries: 5

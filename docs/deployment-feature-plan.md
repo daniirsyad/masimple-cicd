@@ -1,8 +1,8 @@
-# Feature Prompt: Deployment Module for Hamilton
+# Feature Prompt: Deployment Module for MASIMPLE CICD
 
-## Context (paste Hamilton's app summary alongside this)
+## Context (paste MASIMPLE CICD's app summary alongside this)
 
-Hamilton already has a Docker Image Builder module: `Repository` + `Version`
+MASIMPLE CICD already has a Docker Image Builder module: `Repository` + `Version`
 
 - `RegistryTarget` combine into a `Builder`; triggering a `Builder` (or a
   group of them) creates a `BuildBatch`, which bumps the `Version` once and
