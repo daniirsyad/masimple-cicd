@@ -1289,3 +1289,137 @@ item 10 above:
     for planning a new feature. Distinct from `AI_CONTEXT.md` (historical
     narrative) and `SESSION_START.md` (session handoff) — describes only
     current state, no change history.
+
+---
+
+# Part 6: The Deployment Module (2026-08-07 through 2026-08-08)
+
+Built from scratch and then substantially extended across a first session
+and a long follow-up session — full implementation detail for each piece
+lives in `SESSION_START.md`'s "Current state" section (kept current, not
+archived here); this is the narrative arc and the *why* behind the bigger
+decisions.
+
+**Initial build (2026-08-07).** The module described in
+`docs/deployment-feature-plan.md`: `DeploymentServer` (register a
+Kubernetes cluster via kubeconfig, or a custom agent via `{api_url,
+token}`), `DeploymentManifest` (YAML with `{{SYS:VERSION[:key]}}`
+placeholders resolved against a Builder's latest — or a pinned — successful
+`ImageBuild`), `DeploymentRun`/`DeploymentExecution` (deploy history),
+mirroring the Image Builder module's own shape throughout. Several open
+design questions from the plan doc were resolved via direct questions to
+the user before writing code, rather than guessed at:
+- The deploy worker is an **independent** queue/thread from the build
+  worker (its own partial-unique-index single-flight guarantee) — a build
+  and a deploy can run concurrently.
+- A group deploy **aborts remaining executions on first failure**
+  (`"skipped"`) — deliberately different from `BuildBatch`'s
+  continue-and-report-partial-failure.
+- `DeploymentServer.allowed_roles` — holding `deployment.trigger` (as it
+  was called then) wasn't sufficient on its own; the user's role also had
+  to be in the target server's allow-list, mirroring `Builder.allowed_roles`.
+- No dedicated rollback action — re-deploying with a version binding's
+  `pinned_image_build_id` set *is* the rollback mechanism.
+- No new pip dependencies: `KubernetesProvider` shells out to `kubectl`
+  against a temp-file kubeconfig, same precedent as `DockerBuildEngine`/
+  `KanikoBuildEngine` shelling to `docker buildx`/`kaniko-executor` rather
+  than reimplementing their protocols.
+
+**The long follow-up session (2026-08-08)** kept building on top of that
+base, roughly in this order:
+
+1. **Manifest ordering + Stop.** Groups gained a user-configurable,
+   drag-and-drop deploy order (`DeploymentManifest.order`). A "Stop" action
+   was added — tear down what's currently deployed — with the explicit
+   requirement that a group *stop* walks the order **descending**, the
+   reverse of how a group *deploy* goes up. This needed `DeploymentRun.action`
+   ("deploy"/"stop") and `DeploymentExecution.source_execution_id` (a stop
+   execution points at the deploy execution it's undoing, so it deletes
+   exactly what was applied instead of re-resolving placeholders that may
+   have since moved on).
+2. **Live-status polling.** A second, independent background thread
+   periodically re-checks (via `kubectl get -f -`) whether each deployed
+   manifest's resources are still actually present, at an
+   admin-configurable interval. Feeds the "currently deployed" signal the
+   rest of the module leans on heavily.
+3. **Pod management, then generalized into a full read-only K8s resource
+   browser.** Started as just Pods (list/logs/describe) as its own pages;
+   the user then explicitly asked for it to cover network (Services/
+   Ingress), disk (PVs/PVCs), Namespaces, and Nodes too — and for it to
+   stay strictly **read-only** (list + describe, no delete/edit) when
+   asked directly. Logs/Describe were later converted from full page
+   navigations into `<dialog>` modals fetched via JSON, auto-scrolling to
+   the bottom on load (most-recent lines for logs, the Events section for
+   describe). A real routing collision risk got caught and fixed here:
+   pod routes had to move under an explicit `/pods/` path segment so a
+   Kubernetes namespace literally named `resources` could never be
+   ambiguously routed against the new `/resources/<kind>/...` browser
+   endpoints (Werkzeug ranks a static path segment over a dynamic one).
+4. **Deploy/Stop button visibility became conditional.** Originally both
+   buttons always showed regardless of state. Changed so Deploy hides once
+   a manifest is live on every target server and Stop shows once it's live
+   on at least one — both can show at once mid-rollout — driven by the
+   same `is_currently_deployed()` check the Stop route itself uses, so the
+   buttons never promise something that wouldn't actually happen.
+5. **A real bug, caught live in the dev DB**: a manifest the user had
+   already stopped via "Stop Group" still refused to delete ("it has 5
+   recorded deployment(s)"). Root cause: the delete guard blocked on *any*
+   execution history ever, a leftover assumption from before Stop existed
+   (when "has history" and "is still live" were the same question).
+   Fixed to check `is_currently_deployed()` instead, and
+   `DeploymentExecution.manifest_id` was made nullable so a deleted
+   manifest's history survives (nulled out, not cascaded) — same pattern
+   as the existing `ActivityLog.user_id` nulling on a hard user delete.
+   Caught a second latent bug in the same area while there: deleting *any*
+   manifest with version bindings had always 500'd, since nothing dropped
+   `DeploymentManifestVersionBinding` rows first and that FK has no cascade.
+6. **Deployment Runs auto-refresh** — a page-level, user-configurable
+   full-page reload interval (Off/5s/10s/30s/60s), persisted in
+   `localStorage`, independent of the existing 3-second "Deploy Status"
+   widget poll.
+7. **Update, Restart, granular permissions, per-manifest user access** —
+   the biggest single addition. Summarized back to the user and confirmed
+   before implementation, given how many real design decisions it forced:
+   - **Update**: since Deploy hides once fully live, there was no way left
+     to notice or push a newer Builder image to an already-deployed
+     manifest. New `worker.get_available_update()` compares the
+     currently-deployed resolved version against what the manifest would
+     resolve to right now; internally an Update is just another
+     `action="deploy"` enqueue under a different button/permission.
+   - **Restart**: `kubectl rollout restart -f -`, kube-only. Required
+     redefining `is_currently_deployed()` — it used to mean "latest
+     successful action was a deploy", which would have made a successful
+     restart look like an undeploy. Now it means "latest successful action
+     wasn't a stop", and a restart's own execution carries `rendered_yaml`/
+     `resolved_version_string` forward from its source so a *second*
+     restart (or a stop) can still chain off it correctly.
+   - **`deployment.trigger` retired**, split into `deployment.deploy`/
+     `update`/`stop`/`restart` (one permission per action, explicitly
+     requested "one by one"). Migrated live against the dev DB via a new
+     idempotent step in `seeds/seed_admin.py`.
+   - **`DeploymentManifest.allowed_users`** — per-manifest access,
+     deliberately **per-user, not per-role** (unlike
+     `DeploymentServer.allowed_roles`) and deliberately **open when empty**
+     rather than locked-to-managers (the opposite of `DeploymentServer`'s
+     empty-list default) — chosen specifically so shipping it didn't
+     silently strip access from every manifest already in use. Checked
+     alongside, not instead of, the existing per-server role gate.
+8. **Two small, isolated fixes** after that: a standalone deploy run's
+   title used to just say "Standalone deploy" everywhere with no
+   indication of which manifest actually ran — now shows `"<name>
+   (standalone)"`. And the homepage (`/`), which had zero mention of the
+   Deployment module despite it now being roughly half the app, gained
+   permission-gated stat cards (Servers/Manifests/Runs) and a deploy-engine
+   busy/idle indicator, mirroring the existing Image Builder dashboard
+   cards exactly.
+
+New migrations across this arc: `dcedb8fa84b8` (initial module),
+`e57baba6abe0` (manifest order / run action / execution live-status columns
+/ config interval), `2864992eaa32` (`deployment_executions.manifest_id`
+nullable), `869fda148361` (`deployment_manifest_users`). Test count grew
+from the pre-Deployment-module baseline to 425, all passing, all real
+Postgres (no sqlite/mocks) as everywhere else in this app.
+
+Everything in this Part was left **uncommitted** at the end of each
+session, per this project's established pattern — the user batches and
+pushes commits themselves, on their own terms.

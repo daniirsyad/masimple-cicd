@@ -8,6 +8,9 @@ from app.models import (
     ActivityLog,
     Builder,
     BuildBatch,
+    DeploymentManifest,
+    DeploymentRun,
+    DeploymentServer,
     ErrorLog,
     ImageBuild,
     Role,
@@ -16,6 +19,7 @@ from app.models import (
     VersionDocumentation,
 )
 from app.services.build.worker import get_engine_status
+from app.services.deployment.worker import get_engine_status as get_deployment_engine_status
 
 RECENT_BATCHES_LIMIT = 5
 RECENT_ERRORS_DAYS = 7
@@ -56,6 +60,25 @@ def _module_stats():
                 "url": url_for("documentation.list_documentation"),
             }
         )
+
+    # Deployment module — same gate-behind-the-list-page's-own-permission
+    # pattern as the Image Builder cards above.
+    if current_user.has_permission("deployment_server.view"):
+        stats.append(
+            {"label": "Deployment Servers", "value": DeploymentServer.query.count(), "url": url_for("deployment_servers.index")}
+        )
+    if current_user.has_permission("deployment_manifest.view"):
+        stats.append(
+            {
+                "label": "Deployment Manifests",
+                "value": DeploymentManifest.query.count(),
+                "url": url_for("deployment_manifests.index"),
+            }
+        )
+    if current_user.has_permission("deployment_run.view"):
+        stats.append(
+            {"label": "Deployment Runs", "value": DeploymentRun.query.count(), "url": url_for("deployment_runs.index")}
+        )
     return stats
 
 
@@ -76,6 +99,10 @@ def index():
     if current_user.has_permission("builder.view"):
         engine_status = get_engine_status()
 
+    deployment_engine_status = None
+    if current_user.has_permission("deployment_run.view"):
+        deployment_engine_status = get_deployment_engine_status()
+
     recent_errors_count = None
     if current_user.has_permission("logs.view"):
         recent_errors_count = ErrorLog.query.filter(
@@ -90,6 +117,7 @@ def index():
         module_stats=module_stats,
         recent_batches=recent_batches,
         engine_status=engine_status,
+        deployment_engine_status=deployment_engine_status,
         recent_errors_count=recent_errors_count,
         recent_errors_days=RECENT_ERRORS_DAYS,
     )

@@ -44,7 +44,24 @@ BASE_PERMISSIONS = [
     ("registry.manage", "Manage container registry targets"),
     ("documentation.edit", "View and edit build batch documentation"),
     ("system.manage", "Manage system configuration (timezone, session timeout)"),
+    ("deployment_server.view", "View deployment servers"),
+    ("deployment_server.manage", "Create and edit deployment servers"),
+    ("deployment_manifest.view", "View deployment manifests"),
+    ("deployment_manifest.manage", "Create and edit deployment manifests"),
+    ("deployment_run.view", "View deployment run history"),
+    ("deployment.deploy", "Deploy a manifest"),
+    ("deployment.update", "Update an already-deployed manifest to a newer version"),
+    ("deployment.stop", "Stop a deployed manifest"),
+    ("deployment.restart", "Restart a deployed manifest's workload(s)"),
+    ("deployment_pod.view", "View pod status, logs, and describe output on deployment servers"),
 ]
+
+# Retired in favor of the four granular deployment.* permissions above (one
+# per action, so a role can e.g. deploy without being able to stop). Kept
+# here only so _migrate_deployment_trigger_permission below can find and
+# retire it — do not add it back to BASE_PERMISSIONS.
+_RETIRED_DEPLOYMENT_TRIGGER_CODE = "deployment.trigger"
+_DEPLOYMENT_TRIGGER_REPLACEMENT_CODES = ("deployment.deploy", "deployment.update", "deployment.stop", "deployment.restart")
 
 SUPER_ADMIN_ROLE_NAME = "Super Admin"
 
@@ -82,6 +99,31 @@ def seed_super_admin_role(permissions):
     return role
 
 
+def migrate_deployment_trigger_permission(permissions):
+    """One-off data migration: `deployment.trigger` used to gate both Deploy
+    and Stop together; it's now split into deployment.deploy/update/stop/
+    restart (one permission per action). Any role that already held
+    deployment.trigger gets all four replacements granted so existing access
+    carries over unchanged, then the retired permission is deleted. Safe to
+    re-run — a no-op once deployment.trigger no longer exists.
+    """
+    trigger_permission = Permission.query.filter_by(code=_RETIRED_DEPLOYMENT_TRIGGER_CODE).first()
+    if trigger_permission is None:
+        return
+
+    replacements = [permissions[code] for code in _DEPLOYMENT_TRIGGER_REPLACEMENT_CODES]
+    for role in list(trigger_permission.roles):
+        existing_codes = {permission.code for permission in role.permissions}
+        for code, permission in zip(_DEPLOYMENT_TRIGGER_REPLACEMENT_CODES, replacements):
+            if code not in existing_codes:
+                role.permissions.append(permission)
+                print(f"Granted {code} to role '{role.name}' (replacing deployment.trigger)")
+
+    db.session.delete(trigger_permission)
+    db.session.commit()
+    print("Retired permission: deployment.trigger")
+
+
 def seed_super_admin_user(role):
     username = os.environ.get("ADMIN_USERNAME", "admin")
     password = os.environ.get("ADMIN_PASSWORD", "ChangeMe123!")
@@ -108,6 +150,7 @@ def run():
     app = create_app()
     with app.app_context():
         permissions = seed_permissions()
+        migrate_deployment_trigger_permission(permissions)
         role = seed_super_admin_role(permissions)
         seed_super_admin_user(role)
 

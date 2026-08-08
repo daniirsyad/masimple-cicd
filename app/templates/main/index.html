@@ -21,7 +21,7 @@ block content %}
   {% endfor %}
 </div>
 
-{% if engine_status is not none or recent_errors_count is not none %}
+{% if engine_status is not none or deployment_engine_status is not none or recent_errors_count is not none %}
 <div class="mt-4 flex flex-wrap gap-4">
   {% if engine_status is not none %}
   <a href="{{ url_for('builders.index') }}" class="card bg-base-100 shadow-sm transition hover:shadow-md">
@@ -33,6 +33,20 @@ block content %}
         Build engine:
         <strong>
           {{ 'Busy — 1 running, ' ~ engine_status.queued|length ~ ' queued' if engine_status.busy else 'Idle' }}
+        </strong>
+      </span>
+    </div>
+  </a>
+  {% endif %} {% if deployment_engine_status is not none %}
+  <a href="{{ url_for('deployment_runs.index') }}" class="card bg-base-100 shadow-sm transition hover:shadow-md">
+    <div class="card-body flex-row items-center gap-3 p-4">
+      <span
+        class="inline-block h-2.5 w-2.5 rounded-full {{ 'bg-warning animate-pulse' if deployment_engine_status.busy else 'bg-success' }}"
+      ></span>
+      <span class="text-sm">
+        Deploy engine:
+        <strong>
+          {{ 'Busy — 1 running, ' ~ deployment_engine_status.queued|length ~ ' queued' if deployment_engine_status.busy else 'Idle' }}
         </strong>
       </span>
     </div>

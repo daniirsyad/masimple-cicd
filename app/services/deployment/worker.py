@@ -1,0 +1,448 @@
+"""Deploy worker — an independent poll thread/queue from
+app/services/build/worker.py's build worker. A deploy and a build may run
+concurrently (they're different resources: kubectl/agent-API calls vs docker
+builds); this module enforces its own, separate "only one deployment
+execution runs at a time system-wide" via DeploymentExecution's own partial
+unique index (ix_deployment_executions_single_running), not the build
+worker's ImageBuild one.
+"""
+import os
+import threading
+import time
+from datetime import datetime
+
+from sqlalchemy.exc import IntegrityError
+
+from app.extensions import db
+from app.models import DeploymentExecution, DeploymentRun
+from app.services.deployment.helpers import provider_for_server
+from app.services.deployment.resolver import UnresolvedPlaceholderError, resolve_manifest
+from app.utils.error_logger import log_error
+from app.utils.system_config import get_system_config
+
+POLL_INTERVAL_SECONDS = 2
+# Floor for the admin-configurable deployment_status_check_interval_seconds
+# — protects the poller (and every registered server's API/kubectl) from a
+# runaway tight loop if someone sets it to 0 or a negative value.
+STATUS_POLL_MIN_INTERVAL_SECONDS = 5
+
+_worker_started = False
+_worker_lock = threading.Lock()
+_poller_started = False
+_poller_lock = threading.Lock()
+
+
+def get_current_deployment(manifest_id, server_id):
+    """The most recent *successful* execution for this (manifest, server)
+    pair, ignoring failed/skipped/in-flight attempts — those never actually
+    changed what's on the cluster, so they shouldn't count as "current".
+    None if this pair has never had a successful apply or stop.
+    """
+    return (
+        DeploymentExecution.query.join(DeploymentRun, DeploymentExecution.run_id == DeploymentRun.id)
+        .filter(
+            DeploymentExecution.manifest_id == manifest_id,
+            DeploymentExecution.server_id == server_id,
+            DeploymentExecution.status == "success",
+        )
+        .order_by(DeploymentExecution.created_at.desc())
+        .first()
+    )
+
+
+def is_currently_deployed(manifest_id, server_id):
+    """True iff this (manifest, server) pair's most recent successful
+    execution wasn't a "stop" — i.e. deployed, updated (still a "deploy"
+    action), or restarted all count as still deployed; only a successful
+    "stop" ever undeploys. NOT the same as "action == deploy" — a
+    successful restart's own execution becomes the new "most recent", and
+    a restart doesn't undeploy anything.
+    """
+    execution = get_current_deployment(manifest_id, server_id)
+    return execution is not None and execution.run.action != "stop"
+
+
+def get_available_update(manifest, server):
+    """None if there's nothing to update (not currently deployed on this
+    server, the manifest can't currently be resolved, or it's already on
+    the latest resolvable version) — otherwise the version string it would
+    update to. Powers the manifest table's "Update" button/badge: Deploy
+    hides once fully live, so this is the only way to notice a newer
+    Builder image landed after a manifest was already deployed everywhere.
+    """
+    current = get_current_deployment(manifest.id, server.id)
+    if current is None or current.run.action == "stop":
+        return None
+
+    try:
+        _rendered_yaml, resolved_versions = resolve_manifest(manifest)
+    except UnresolvedPlaceholderError:
+        return None
+
+    target_version_string = "; ".join(f"{key}={tag}" for key, tag in resolved_versions.items()) or None
+    if target_version_string and target_version_string != current.resolved_version_string:
+        return target_version_string
+    return None
+
+
+def enqueue_deployment_run(manifests, triggered_by, group_name=None, action="deploy"):
+    """Creates one DeploymentRun + one DeploymentExecution per (manifest,
+    target server) pair — mirrors enqueue_build_batch.
+
+    action="deploy" (default, also used for "Update" — an update is just a
+    fresh deploy that happens to re-resolve to a newer version): applies
+    every manifest to every server on its own `target_servers` (chosen at
+    manifest setup time), unchanged from before.
+
+    action="stop" or "restart": act only on (manifest, server) pairs that
+    are actually currently deployed — each execution's source_execution_id
+    points at the current deployment (deploy/update/restart, whichever was
+    most recent) being torn down or restarted, so the worker acts on
+    exactly what was applied rather than re-resolving. Pairs with nothing
+    currently live are silently skipped.
+
+    Either way, `manifests` must already be in the order the caller wants
+    executions created in (ascending manifest.order for a group deploy,
+    descending for a group stop/restart — see deployment_manifests.routes),
+    since the worker claims queued executions oldest-created-first.
+    """
+    run = DeploymentRun(group_name=group_name, triggered_by=triggered_by, status="queued", action=action)
+    db.session.add(run)
+    db.session.flush()  # assign run.id so the executions below can reference it
+
+    execution_count = 0
+    for manifest in manifests:
+        for server in manifest.target_servers:
+            if action == "deploy":
+                db.session.add(
+                    DeploymentExecution(run_id=run.id, manifest_id=manifest.id, server_id=server.id, status="queued")
+                )
+                execution_count += 1
+            else:
+                source = get_current_deployment(manifest.id, server.id)
+                if source is None or source.run.action == "stop":
+                    continue
+                db.session.add(
+                    DeploymentExecution(
+                        run_id=run.id,
+                        manifest_id=manifest.id,
+                        server_id=server.id,
+                        source_execution_id=source.id,
+                        status="queued",
+                    )
+                )
+                execution_count += 1
+
+    db.session.commit()
+    return run, execution_count
+
+
+def get_engine_status():
+    """Snapshot of what the deploy worker is doing right now — mirrors
+    build.worker.get_engine_status(), for /deployment-runs's polling.
+    """
+    running = DeploymentExecution.query.filter_by(status="running").first()
+    queued = (
+        DeploymentExecution.query.filter_by(status="queued")
+        .order_by(DeploymentExecution.created_at.asc())
+        .all()
+    )
+    return {"busy": running is not None, "running": running, "queued": queued}
+
+
+def get_run_progress(run_id):
+    """'X of Y done' — a run-level aggregate over its DeploymentExecutions'
+    statuses, mirrors build.worker.get_batch_progress.
+    """
+    executions = DeploymentExecution.query.filter_by(run_id=run_id).all()
+    total = len(executions)
+    finished = sum(1 for execution in executions if execution.status in ("success", "failed", "skipped"))
+    succeeded = sum(1 for execution in executions if execution.status == "success")
+    return {"total": total, "finished": finished, "succeeded": succeeded}
+
+
+def _claim_next_job():
+    """Atomically claim the oldest queued DeploymentExecution, enforcing "only
+    one deployment runs at a time" globally across every process — see the
+    module docstring for why this is a separate queue/index from the build
+    worker's. Returns the claimed execution's id, or None if there was
+    nothing to claim or this attempt lost the race to another already-
+    running execution (see build.worker._claim_next_job's docstring for the
+    full SKIP LOCKED + partial-unique-index race reasoning, identical here).
+    """
+    execution = (
+        DeploymentExecution.query.filter_by(status="queued")
+        .order_by(DeploymentExecution.created_at.asc())
+        .with_for_update(skip_locked=True)
+        .first()
+    )
+    if execution is None:
+        db.session.rollback()
+        return None
+
+    execution.status = "running"
+    execution.started_at = datetime.utcnow()
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return None
+    return execution.id
+
+
+def _update_run_status(run_id):
+    """Aggregates a DeploymentRun's status from its DeploymentExecutions.
+
+    Differs from build.worker._update_batch_status ("continue, report
+    partial_failure" for every execution regardless of outcome): a group
+    deploy aborts remaining work on first failure — once any execution in a
+    run has failed, every execution still "queued" in that same run is
+    marked "skipped" instead of ever being claimed by _claim_next_job. An
+    execution already "running" when the failure happens is left to finish
+    naturally (there's no way to safely kill an in-flight kubectl/API call
+    from here) — its own outcome still feeds into this same aggregation
+    once it completes.
+    """
+    run = DeploymentRun.query.get(run_id)
+    if run is None:
+        return
+
+    executions = DeploymentExecution.query.filter_by(run_id=run_id).all()
+    statuses = {execution.status for execution in executions}
+
+    if "failed" in statuses:
+        for execution in executions:
+            if execution.status == "queued":
+                execution.status = "skipped"
+        statuses = {execution.status for execution in executions}
+
+    if "running" in statuses:
+        run.status = "running"
+    elif "failed" in statuses:
+        run.status = "partial_failure" if "success" in statuses else "failed"
+    elif statuses == {"success"}:
+        run.status = "success"
+    else:
+        run.status = "queued"
+
+    db.session.commit()
+
+
+def _run_deployment(app, execution_id):
+    """Runs one claimed DeploymentExecution: resolve -> apply for a "deploy"
+    run, or a straight delete of the source execution's rendered_yaml for a
+    "stop" run (see enqueue_deployment_run).
+
+    Always wrapped in try/except so one bad execution (unresolved
+    placeholder, unreachable server, a rejected manifest, ...) marks that
+    one DeploymentExecution as failed instead of killing the worker thread —
+    the poll loop must keep running afterward.
+    """
+    with app.app_context():
+        execution = DeploymentExecution.query.get(execution_id)
+        if execution is None:
+            return
+
+        log_lines = []
+
+        def flush_log():
+            execution.log = "".join(log_lines)
+            db.session.commit()
+
+        try:
+            manifest = execution.manifest
+            server = execution.server
+            run_action = execution.run.action  # "deploy" | "stop" | "restart"
+
+            if run_action in ("stop", "restart"):
+                source = execution.source_execution
+                if source is None or not source.rendered_yaml:
+                    raise RuntimeError(f"No applied manifest recorded for this execution to {run_action}.")
+
+                verb = "Stop" if run_action == "stop" else "Restart"
+                progress_verb = "Stopping" if run_action == "stop" else "Restarting"
+                log_lines.append(f"{progress_verb} '{manifest.name}' on server '{server.name}'...\n")
+                flush_log()
+
+                provider = provider_for_server(server)
+                if run_action == "stop":
+                    result = provider.delete(source.rendered_yaml)
+                else:
+                    result = provider.restart(source.rendered_yaml)
+
+                if result.success and run_action == "restart":
+                    # Carry the applied YAML/version forward so this
+                    # execution can itself serve as the "current deployment"
+                    # for a later stop/restart/update-comparison — a restart
+                    # doesn't change what's actually running, so there's
+                    # nothing new to (re-)resolve.
+                    execution.rendered_yaml = source.rendered_yaml
+                    execution.resolved_version_string = source.resolved_version_string
+            else:
+                # Resolve placeholders before ever building a provider — an
+                # unresolvable {{SYS:VERSION[:key]}} is a manifest-authoring
+                # mistake that should surface as such, not get masked by
+                # whatever the target server's credentials happen to be.
+                verb = "Deploy"
+                log_lines.append(f"Resolving version placeholders for '{manifest.name}'...\n")
+                flush_log()
+
+                rendered_yaml, resolved_versions = resolve_manifest(manifest)
+                execution.rendered_yaml = rendered_yaml
+                execution.resolved_version_string = (
+                    "; ".join(f"{key}={tag}" for key, tag in resolved_versions.items()) or None
+                )
+
+                log_lines.append(f"Applying to server '{server.name}'...\n")
+                flush_log()
+                result = provider_for_server(server).apply(rendered_yaml)
+
+            log_lines.append(result.log or "")
+
+            if not result.success:
+                execution.status = "failed"
+                log_lines.append(f"\n{verb} failed: {result.error}\n")
+                log_error(
+                    source="deployment.worker.run_deployment",
+                    description=f"Execution {execution.id} (run {execution.run_id}) failed: {result.error}",
+                    detail=result.log,
+                )
+            else:
+                execution.status = "success"
+                log_lines.append(f"\n{verb} succeeded.\n")
+
+        except Exception as exc:  # includes UnresolvedPlaceholderError — a bad deploy must not kill the worker thread
+            execution.status = "failed"
+            log_lines.append(f"\nERROR: {exc}\n")
+            log_error(
+                source="deployment.worker.run_deployment",
+                exc=exc,
+                description=f"Execution {execution.id} (run {execution.run_id}) failed: {exc}",
+            )
+        finally:
+            flush_log()
+            execution.finished_at = datetime.utcnow()
+            db.session.commit()
+            _update_run_status(execution.run_id)
+            db.session.remove()
+
+
+def _poll_loop(app):
+    while True:
+        with app.app_context():
+            execution_id = _claim_next_job()
+            db.session.remove()
+
+        if execution_id is not None:
+            _run_deployment(app, execution_id)
+        else:
+            time.sleep(POLL_INTERVAL_SECONDS)
+
+
+def _live_check_candidates():
+    """Every DeploymentExecution that is its (manifest, server) pair's
+    current deployment — i.e. actually live and worth re-checking. Matches
+    is_currently_deployed's definition: anything but a successful "stop".
+    """
+    pairs = (
+        db.session.query(DeploymentExecution.manifest_id, DeploymentExecution.server_id)
+        .filter(DeploymentExecution.status == "success")
+        .distinct()
+        .all()
+    )
+    candidates = []
+    for manifest_id, server_id in pairs:
+        execution = get_current_deployment(manifest_id, server_id)
+        if execution is not None and execution.run.action != "stop":
+            candidates.append(execution)
+    return candidates
+
+
+def _refresh_live_status(app):
+    with app.app_context():
+        for execution in _live_check_candidates():
+            try:
+                provider = provider_for_server(execution.server)
+                status = provider.get_live_status(execution.rendered_yaml)
+            except NotImplementedError:
+                # This provider type (e.g. "api") has no reliable way to
+                # tell — leave live_status as whatever it already was
+                # rather than guessing.
+                continue
+            except Exception as exc:
+                log_error(
+                    source="deployment.worker.status_poll",
+                    exc=exc,
+                    description=f"Live-status check failed for execution {execution.id}: {exc}",
+                )
+                continue
+
+            execution.live_status = status
+            execution.live_checked_at = datetime.utcnow()
+            db.session.commit()
+        db.session.remove()
+
+
+def _status_poll_loop(app):
+    while True:
+        try:
+            _refresh_live_status(app)
+        except Exception as exc:
+            with app.app_context():
+                log_error(
+                    source="deployment.worker.status_poll",
+                    exc=exc,
+                    description="Live-status poll loop iteration failed.",
+                )
+
+        with app.app_context():
+            interval = get_system_config().deployment_status_check_interval_seconds
+        time.sleep(max(interval, STATUS_POLL_MIN_INTERVAL_SECONDS))
+
+
+def start_worker(app):
+    """Start this process's background deploy-worker thread, once.
+
+    Same TESTING-skip and Werkzeug-reloader guards as
+    app/services/build/worker.py's start_worker — see there for why.
+    """
+    global _worker_started
+
+    if app.config.get("TESTING"):
+        return
+
+    if app.debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        return
+
+    with _worker_lock:
+        if _worker_started:
+            return
+        _worker_started = True
+
+    thread = threading.Thread(target=_poll_loop, args=(app,), daemon=True, name="deployment-worker")
+    thread.start()
+
+
+def start_status_poller(app):
+    """Start this process's background live-status-poller thread, once.
+
+    Independent of start_worker's deploy queue — read-only `kubectl get`
+    checks don't need to compete for the single-flight deploy slot. Same
+    TESTING-skip / Werkzeug-reloader guards as start_worker.
+    """
+    global _poller_started
+
+    if app.config.get("TESTING"):
+        return
+
+    if app.debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        return
+
+    with _poller_lock:
+        if _poller_started:
+            return
+        _poller_started = True
+
+    thread = threading.Thread(target=_status_poll_loop, args=(app,), daemon=True, name="deployment-status-poller")
+    thread.start()

@@ -166,6 +166,52 @@ def run():
             show_in_sidebar=True,
         )
 
+        # Added after "System" (order=4) was already seeded on existing
+        # installs — get_or_create leaves already-existing rows' order
+        # untouched, so this uses order=5 rather than renumbering System, to
+        # avoid a same-parent order tie on a re-run against a DB that already
+        # has "System" at order=4.
+        deployment = get_or_create(
+            "Deployment", url=None, order=5, show_in_navbar=False, show_in_sidebar=True
+        )
+
+        get_or_create(
+            "Deployment Servers",
+            parent_id=deployment.id,
+            url="/deployment-servers",
+            permission_code="deployment_server.view",
+            order=0,
+            show_in_navbar=False,
+            show_in_sidebar=True,
+        )
+        get_or_create(
+            "Deployment Manifests",
+            parent_id=deployment.id,
+            url="/deployment-manifests",
+            permission_code="deployment_manifest.view",
+            order=1,
+            show_in_navbar=False,
+            show_in_sidebar=True,
+        )
+        get_or_create(
+            "Deployment Runs",
+            parent_id=deployment.id,
+            url="/deployment-runs",
+            permission_code="deployment_run.view",
+            order=2,
+            show_in_navbar=False,
+            show_in_sidebar=True,
+        )
+        get_or_create(
+            "Deployment Pods",
+            parent_id=deployment.id,
+            url="/deployment-pods",
+            permission_code="deployment_pod.view",
+            order=3,
+            show_in_navbar=False,
+            show_in_sidebar=True,
+        )
+
         system_group = get_or_create(
             "System", url=None, order=4, show_in_navbar=False, show_in_sidebar=True
         )

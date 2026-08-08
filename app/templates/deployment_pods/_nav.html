@@ -1,0 +1,20 @@
+{# Shared tab nav between the Pods page and each generic resource-kind page
+   — expects `server` and `active_kind` ("pods" or a RESOURCE_KINDS slug) in
+   scope, plus `resource_kinds` (only needed on pages that have it; falls
+   back to an empty dict so this partial also works standalone). #}
+<div class="tabs tabs-boxed mt-4 mb-2 flex-wrap">
+  <a
+    href="{{ url_for('deployment_pods.list_pods', server_id=server.id) }}"
+    class="tab {{ 'tab-active' if active_kind == 'pods' else '' }}"
+  >
+    Pods
+  </a>
+  {% for slug, config in (resource_kinds or {}).items() %}
+  <a
+    href="{{ url_for('deployment_pods.list_resources', server_id=server.id, kind=slug) }}"
+    class="tab {{ 'tab-active' if active_kind == slug else '' }}"
+  >
+    {{ config.label }}
+  </a>
+  {% endfor %}
+</div>

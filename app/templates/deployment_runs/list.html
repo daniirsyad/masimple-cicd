@@ -1,0 +1,126 @@
+{% extends "base.html" %} {% block title %}Deployment Runs -
+Hamilton{% endblock %} {% block content %}
+<div class="flex flex-wrap items-center justify-between gap-2">
+  <h1 class="text-2xl font-bold">Deployment Runs</h1>
+  <div class="flex items-center gap-2">
+    <label class="label text-sm" for="auto-refresh-select">Auto-refresh</label>
+    <select id="auto-refresh-select" class="select select-bordered select-sm">
+      <option value="0">Off</option>
+      <option value="5000">Every 5s</option>
+      <option value="10000">Every 10s</option>
+      <option value="30000">Every 30s</option>
+      <option value="60000">Every 60s</option>
+    </select>
+  </div>
+</div>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">Deploy Status</h2>
+    <div id="deployment-runs-status-content" class="mt-2">
+      <span class="text-sm text-base-content/60">Loading...</span>
+    </div>
+  </div>
+</div>
+
+<form method="get" class="mt-4 flex flex-wrap items-end gap-3">
+  <div>
+    <label class="label text-sm">Status</label>
+    <select name="status" class="select select-bordered select-sm">
+      <option value="">All</option>
+      {% for choice in status_choices %}
+      <option value="{{ choice }}" {{ 'selected' if selected_status == choice else '' }}>{{ choice }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="label text-sm">Manifest</label>
+    <select name="manifest_id" class="select select-bordered select-sm">
+      <option value="">All</option>
+      {% for manifest in manifests %}
+      <option value="{{ manifest.id }}" {{ 'selected' if selected_manifest_id == manifest.id|string else '' }}>
+        {{ manifest.name }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="label text-sm">Server</label>
+    <select name="server_id" class="select select-bordered select-sm">
+      <option value="">All</option>
+      {% for server in servers %}
+      <option value="{{ server.id }}" {{ 'selected' if selected_server_id == server.id|string else '' }}>
+        {{ server.name }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="label text-sm">From</label>
+    <input type="date" name="date_from" value="{{ date_from }}" class="input input-bordered input-sm" />
+  </div>
+  <div>
+    <label class="label text-sm">To</label>
+    <input type="date" name="date_to" value="{{ date_to }}" class="input input-bordered input-sm" />
+  </div>
+  <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+  <a href="{{ url_for('deployment_runs.index') }}" class="btn btn-ghost btn-sm">Reset</a>
+</form>
+
+<div class="mt-4 flex flex-col gap-4">
+  {% for run in runs %} {% set progress = progress_by_run.get(run.id) %}
+  <div class="card bg-base-100 shadow-sm">
+    <div class="card-body p-4">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <a href="{{ url_for('deployment_runs.detail', run_id=run.id) }}" class="link link-primary text-sm font-semibold">
+            {{ run_names.get(run.id, "Standalone deploy") }}
+          </a>
+          {% if run.status in ('running', 'queued') %}
+          <span class="loading loading-spinner loading-xs text-warning"></span>
+          {% endif %}
+          <span
+            class="badge badge-sm {{
+              'badge-success' if run.status == 'success'
+              else 'badge-error' if run.status in ('failed', 'partial_failure')
+              else 'badge-warning' if run.status in ('running', 'queued')
+              else 'badge-ghost'
+            }}"
+          >
+            {{ run.status }}
+          </span>
+          {% if progress %}
+          <span class="text-xs text-base-content/60">{{ progress.finished }} of {{ progress.total }} done</span>
+          {% endif %}
+        </div>
+        <div class="text-xs text-base-content/60">
+          {{ run.triggerer.username if run.triggerer else "—" }} ·
+          {{ run.created_at | localtime("%Y-%m-%d %H:%M") }}
+        </div>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="card bg-base-100 shadow-sm">
+    <div class="card-body p-4 text-sm text-base-content/60">No deployment runs found.</div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if pagination.pages > 1 %}
+<div class="join mt-4">
+  {% for page_num in pagination.iter_pages() %} {% if page_num %}
+  <a
+    href="{{ url_for('deployment_runs.index', page=page_num, status=selected_status, manifest_id=selected_manifest_id, server_id=selected_server_id, date_from=date_from, date_to=date_to) }}"
+    class="join-item btn btn-sm {{ 'btn-active' if page_num == pagination.page else '' }}"
+  >
+    {{ page_num }}
+  </a>
+  {% else %}
+  <span class="join-item btn btn-sm btn-disabled">…</span>
+  {% endif %} {% endfor %}
+</div>
+{% endif %}
+
+<script src="{{ url_for('static', filename='js/deployment_runs.js') }}"></script>
+{% endblock %}

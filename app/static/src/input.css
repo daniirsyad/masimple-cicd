@@ -73,4 +73,16 @@
   .sidebar-icon svg [stroke]:not([stroke="none"]) {
     stroke: currentColor;
   }
+
+  /* CodeMirror (deployment_manifests/index.html's YAML editor) ships no
+     border/rounding of its own — wrapped in a plain .yaml-editor-wrapper div
+     styled with ordinary border-base-300/rounded-lg utilities instead of
+     hand-picking daisyUI's underlying color tokens here, so it automatically
+     matches whichever daisyUI theme (light/dark) is active without
+     duplicating that logic in this file. */
+  .yaml-editor-wrapper .CodeMirror {
+    height: 260px;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+  }
 }

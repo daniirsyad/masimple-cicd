@@ -2,17 +2,38 @@ import pytest
 from werkzeug.security import generate_password_hash
 
 from app.extensions import db
-from app.models import BuildBatch, Permission, RegistryTarget, Repository, Role, User, Version, VersionType
+from app.models import (
+    BuildBatch,
+    DeploymentManifest,
+    DeploymentRun,
+    DeploymentServer,
+    Permission,
+    RegistryTarget,
+    Repository,
+    Role,
+    User,
+    Version,
+    VersionType,
+)
 
 DASHBOARD_PASSWORD = "DashboardPass123!"
 
 
 @pytest.fixture
 def dashboard_user(app):
-    """A role with every Image Builder module view permission, so all of the
-    dashboard's conditional stat cards/widgets render at once."""
+    """A role with every Image Builder + Deployment module view permission,
+    so all of the dashboard's conditional stat cards/widgets render at once."""
     with app.app_context():
-        codes = ["builder.view", "version.view", "image.view", "documentation.edit", "logs.view"]
+        codes = [
+            "builder.view",
+            "version.view",
+            "image.view",
+            "documentation.edit",
+            "logs.view",
+            "deployment_server.view",
+            "deployment_manifest.view",
+            "deployment_run.view",
+        ]
         permissions = [Permission(code=code, description=code) for code in codes]
         db.session.add_all(permissions)
         role = Role(name="DashboardViewer", description="Test dashboard role")
@@ -39,6 +60,20 @@ def dashboard_client(client, dashboard_user):
     return client
 
 
+@pytest.fixture
+def base_deployment_entities(app):
+    with app.app_context():
+        server = DeploymentServer(name="srv1", connection_type="kube")
+        db.session.add(server)
+        db.session.flush()
+        manifest = DeploymentManifest(name="m1", yaml_content="image: nginx")
+        manifest.target_servers = [server]
+        db.session.add(manifest)
+        db.session.flush()
+        db.session.add(DeploymentRun(status="success"))
+        db.session.commit()
+
+
 class TestDashboard:
     def test_module_stats_are_hidden_without_the_matching_permission(self, noperm_client):
         response = noperm_client.get("/")
@@ -46,18 +81,47 @@ class TestDashboard:
         body = response.data.decode()
         assert "Active Users" in body
         assert "Roles" in body
-        for label in ("Builders", "Versions", "Images Built", "Documentation Pending"):
+        for label in (
+            "Builders",
+            "Versions",
+            "Images Built",
+            "Documentation Pending",
+            "Deployment Servers",
+            "Deployment Manifests",
+            "Deployment Runs",
+        ):
             assert label not in body
         assert "Recent Builds" not in body
+        assert "Deploy engine" not in body
 
     def test_module_stats_are_shown_with_the_matching_permissions(self, dashboard_client):
         response = dashboard_client.get("/")
         assert response.status_code == 200
         body = response.data.decode()
-        for label in ("Builders", "Versions", "Images Built", "Documentation Pending"):
+        for label in (
+            "Builders",
+            "Versions",
+            "Images Built",
+            "Documentation Pending",
+            "Deployment Servers",
+            "Deployment Manifests",
+            "Deployment Runs",
+        ):
             assert label in body
         assert "Build engine" in body
+        assert "Deploy engine" in body
         assert "days" in body
+
+    def test_deployment_stat_cards_count_and_link_correctly(self, dashboard_client, app, base_deployment_entities):
+        response = dashboard_client.get("/")
+        assert response.status_code == 200
+        body = response.data.decode()
+        assert '<div class="stat-title">Deployment Servers</div>' in body
+        assert '<div class="stat-title">Deployment Manifests</div>' in body
+        assert '<div class="stat-title">Deployment Runs</div>' in body
+        assert "/deployment-servers/" in body
+        assert "/deployment-manifests/" in body
+        assert "/deployment-runs/" in body
 
     def test_recent_builds_table_lists_the_latest_batch(self, dashboard_client, app):
         with app.app_context():

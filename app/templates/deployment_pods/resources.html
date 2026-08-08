@@ -1,0 +1,93 @@
+{% extends "base.html" %} {% block title %}{{ kind_config.label }}: {{ server.name }} - Hamilton{% endblock %} {% block
+content %}
+<span id="deployment-pods-list-page" data-server-id="{{ server.id }}" class="hidden"></span>
+{% set active_kind = kind %}
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold">{{ kind_config.label }}: {{ server.name }}</h1>
+  <a href="{{ url_for('deployment_pods.index') }}" class="btn btn-sm">Back to Servers</a>
+</div>
+{% include "deployment_pods/_nav.html" %}
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    {% if kind_config.namespaced %}
+    <form method="get" class="flex flex-wrap items-end gap-2">
+      <div>
+        <label class="label text-sm">Namespace</label>
+        <input
+          type="text"
+          name="namespace"
+          value="{{ namespace }}"
+          placeholder="all namespaces"
+          class="input input-bordered input-sm"
+        />
+      </div>
+      <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+    </form>
+    {% endif %}
+
+    {% if error %}
+    <div class="alert alert-error {{ 'mt-4' if kind_config.namespaced else '' }} text-sm">{{ error }}</div>
+    {% elif not resources %}
+    <p class="{{ 'mt-4' if kind_config.namespaced else '' }} text-sm text-base-content/60">
+      No {{ kind_config.label.lower() }} found{{ ' in namespace "' ~ namespace ~ '"' if namespace }}.
+    </p>
+    {% else %}
+    <div class="{{ 'mt-4' if kind_config.namespaced else '' }} overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            {% if kind_config.namespaced %}
+            <th>Namespace</th>
+            {% endif %}
+            <th>Summary</th>
+            <th>Created</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for resource in resources %}
+          <tr>
+            <td>{{ resource.name }}</td>
+            {% if kind_config.namespaced %}
+            <td>{{ resource.namespace }}</td>
+            {% endif %}
+            <td class="text-xs text-base-content/60">{{ resource.summary }}</td>
+            <td class="text-xs text-base-content/60">{{ resource.created_at or "—" }}</td>
+            <td>
+              <button
+                type="button"
+                class="resource-describe-btn btn btn-xs"
+                data-kind="{{ kind }}"
+                data-name="{{ resource.name }}"
+                data-namespace="{{ resource.namespace or '' }}"
+              >
+                Describe
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<dialog id="resource-describe-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-3xl">
+    <h3 class="text-lg font-bold">Describe: <span id="resource-describe-title"></span></h3>
+    <pre
+      id="resource-describe-content"
+      class="mt-3 max-h-[28rem] overflow-auto rounded bg-base-300 p-3 text-xs whitespace-pre-wrap"
+    ></pre>
+    <div class="modal-action">
+      <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Close</button>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<script src="{{ url_for('static', filename='js/deployment_pods.js') }}"></script>
+{% endblock %}

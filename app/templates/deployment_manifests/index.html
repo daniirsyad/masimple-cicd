@@ -1,0 +1,463 @@
+{% extends "base.html" %} {% block title %}Deployment Manifests -
+Hamilton{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/codemirror.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/material-darker.css') }}" />
+{% endblock %}
+{% block content %}
+<span id="deployment-manifests-page" data-csrf="{{ csrf_token() }}" class="hidden"></span>
+{# Same rationale as builders/index.html's group-name-suggestions-data block:
+   tojson's escaping targets <script> content, not a quoted attribute, so
+   this can't safely be a data-* attribute. #}
+<script type="application/json" id="group-name-suggestions-data">
+  {{ group_name_suggestions | tojson }}
+</script>
+<script type="application/json" id="builder-successful-builds-data">
+  {{ builder_successful_builds | tojson }}
+</script>
+{% for manifest in manifests %}
+<script type="application/json" id="existing-bindings-{{ manifest.id }}">
+  {{ manifest_bindings.get(manifest.id|string, []) | tojson }}
+</script>
+{% endfor %}
+
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold">Deployment Manifests</h1>
+  <button
+    type="button"
+    class="btn btn-primary btn-sm"
+    onclick="document.getElementById('create-manifest-modal').showModal()"
+  >
+    New Manifest
+  </button>
+</div>
+
+{# A binding row's builder <option>s never depend on which manifest is being
+   edited, so they're rendered once here and cloned by JS per row — see
+   deployment_manifests.js's syncBindingRows(). #}
+<template id="binding-row-template">
+  <div class="binding-row flex min-w-0 items-center gap-2" data-key="">
+    <input type="hidden" name="binding_key" class="binding-key-input" value="" />
+    <span class="binding-key-label w-40 shrink-0 truncate font-mono text-xs"></span>
+    <select name="binding_builder_id" class="binding-builder-select select select-bordered select-sm min-w-0 flex-1">
+      <option value="">— Select builder —</option>
+      {% for builder in builders %}
+      <option value="{{ builder.id }}">{{ builder.name }}</option>
+      {% endfor %}
+    </select>
+    <select name="binding_pinned_build_id" class="binding-pinned-select select select-bordered select-sm min-w-0 flex-1">
+      <option value="">Latest successful build</option>
+    </select>
+  </div>
+</template>
+
+{% macro manifest_row(manifest, show_deploy_button=True, draggable=False) %}
+{% set live_ids = manifest_live_servers.get(manifest.id|string, []) %}
+{% set can_deploy = live_ids|length < manifest.target_servers|length %}
+{% set can_stop = live_ids|length > 0 %}
+{% set has_update = manifest_updates.get(manifest.id|string, [])|length > 0 %}
+<tr
+  class="manifest-row"
+  data-manifest-id="{{ manifest.id }}"
+  data-manifest-name="{{ manifest.name }}"
+>
+  {% if draggable %}
+  <td class="w-6">
+    <span class="drag-handle cursor-move text-base-content/40" title="Drag to reorder">⠿</span>
+  </td>
+  {% endif %}
+  <td>{{ manifest.name }}</td>
+  <td>
+    {% if manifest.target_servers %}
+    {% for server in manifest.target_servers %}
+    <span class="badge badge-ghost badge-sm">{{ server.name }}</span>
+    {% endfor %}
+    {% else %}
+    <span class="text-xs text-base-content/60">No target servers</span>
+    {% endif %}
+  </td>
+  <td>
+    {% if manifest.version_bindings.count() %}
+    {% for binding in manifest.version_bindings %}
+    <span class="badge badge-ghost badge-sm">{{ binding.placeholder_key }} → {{ binding.builder.name }}</span>
+    {% endfor %}
+    {% else %}
+    <span class="text-xs text-base-content/60">No version bindings</span>
+    {% endif %}
+  </td>
+  <td>
+    {% if manifest.allowed_users %}
+    {% for user in manifest.allowed_users %}
+    <span class="badge badge-ghost badge-sm">{{ user.full_name or user.username }}</span>
+    {% endfor %}
+    {% else %}
+    <span class="text-xs text-base-content/60">Anyone with permission</span>
+    {% endif %}
+  </td>
+  <td class="flex flex-wrap gap-2">
+    {% if show_deploy_button and can_deploy %}
+    <button
+      type="button"
+      class="deploy-one-btn btn btn-sm btn-primary"
+      data-manifest-id="{{ manifest.id }}"
+      data-manifest-name="{{ manifest.name }}"
+    >
+      Deploy
+    </button>
+    {% endif %}
+    {% if has_update %}
+    <button
+      type="button"
+      class="update-one-btn btn btn-sm btn-info"
+      data-manifest-id="{{ manifest.id }}"
+      data-manifest-name="{{ manifest.name }}"
+    >
+      Update
+    </button>
+    {% endif %}
+    {% if can_stop %}
+    <button
+      type="button"
+      class="restart-one-btn btn btn-sm"
+      data-manifest-id="{{ manifest.id }}"
+      data-manifest-name="{{ manifest.name }}"
+    >
+      Restart
+    </button>
+    <button
+      type="button"
+      class="stop-one-btn btn btn-sm btn-warning btn-outline"
+      data-manifest-id="{{ manifest.id }}"
+      data-manifest-name="{{ manifest.name }}"
+    >
+      Stop
+    </button>
+    {% endif %}
+    <button
+      type="button"
+      class="btn btn-sm"
+      onclick="document.getElementById('edit-manifest-modal-{{ manifest.id }}').showModal()"
+    >
+      Edit
+    </button>
+    <button
+      type="button"
+      class="btn btn-sm btn-error"
+      onclick="document.getElementById('delete-manifest-modal-{{ manifest.id }}').showModal()"
+    >
+      Delete
+    </button>
+  </td>
+</tr>
+{% endmacro %}
+
+{% for group in groups %}
+<div class="card mt-4 bg-base-100 shadow-sm manifest-group" data-group-name="{{ group.name }}">
+  <div class="card-body p-4">
+    <div class="flex items-center justify-between">
+      <h2 class="card-title text-base">
+        {{ group.name }}
+        <span class="badge badge-ghost badge-sm">{{ group.manifests|length }} manifest{{ '' if group.manifests|length == 1 else 's' }}</span>
+      </h2>
+      <div class="flex flex-wrap gap-2">
+        {% if group.can_deploy %}
+        <button type="button" class="deploy-group-btn btn btn-primary btn-sm">Deploy Group</button>
+        {% endif %}
+        {% if group.has_update %}
+        <button type="button" class="update-group-btn btn btn-info btn-sm">Update Group</button>
+        {% endif %}
+        {% if group.can_restart %}
+        <button type="button" class="restart-group-btn btn btn-sm">Restart Group</button>
+        {% endif %}
+        {% if group.can_stop %}
+        <button type="button" class="stop-group-btn btn btn-warning btn-outline btn-sm">Stop Group</button>
+        {% endif %}
+      </div>
+    </div>
+    <p class="mt-1 text-xs text-base-content/60">
+      Drag <span class="drag-handle">⠿</span> to set deploy order — a group deploys/updates top-to-bottom and
+      stops/restarts bottom-to-top.
+    </p>
+    <div class="mt-2 overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th></th>
+            <th>Name</th>
+            <th>Target Servers</th>
+            <th>Version Bindings</th>
+            <th>Access</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody class="manifest-group-body" data-reorder-url="{{ url_for('deployment_manifests.reorder_manifests') }}">
+          {% for manifest in group.manifests %} {{ manifest_row(manifest, show_deploy_button=False, draggable=True) }} {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+{% if ungrouped %}
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">
+      Ungrouped
+      <span class="badge badge-ghost badge-sm">{{ ungrouped|length }} manifest{{ '' if ungrouped|length == 1 else 's' }}</span>
+    </h2>
+    <p class="text-xs text-base-content/60">Not assigned to a group — deploy these one at a time.</p>
+    <div class="mt-2 overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Target Servers</th>
+            <th>Version Bindings</th>
+            <th>Access</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for manifest in ungrouped %} {{ manifest_row(manifest) }} {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if not groups and not ungrouped %}
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">No manifests created yet.</div>
+</div>
+{% endif %}
+
+{% macro manifest_form_fields(form, manifest_id=none) %}
+<div>
+  {{ form.name.label(class="label text-sm") }}
+  {{ form.name(class="input input-bordered input-sm w-full") }}
+  {% for error in form.name.errors %}
+  <p class="text-error text-sm">{{ error }}</p>
+  {% endfor %}
+</div>
+
+<div>
+  {{ form.yaml_content.label(class="label text-sm") }}
+  <div class="yaml-editor-wrapper overflow-hidden rounded-lg border border-base-300">
+    {{ form.yaml_content(class="yaml-content-input textarea textarea-bordered textarea-sm w-full font-mono", rows="12") }}
+  </div>
+  {% for error in form.yaml_content.errors %}
+  <p class="text-error text-sm">{{ error }}</p>
+  {% endfor %}
+  <p class="mt-1 text-xs text-base-content/60">
+    Use <code>{{ '{{SYS:VERSION}}' }}</code> or <code>{{ '{{SYS:VERSION:key}}' }}</code> for each image tag that
+    should resolve against a Builder's latest (or a pinned) successful build.
+  </p>
+</div>
+
+<div class="relative">
+  {{ form.group_name.label(class="label text-sm") }}
+  {{ form.group_name(class="group-name-input input input-bordered input-sm w-full", autocomplete="off", placeholder="ungrouped") }}
+  <ul class="group-name-dropdown menu absolute z-20 mt-1 hidden max-h-48 w-full flex-nowrap overflow-y-auto rounded-box bg-base-100 p-1 shadow-lg"></ul>
+  {% for error in form.group_name.errors %}
+  <p class="text-error text-sm">{{ error }}</p>
+  {% endfor %}
+</div>
+
+<div>
+  {{ form.server_ids.label(class="label text-sm") }}
+  <div class="grid grid-cols-2 gap-2">
+    {% for subfield in form.server_ids %}
+    <label class="flex items-center gap-2 text-sm">
+      {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+    </label>
+    {% endfor %}
+  </div>
+  {% for error in form.server_ids.errors %}
+  <p class="text-error text-sm">{{ error }}</p>
+  {% endfor %}
+</div>
+
+<div>
+  {{ form.allowed_user_ids.label(class="label text-sm") }}
+  <div class="grid grid-cols-2 gap-2">
+    {% for subfield in form.allowed_user_ids %}
+    <label class="flex items-center gap-2 text-sm">
+      {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+    </label>
+    {% endfor %}
+  </div>
+  {% for error in form.allowed_user_ids.errors %}
+  <p class="text-error text-sm">{{ error }}</p>
+  {% endfor %}
+</div>
+
+<div>
+  <div class="flex items-center justify-between">
+    <span class="label text-sm">Version Bindings</span>
+    <button type="button" class="scan-placeholders-btn btn btn-sm" data-yaml-input-id="{{ form.yaml_content.id }}">
+      Scan YAML for placeholders
+    </button>
+  </div>
+  <div
+    class="bindings-rows flex flex-col gap-2"
+    id="bindings-rows-{{ manifest_id or 'create' }}"
+    data-existing-bindings-id="{{ 'existing-bindings-' ~ manifest_id if manifest_id else '' }}"
+  ></div>
+  <p class="mt-1 text-xs text-base-content/60">
+    One row per placeholder found in the YAML above — pick which Builder each resolves against, and optionally
+    pin a specific past build instead of "latest successful".
+  </p>
+</div>
+{% endmacro %}
+
+<dialog id="create-manifest-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-2xl">
+    <h3 class="text-lg font-bold">New Manifest</h3>
+    <form
+      method="post"
+      action="{{ url_for('deployment_manifests.create_manifest') }}"
+      novalidate
+      class="deployment-manifest-form mt-4 flex flex-col gap-3"
+    >
+      {{ create_form.hidden_tag() }}
+      {{ manifest_form_fields(create_form) }}
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        {{ create_form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+{% for manifest in manifests %}
+<dialog id="edit-manifest-modal-{{ manifest.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-2xl">
+    <h3 class="text-lg font-bold">Edit Manifest: {{ manifest.name }}</h3>
+    {% set form = edit_forms[manifest.id] %}
+    <form
+      method="post"
+      action="{{ url_for('deployment_manifests.edit_manifest', manifest_id=manifest.id) }}"
+      novalidate
+      class="deployment-manifest-form mt-4 flex flex-col gap-3"
+    >
+      {{ form.hidden_tag() }}
+      {{ manifest_form_fields(form, manifest_id=manifest.id) }}
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        {{ form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<dialog id="delete-manifest-modal-{{ manifest.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-sm">
+    <h3 class="text-lg font-bold">Delete Manifest</h3>
+    <p class="py-4 text-sm">
+      Are you sure you want to delete "{{ manifest.name }}"? Manifests still deployed somewhere (or with a
+      deploy/stop currently in progress) can't be deleted — stop it first.
+    </p>
+    <div class="modal-action">
+      <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+      <form method="post" action="{{ url_for('deployment_manifests.delete_manifest', manifest_id=manifest.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+        <button type="submit" class="btn btn-sm btn-error">Delete</button>
+      </form>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{% endfor %}
+
+<dialog id="deploy-trigger-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">Deploy Selected</h3>
+    <div id="deploy-trigger-content" class="mt-4 flex flex-col gap-3 text-sm">
+      <span class="text-base-content/60">Resolving versions...</span>
+    </div>
+    <form method="post" action="{{ url_for('deployment_manifests.deploy') }}" id="deploy-trigger-form" class="mt-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+      <div id="deploy-trigger-manifest-ids"></div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        <button type="submit" id="deploy-trigger-submit" class="btn btn-primary btn-sm" disabled>Deploy</button>
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<dialog id="stop-trigger-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">Stop Selected</h3>
+    <p class="mt-1 text-xs text-base-content/60">
+      A group stop tears down bottom-to-top — the reverse of its configured deploy order.
+    </p>
+    <div id="stop-trigger-content" class="mt-4 flex flex-col gap-3 text-sm">
+      <span class="text-base-content/60">Checking what's currently deployed...</span>
+    </div>
+    <form method="post" action="{{ url_for('deployment_manifests.stop') }}" id="stop-trigger-form" class="mt-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+      <div id="stop-trigger-manifest-ids"></div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        <button type="submit" id="stop-trigger-submit" class="btn btn-warning btn-sm" disabled>Stop</button>
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<dialog id="update-trigger-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">Update Selected</h3>
+    <p class="mt-1 text-xs text-base-content/60">
+      Re-deploys with whatever each manifest currently resolves to — same as Deploy, just triggered because a
+      newer version became available.
+    </p>
+    <div id="update-trigger-content" class="mt-4 flex flex-col gap-3 text-sm">
+      <span class="text-base-content/60">Resolving versions...</span>
+    </div>
+    <form method="post" action="{{ url_for('deployment_manifests.update') }}" id="update-trigger-form" class="mt-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+      <div id="update-trigger-manifest-ids"></div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        <button type="submit" id="update-trigger-submit" class="btn btn-info btn-sm" disabled>Update</button>
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<dialog id="restart-trigger-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">Restart Selected</h3>
+    <p class="mt-1 text-xs text-base-content/60">
+      Recycles the running workload(s) without changing the deployed image or config. A group restart goes
+      bottom-to-top, same order as Stop.
+    </p>
+    <div id="restart-trigger-content" class="mt-4 flex flex-col gap-3 text-sm">
+      <span class="text-base-content/60">Checking what's currently deployed...</span>
+    </div>
+    <form method="post" action="{{ url_for('deployment_manifests.restart') }}" id="restart-trigger-form" class="mt-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+      <div id="restart-trigger-manifest-ids"></div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        <button type="submit" id="restart-trigger-submit" class="btn btn-sm" disabled>Restart</button>
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<script src="{{ url_for('static', filename='vendor/codemirror/codemirror.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/yaml.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/sortablejs/Sortable.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/deployment_manifests.js') }}"></script>
+{% endblock %}

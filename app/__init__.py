@@ -83,7 +83,13 @@ def create_app(config_name=None):
     from app.blueprints.images import images_bp
     from app.blueprints.documentation import documentation_bp
     from app.blueprints.system_config import system_config_bp
+    from app.blueprints.deployment_servers import deployment_servers_bp
+    from app.blueprints.deployment_manifests import deployment_manifests_bp
+    from app.blueprints.deployment_runs import deployment_runs_bp
+    from app.blueprints.deployment_pods import deployment_pods_bp
     from app.services.build.worker import start_worker
+    from app.services.deployment.worker import start_worker as start_deployment_worker
+    from app.services.deployment.worker import start_status_poller as start_deployment_status_poller
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
@@ -100,7 +106,13 @@ def create_app(config_name=None):
     app.register_blueprint(images_bp, url_prefix="/images")
     app.register_blueprint(documentation_bp, url_prefix="/documentation")
     app.register_blueprint(system_config_bp, url_prefix="/config")
+    app.register_blueprint(deployment_servers_bp, url_prefix="/deployment-servers")
+    app.register_blueprint(deployment_manifests_bp, url_prefix="/deployment-manifests")
+    app.register_blueprint(deployment_runs_bp, url_prefix="/deployment-runs")
+    app.register_blueprint(deployment_pods_bp, url_prefix="/deployment-pods")
 
     start_worker(app)
+    start_deployment_worker(app)
+    start_deployment_status_poller(app)
 
     return app

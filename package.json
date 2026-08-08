@@ -7,6 +7,7 @@
     "watch:css": "tailwindcss -i ./app/static/src/input.css -o ./app/static/dist/output.css --watch"
   },
   "devDependencies": {
+    "codemirror": "^5.65.21",
     "daisyui": "^4.12.14",
     "sortablejs": "^1.15.7",
     "tailwindcss": "^3.4.13"

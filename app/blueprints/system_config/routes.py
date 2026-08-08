@@ -19,6 +19,7 @@ def index():
         config.session_timeout_minutes = form.session_timeout_minutes.data
         config.build_engine = form.build_engine.data
         config.hide_navbar_title_when_sidebar_open = form.hide_navbar_title_when_sidebar_open.data
+        config.deployment_status_check_interval_seconds = form.deployment_status_check_interval_seconds.data
         db.session.commit()
 
         log_activity(
@@ -29,7 +30,8 @@ def index():
                 f"Updated system configuration (timezone={config.timezone}, "
                 f"session_timeout_minutes={config.session_timeout_minutes}, "
                 f"build_engine={config.build_engine}, "
-                f"hide_navbar_title_when_sidebar_open={config.hide_navbar_title_when_sidebar_open})"
+                f"hide_navbar_title_when_sidebar_open={config.hide_navbar_title_when_sidebar_open}, "
+                f"deployment_status_check_interval_seconds={config.deployment_status_check_interval_seconds})"
             ),
         )
 

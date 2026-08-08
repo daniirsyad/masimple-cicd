@@ -61,6 +61,21 @@ Hamilton{% endblock %} {% block content %}
         </p>
       </div>
 
+      <div class="form-control">
+        <label class="label" for="{{ form.deployment_status_check_interval_seconds.id }}">
+          <span class="label-text">Deployment Live-Status Check Interval (seconds)</span>
+        </label>
+        {{ form.deployment_status_check_interval_seconds(class="input input-bordered input-sm w-full") }}
+        <p class="mt-1 text-xs text-base-content/60">
+          How often Hamilton re-checks whether each deployed manifest is still actually present on its target
+          server(s) — drives the "currently deployed" status shown on Deployment Manifests and gates the Stop
+          button. Lower values mean fresher status but more `kubectl get` calls against your clusters.
+        </p>
+        {% for error in form.deployment_status_check_interval_seconds.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
       <div>{{ form.submit(class="btn btn-primary btn-sm") }}</div>
     </form>
   </div>

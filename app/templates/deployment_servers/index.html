@@ -1,0 +1,217 @@
+{% extends "base.html" %} {% block title %}Deployment Servers -
+Hamilton{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/codemirror.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/material-darker.css') }}" />
+{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold">Deployment Servers</h1>
+  <button
+    type="button"
+    class="btn btn-primary btn-sm"
+    onclick="document.getElementById('create-server-modal').showModal()"
+  >
+    New Server
+  </button>
+</div>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Connection Type</th>
+            <th>Status</th>
+            <th>Last Checked</th>
+            <th>Access</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for server in servers %}
+          <tr>
+            <td>{{ server.name }}</td>
+            <td><span class="badge badge-ghost badge-sm">{{ server.connection_type }}</span></td>
+            <td>
+              <span
+                class="badge badge-sm {{
+                  'badge-success' if server.status == 'healthy'
+                  else 'badge-error' if server.status == 'unreachable'
+                  else 'badge-ghost'
+                }}"
+              >
+                {{ server.status }}
+              </span>
+            </td>
+            <td>{{ server.last_checked_at | localtime("%Y-%m-%d %H:%M") if server.last_checked_at else "—" }}</td>
+            <td>
+              {% if server.allowed_roles %}
+              {% for role in server.allowed_roles %}
+              <span class="badge badge-ghost badge-sm">{{ role.name }}</span>
+              {% endfor %}
+              {% else %}
+              <span class="text-xs text-base-content/60">Admins only</span>
+              {% endif %}
+            </td>
+            <td class="flex gap-2">
+              <form method="post" action="{{ url_for('deployment_servers.test_connection', server_id=server.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                <button type="submit" class="btn btn-sm">Test Connection</button>
+              </form>
+              {% if server.connection_type == 'kube' %}
+              <a href="{{ url_for('deployment_pods.list_pods', server_id=server.id) }}" class="btn btn-sm">Pods</a>
+              {% endif %}
+              <button
+                type="button"
+                class="btn btn-sm"
+                onclick="document.getElementById('edit-server-modal-{{ server.id }}').showModal()"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm btn-error"
+                onclick="document.getElementById('delete-server-modal-{{ server.id }}').showModal()"
+              >
+                Delete
+              </button>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="6" class="text-sm text-base-content/60">No deployment servers created yet.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% macro connection_fields(form) %}
+<div>
+  {{ form.connection_type.label(class="label text-sm") }}
+  {{ form.connection_type(class="connection-type-select select select-bordered select-sm w-full") }}
+</div>
+
+<div class="connection-fields-kube flex flex-col gap-3">
+  {{ form.kubeconfig.label(class="label text-sm") }}
+  <div class="yaml-editor-wrapper overflow-hidden rounded-lg border border-base-300">
+    {{ form.kubeconfig(class="yaml-content-input textarea textarea-bordered textarea-sm w-full font-mono", rows="6", placeholder="paste kubeconfig YAML — leave blank on edit to keep the stored one") }}
+  </div>
+  {% for error in form.kubeconfig.errors %}
+  <p class="text-error text-sm">{{ error }}</p>
+  {% endfor %}
+</div>
+
+<div class="connection-fields-api flex flex-col gap-3">
+  <div>
+    {{ form.api_url.label(class="label text-sm") }}
+    {{ form.api_url(class="input input-bordered input-sm w-full") }}
+    {% for error in form.api_url.errors %}
+    <p class="text-error text-sm">{{ error }}</p>
+    {% endfor %}
+  </div>
+  <div>
+    {{ form.api_token.label(class="label text-sm") }}
+    {{ form.api_token(class="input input-bordered input-sm w-full", placeholder="leave blank on edit to keep the stored token") }}
+    {% for error in form.api_token.errors %}
+    <p class="text-error text-sm">{{ error }}</p>
+    {% endfor %}
+  </div>
+</div>
+
+<div>
+  {{ form.allowed_role_ids.label(class="label text-sm") }}
+  <div class="grid grid-cols-2 gap-2">
+    {% for subfield in form.allowed_role_ids %}
+    <label class="flex items-center gap-2 text-sm">
+      {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+    </label>
+    {% endfor %}
+  </div>
+</div>
+{% endmacro %}
+
+<dialog id="create-server-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">New Deployment Server</h3>
+    <form
+      method="post"
+      action="{{ url_for('deployment_servers.create') }}"
+      novalidate
+      class="deployment-server-form mt-4 flex flex-col gap-3"
+    >
+      {{ create_form.hidden_tag() }}
+      <div>
+        {{ create_form.name.label(class="label text-sm") }}
+        {{ create_form.name(class="input input-bordered input-sm w-full") }}
+        {% for error in create_form.name.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+      {{ connection_fields(create_form) }}
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        {{ create_form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+{% for server in servers %}
+<dialog id="edit-server-modal-{{ server.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">Edit Server: {{ server.name }}</h3>
+    {% set form = edit_forms[server.id] %}
+    <form
+      method="post"
+      action="{{ url_for('deployment_servers.edit', server_id=server.id) }}"
+      novalidate
+      class="deployment-server-form mt-4 flex flex-col gap-3"
+    >
+      {{ form.hidden_tag() }}
+      <div>
+        {{ form.name.label(class="label text-sm") }}
+        {{ form.name(class="input input-bordered input-sm w-full") }}
+        {% for error in form.name.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+      {{ connection_fields(form) }}
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        {{ form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<dialog id="delete-server-modal-{{ server.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-sm">
+    <h3 class="text-lg font-bold">Delete Server</h3>
+    <p class="py-4 text-sm">
+      Are you sure you want to delete "{{ server.name }}"? Servers still targeted by a manifest, or with any
+      recorded deployment history, can't be deleted.
+    </p>
+    <div class="modal-action">
+      <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+      <form method="post" action="{{ url_for('deployment_servers.delete', server_id=server.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+        <button type="submit" class="btn btn-sm btn-error">Delete</button>
+      </form>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{% endfor %}
+
+<script src="{{ url_for('static', filename='vendor/codemirror/codemirror.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/yaml.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/deployment_servers.js') }}"></script>
+{% endblock %}

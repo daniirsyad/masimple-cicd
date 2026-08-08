@@ -1,0 +1,73 @@
+{% extends "base.html" %} {% block title %}Deployment Run -
+Hamilton{% endblock %} {% block content %}
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold">{{ run_display_name }}</h1>
+  <a href="{{ url_for('deployment_runs.index') }}" class="btn btn-sm">Back to Runs</a>
+</div>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <div class="flex flex-wrap items-center gap-2">
+      <span
+        class="badge badge-sm {{
+          'badge-success' if run.status == 'success'
+          else 'badge-error' if run.status in ('failed', 'partial_failure')
+          else 'badge-warning' if run.status in ('running', 'queued')
+          else 'badge-ghost'
+        }}"
+      >
+        {{ run.status }}
+      </span>
+      <span class="text-xs text-base-content/60">
+        Triggered by {{ run.triggerer.username if run.triggerer else "—" }} ·
+        {{ run.created_at | localtime("%Y-%m-%d %H:%M") }}
+      </span>
+    </div>
+  </div>
+</div>
+
+<div class="mt-4 flex flex-col gap-4">
+  {% for execution in executions %}
+  <div class="card bg-base-100 shadow-sm">
+    <div class="card-body p-4">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-sm font-semibold">
+            {{ execution.manifest.name if execution.manifest else "(deleted manifest)" }}
+          </span>
+          <span class="text-xs text-base-content/60">→ {{ execution.server.name }}</span>
+          {% if execution.status == 'running' %}
+          <span class="loading loading-spinner loading-xs text-warning"></span>
+          {% endif %}
+          <span
+            class="badge badge-sm {{
+              'badge-success' if execution.status == 'success'
+              else 'badge-error' if execution.status == 'failed'
+              else 'badge-ghost' if execution.status == 'skipped'
+              else 'badge-warning'
+            }}"
+          >
+            {{ execution.status }}
+          </span>
+          {% if execution.resolved_version_string %}
+          <code class="text-xs">{{ execution.resolved_version_string }}</code>
+          {% endif %}
+        </div>
+        <div class="text-xs text-base-content/60">
+          {{ execution.started_at | localtime("%Y-%m-%d %H:%M") if execution.started_at else "—" }} →
+          {{ execution.finished_at | localtime("%Y-%m-%d %H:%M") if execution.finished_at else "—" }}
+        </div>
+      </div>
+
+      {% if log_tails.get(execution.id) %}
+      <pre class="mt-2 h-40 min-h-20 resize-y overflow-auto rounded bg-base-300 p-2 text-xs whitespace-pre-wrap">{{ log_tails[execution.id] }}</pre>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div class="card bg-base-100 shadow-sm">
+    <div class="card-body p-4 text-sm text-base-content/60">No executions recorded for this run.</div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

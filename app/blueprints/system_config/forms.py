@@ -22,4 +22,8 @@ class SystemConfigForm(FlaskForm):
         "Build Engine", choices=BUILD_ENGINE_CHOICES, validators=[DataRequired()]
     )
     hide_navbar_title_when_sidebar_open = BooleanField("Hide duplicate app title")
+    deployment_status_check_interval_seconds = IntegerField(
+        "Deployment Live-Status Check Interval (seconds)",
+        validators=[DataRequired(), NumberRange(min=5, max=86400)],
+    )
     submit = SubmitField("Save Configuration")

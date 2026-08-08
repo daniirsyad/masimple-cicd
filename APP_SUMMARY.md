@@ -8,7 +8,7 @@ in this repo's own `AI_CONTEXT.md`/`SESSION_START.md`, not needed here.
 
 ## What it is
 
-Hamilton is an internal Flask web app with two halves:
+Hamilton is an internal Flask web app with three halves:
 
 1. A general-purpose **admin/RBAC foundation** — users, roles, granular
    permissions, a database-driven sidebar/navbar menu, activity logging, and
@@ -18,6 +18,13 @@ Hamilton is an internal Flask web app with two halves:
    versioned builds (single or batched), push images, and auto-generate
    changelog-style documentation for each successful build (with an AI
    assist).
+3. A **Deployment module** — register Kubernetes (or custom-agent) target
+   servers, define YAML manifests with placeholders that resolve against an
+   Image Builder Builder's latest (or a pinned) successful build, then
+   deploy/update/stop/restart them (individually or as an ordered group),
+   view deploy history, and browse live cluster state (pods + logs/describe,
+   namespaces, nodes, services, ingresses, PVs/PVCs) for any registered
+   Kubernetes server.
 
 It's a single-tenant internal tool (one deployment, multiple named users with
 different roles) — not a SaaS product with per-customer isolation.
@@ -31,14 +38,15 @@ different roles) — not a SaaS product with per-customer isolation.
 | Database | PostgreSQL, UUID primary keys everywhere |
 | Auth | Flask-Login (session-based) + Flask-WTF (CSRF) + Werkzeug password hashing |
 | Frontend | Jinja2 + Tailwind CSS 3 + daisyUI 4 — **no JS framework/SPA**; vanilla JS per page, vendored SortableJS for drag-and-drop |
-| Background work | Python `threading`/`queue` — a single in-process worker thread, no Celery/Redis |
-| Deployment | Docker (multi-stage: Node build for CSS, then Python/gunicorn), Docker Compose (`web` + `db`) |
+| Background work | Python `threading`/`queue` — independent in-process worker threads (one for builds, one for deploys, plus a separate deploy live-status poller thread), no Celery/Redis |
+| Deployment (of Hamilton itself) | Docker (multi-stage: Node build for CSS, then Python/gunicorn), Docker Compose (`web` + `db`) |
 | Git integration | GitPython, provider-abstracted (`GitProvider` → `GitHubProvider`) |
 | Registry integration | docker-py against Docker Hub, provider-abstracted (`RegistryProvider` → `DockerHubProvider`) |
 | Image builds | shells out to `docker buildx build` or a `kaniko-executor` binary, provider-abstracted (`BuildEngine`) |
+| Kubernetes integration | shells out to the `kubectl` CLI (no `kubernetes` client library), provider-abstracted (`DeploymentProvider` → `KubernetesProvider`/`CustomAPIProvider`) — `kubectl` must be installed wherever Hamilton itself runs |
 | AI description generation | provider-abstracted (`AIProvider`); Qwen implemented, Claude/Gemini/Custom API are stubs |
-| Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var |
-| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), ~290 tests |
+| Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
+| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), ~425 tests |
 
 ## Architecture conventions
 
@@ -47,7 +55,10 @@ different roles) — not a SaaS product with per-customer isolation.
 - **One blueprint per feature**, package name `<name>_bp`, each with its own
   `routes.py` + `forms.py` (Flask-WTF): `auth`, `main`, `users`, `roles`,
   `permissions`, `menus`, `logs`, `ai_settings`, `git_sources`, `registries`,
-  `versions`, `builders`, `images`, `documentation`, `system_config`.
+  `versions`, `builders`, `images`, `documentation`, `system_config`,
+  `deployment_servers`, `deployment_manifests`, `deployment_runs`,
+  `deployment_pods` (this last one has no `forms.py` — read-only pages, no
+  create/edit forms).
 - **One model file per table** under `app/models/`.
 - All model PKs are `UUID` (`sqlalchemy.dialects.postgresql.UUID`,
   `default=uuid.uuid4`) — never integer autoincrement.
@@ -67,6 +78,14 @@ different roles) — not a SaaS product with per-customer isolation.
 - Only one build runs system-wide at a time (`app/services/build/worker.py`,
   a background thread pulling from a queue) — a "batch" just means several
   jobs queued back-to-back under one shared version string, not parallel.
+  The Deployment module has its own **independent** single-flight worker
+  (`app/services/deployment/worker.py`) with its own DB-level partial
+  unique index — a build and a deploy can run concurrently, but only one
+  deploy runs system-wide at a time, same as builds. A third, separate
+  background thread (`start_status_poller`) periodically re-checks whether
+  each deployed manifest is still actually live on its target server(s), at
+  an admin-configurable interval (`SystemConfig.
+  deployment_status_check_interval_seconds`).
 - Templates: Tailwind/daisyUI utility classes; a handful of pages have their
   own small vanilla-JS file (`app/static/js/<page>.js`) for
   cascading dropdowns, searchable-history comboboxes, live-status polling,
@@ -119,16 +138,50 @@ in exception-swallowing code paths).
   placeholders, plain regex substitution not Jinja).
 - `SystemConfig` — a **singleton** row of app-wide settings: timezone
   (applied to every displayed timestamp via a `localtime` Jinja filter),
-  session timeout minutes, build engine choice (`docker`/`kaniko`), and a UI
-  toggle (`hide_navbar_title_when_sidebar_open`).
+  session timeout minutes, build engine choice (`docker`/`kaniko`), a UI
+  toggle (`hide_navbar_title_when_sidebar_open`), and the Deployment
+  module's live-status poll interval.
+
+**Deployment module:**
+- `DeploymentServer` — a registered target: `connection_type` (`kube` or
+  `api`), encrypted credentials (a kubeconfig blob, or `{api_url, token}`
+  JSON for a custom agent), health `status` from a manual "Test Connection"
+  check, `allowed_roles` (many-to-many `Role` — empty means locked to
+  `deployment_server.manage` users only).
+- `DeploymentManifest` — a YAML template with `{{SYS:VERSION}}` /
+  `{{SYS:VERSION:key}}` placeholders, one or more `target_servers`
+  (many-to-many `DeploymentServer`), an optional `group_name` (manifests
+  sharing one deploy/stop/restart together, ordered via drag-and-drop —
+  `order` int, ascending for deploy/update, descending for stop/restart),
+  and `allowed_users` (many-to-many `User` — **empty means unrestricted**,
+  the opposite default from `DeploymentServer.allowed_roles`, chosen
+  deliberately so shipping this didn't silently lock every
+  already-existing manifest).
+- `DeploymentManifestVersionBinding` — one row per placeholder key: which
+  `Builder` it resolves against, optionally pinned to one specific past
+  `ImageBuild` instead of "latest successful" (the rollback mechanism —
+  there's no separate rollback action, just re-deploying with a pin set).
+- `DeploymentRun` — one Deploy/Update/Stop/Restart click, `action`
+  (`deploy`/`stop`/`restart` — Update reuses `"deploy"`, it's the same
+  operation under a different permission/button), aggregate `status`.
+- `DeploymentExecution` — one manifest × one server inside a
+  `DeploymentRun`: resolved version string, rendered YAML (audit snapshot,
+  never mutated after the fact), status, log, live-status poll result
+  (`live_status`/`live_checked_at`), and `source_execution_id`
+  (self-referential — a stop/restart execution points at the deploy
+  execution it's acting on, so it acts on exactly what was applied rather
+  than re-resolving). `manifest_id` is **nullable**: deleting a manifest
+  nulls it out on historical executions rather than blocking the delete or
+  cascading, so `/deployment-runs` history survives.
 
 ## Feature list (by page)
 
 - **`/` Dashboard** — active users/roles counts; permission-gated Image
-  Builder stat cards (Builders/Versions/Images Built/Documentation Pending,
-  each only shown if the viewer has that resource's view permission); a
-  build-engine busy/idle indicator; a recent-errors count; a recent-builds
-  table; recent activity log.
+  Builder stat cards (Builders/Versions/Images Built/Documentation Pending)
+  and Deployment stat cards (Deployment Servers/Manifests/Runs), each only
+  shown if the viewer has that resource's view permission; a build-engine
+  and a deploy-engine busy/idle indicator; a recent-errors count; a
+  recent-builds table; recent activity log.
 - **`/users`, `/roles`, `/permissions`** — standard RBAC CRUD. The Roles
   page's permission picker groups the ~26 permissions under friendly
   resource headings (Users, Builders, AI Providers, …) with human
@@ -173,7 +226,36 @@ in exception-swallowing code paths).
   prompt, lets you regenerate or edit before saving — never saves raw AI
   output unseen), and a linked-batches picker.
 - **`/config`** — System Configuration (`system.manage`): timezone, session
-  timeout, build engine, duplicate-title toggle.
+  timeout, build engine, duplicate-title toggle, deploy live-status poll
+  interval.
+- **`/deployment-servers`** — register/edit target servers (kubeconfig or
+  custom-agent credentials, never re-shown after save), per-server "Test
+  Connection", `allowed_roles` picker, link to that server's Pods page (kube
+  type only).
+- **`/deployment-manifests`** — manifest CRUD grouped by `group_name`
+  (drag-and-drop reorder within a group via SortableJS); per-manifest
+  version-binding picker (scan YAML for placeholders, pick a Builder +
+  optional pin per placeholder); `allowed_users` picker. Per-row/group
+  action buttons are **conditional, not always all shown**: Deploy hides
+  once live everywhere, Stop/Restart show once live anywhere, Update shows
+  only when a newer resolvable version exists and it's currently deployed
+  — computed server-side from live deploy-run history, not client state.
+  Each action (Deploy/Update/Stop/Restart) has its own confirmation modal
+  (fetched preview, no page navigation) and its own permission
+  (`deployment.deploy`/`update`/`stop`/`restart`).
+- **`/deployment-runs`** — paginated run history (filter by status/
+  manifest/server/date range), live "Deploy Status" widget (polls every
+  3s) plus a user-configurable full-page auto-refresh (Off/5s/10s/30s/60s,
+  `localStorage`-persisted). A standalone run's title shows the manifest
+  name (`"<name> (standalone)"`), not a generic label. Run detail page
+  shows per-execution logs.
+- **`/deployment-pods`** — pick a registered Kubernetes server, then browse
+  **read-only** live cluster state: Pods (list + Logs/Describe as modals,
+  auto-scrolled to the bottom), Namespaces, Nodes, Services, Ingress,
+  PersistentVolumes, PersistentVolumeClaims (list + Describe modal). No
+  delete/edit actions anywhere in this section — deliberate scope choice.
+  `"api"`-type servers aren't supported here (no pod/namespace concept for
+  a generic agent endpoint) and 404 if tried.
 
 ## Conventions a new feature should follow
 
@@ -219,6 +301,22 @@ in exception-swallowing code paths).
 - Claude/Gemini/Custom-API `AIProvider` implementations and
   GHCR/Harbor/ECR `RegistryProvider` implementations are unimplemented stubs
   — only Qwen and Docker Hub actually work today.
-- Everything runs through a single in-process worker thread — there is no
-  distributed/multi-instance deployment story; a feature that needs
-  horizontal scaling would need to introduce a real broker first.
+- Everything runs through a single in-process worker thread per queue (one
+  each for builds and deploys) — there is no distributed/multi-instance
+  deployment story; a feature that needs horizontal scaling would need to
+  introduce a real broker first.
+- `kubectl` must be installed on whatever host/container Hamilton itself
+  runs on (not the end user's machine) — deploys/updates/stops/restarts/pod
+  browsing all shell out to it. No `kubernetes` client library is used.
+- The `"api"` `DeploymentServer` connection type (a custom agent instead of
+  raw Kubernetes) has an **assumed, unverified** HTTP contract (GET to
+  check reachability, POST/DELETE the raw YAML to apply/tear down) — never
+  matched against a real agent implementation. It also doesn't support
+  restart, live-status polling, or any of the `/deployment-pods` browsing
+  (all raise `NotImplementedError` / 404, by design, not by omission).
+- `kubectl rollout restart -f -` (the Restart action) only supports
+  Deployment/DaemonSet/StatefulSet kinds — a manifest that also declares
+  Services/ConfigMaps/etc. alongside a restartable workload will show
+  per-resource errors in the log for those other kinds even when the
+  actual workload restart succeeds. Not filtered by kind (this module never
+  parses YAML anywhere, by design — regex-only placeholder substitution).

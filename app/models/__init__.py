@@ -18,6 +18,11 @@ from app.models.version_link import VersionLink
 from app.models.ai_provider_config import AIProviderConfig
 from app.models.prompt_template import PromptTemplate
 from app.models.system_config import SystemConfig
+from app.models.deployment_server import DeploymentServer
+from app.models.deployment_manifest import DeploymentManifest
+from app.models.deployment_manifest_version_binding import DeploymentManifestVersionBinding
+from app.models.deployment_run import DeploymentRun
+from app.models.deployment_execution import DeploymentExecution
 
 __all__ = [
     "User",
@@ -41,4 +46,9 @@ __all__ = [
     "AIProviderConfig",
     "PromptTemplate",
     "SystemConfig",
+    "DeploymentServer",
+    "DeploymentManifest",
+    "DeploymentManifestVersionBinding",
+    "DeploymentRun",
+    "DeploymentExecution",
 ]
