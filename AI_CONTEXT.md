@@ -33,6 +33,16 @@ supersede anything below that it explicitly says was reworked.
    same way (session-expiry fix, per-Builder role access, the searchable
    history-dropdown pattern, documentation filters, the dashboard overhaul,
    dark mode, and the rest of that session's UI polish pass).
+6. **Part 6** — the Deployment module's full arc: built from scratch
+   (`DeploymentServer`/`DeploymentManifest`/`DeploymentRun`/
+   `DeploymentExecution`), then extended over two more sessions (Stop,
+   live-status polling, the Pods/Namespaces/Secrets/ConfigMaps/Workloads
+   K8s browser under `/deployment-pods`, Update/Restart, per-manifest user
+   access, and finally merging `/deployment-pods` into `/deployment-servers`).
+7. **Part 7** — a cross-cutting feature from the same session as the end of
+   Part 6: every error notification across the app (flash messages, inline
+   banners, JSON responses) now links directly to its `ErrorLog` row, which
+   is itself independently shareable.
 
 ---
 
@@ -1417,9 +1427,143 @@ New migrations across this arc: `dcedb8fa84b8` (initial module),
 `e57baba6abe0` (manifest order / run action / execution live-status columns
 / config interval), `2864992eaa32` (`deployment_executions.manifest_id`
 nullable), `869fda148361` (`deployment_manifest_users`). Test count grew
-from the pre-Deployment-module baseline to 425, all passing, all real
-Postgres (no sqlite/mocks) as everywhere else in this app.
+from the pre-Deployment-module baseline to 425 by the end of this arc, all
+passing, all real Postgres (no sqlite/mocks) as everywhere else in this app.
 
-Everything in this Part was left **uncommitted** at the end of each
-session, per this project's established pattern — the user batches and
-pushes commits themselves, on their own terms.
+**A later session (2026-08-10) extended `/deployment-pods` well past its
+original read-only-browsing scope**, continuing directly on top of the
+work above:
+
+9. **Namespace, Secret, and ConfigMap management** — three new tabs, each
+   full create/edit/delete, added one at a time as separate user requests
+   rather than planned together up front. All reuse `kubectl apply`/`delete`
+   under the hood (JSON-as-YAML piped to `kubectl apply -f -`, since JSON is
+   valid YAML — avoided adding PyYAML as a dependency, same "don't
+   reimplement the protocol" precedent as everything else in this module).
+   Secrets got the most design care: values are write-only end to end
+   (never decoded, re-displayed, or logged — edit pre-fills existing key
+   *names* only, blank value = keep), support both generic `Opaque` and
+   `kubernetes.io/dockerconfigjson` image-pull secrets, and gained a
+   file-import/paste-as-text bulk data-entry mode (parses `.env`-style
+   `KEY=VALUE` lines, or imports a whole file as one blob keyed by its
+   filename) after an explicit "make the input UI friendlier" ask.
+   ConfigMaps reused the identical UI pattern but simpler — since their data
+   isn't sensitive, edit just pre-fills real current values directly, no
+   blank-to-keep dance needed. Two real bugs surfaced and got fixed during
+   this stretch: `row.keys` in Jinja silently resolved to a plain dict's
+   built-in `.keys()` method instead of the data (renamed the field to
+   `secret_keys`/`configmap_keys`), and the Namespaces/Secrets/ConfigMaps/
+   Workloads pages initially forgot to pass `resource_kinds` into their
+   templates, so the shared tab nav's Nodes/Services/Ingress/PVs/PVCs tabs
+   silently rendered empty on those four pages until caught and fixed with
+   a regression test guarding each page.
+10. **A "Workloads" tab, and a deliberate split of what "Restart" means.**
+    Asked to make `DeploymentManifest`'s existing Restart action use
+    `delete()`+`apply()` instead of `kubectl rollout restart -f -` (fixing
+    the long-standing gap where rollout restart only understood Deployment/
+    DaemonSet/StatefulSet and errored per-resource on anything else in a
+    manifest) — with the explicit tradeoff that this is now a real
+    teardown-then-recreate, not a zero-downtime rolling recycle. To keep a
+    *true* rolling restart available, a new read-only Workloads tab lists
+    raw Kubernetes `Deployment` objects with their own Restart button that
+    does call real `kubectl rollout restart deployment/<name>` — so the two
+    "Restart" actions now live at different levels on purpose: manifest-wide
+    hard recreate vs. single-Deployment zero-downtime rollout.
+11. **`/deployment-pods` merged into `/deployment-servers`.** The former's
+    own server-picker index page was recognized mid-session as pure
+    duplication of the latter's own server list — retired (the URL now just
+    redirects to `/deployment-servers`) in favor of a per-row link there.
+    First attempt (a CSS dropdown menu) silently failed because the
+    surrounding table's `overflow-x-auto` clipped the popup; fixed by
+    reusing this app's existing `<dialog>` modal pattern instead — then
+    simplified further, on request, to a single direct link straight into
+    Pods (the tab bar from there already reaches everything else).
+12. **Pod Logs/Describe modals gained live auto-refresh** — plain interval
+    polling (3s logs / 5s describe), not real streaming, matching this
+    app's only other precedent for "live" UI (the Deploy Status/Deployment
+    Runs widgets are both interval polling too). Defaults on when a modal
+    opens, has a Pause/Resume toggle, and always stops on close so nothing
+    keeps polling once nobody's looking.
+
+New migrations in this later session: **none** — every one of items 9–12
+was built against the existing schema. Test count grew from 425 to 503.
+See Part 7 for the same session's other major addition (direct Error Log
+links), which is not part of the Deployment module itself and touches
+several other blueprints too.
+
+Everything through item 8 was left uncommitted for a while, per this
+project's established pattern (the user batches and pushes on their own
+terms) — items 9–12, together with Part 7, were committed and pushed in
+the same batch that closed out this arc.
+
+---
+
+# Part 7: Direct, Shareable Links from Every Error Notification (2026-08-10)
+
+Same session as Part 6's items 9–12, but a distinct, cross-cutting feature
+rather than more Deployment-module scope — this one touches Registries,
+Git Sources, Documentation, and Logs too, not just `deployment_pods`.
+
+**The ask**: every place the app tells a user "...failed, see Error Logs
+for details" should instead link straight to the specific `ErrorLog` row,
+and that row should be independently shareable (e.g. paste a link in
+Slack). Planned via `EnterPlanMode` before writing code, including one
+explicit scoping question to the user: only the 3 places that already said
+"See Error Logs for details" (small), or all ~24 `log_error()` call sites
+app-wide regardless of what they currently show (much bigger)? The user
+picked the broad sweep.
+
+**Design, once scoped:**
+- **No schema change.** `ErrorLog.id` (already a UUID PK) is the shareable
+  identifier — no new "share token" column. New route:
+  `GET /logs/errors/<uuid:error_id>`, rendering the *same*
+  `logs/errors.html` template in a focused single-row mode (`logs=[entry]`,
+  no pagination/filtering at all) rather than trying to land the linked row
+  on "the right page" of the normal filtered list — simpler, and guarantees
+  the row's detail `<dialog>` actually exists in the DOM for the app's
+  existing `data-open-modal`/`modal-form.js` auto-open convention to find.
+- **One reusable helper, not three**, because `log_error()` already
+  returned the created row everywhere it's called (just previously
+  discarded by every caller): `error_detail_link(message, entry)` in
+  `app/utils/error_logger.py` returns a `markupsafe.Markup` string (message,
+  HTML-escaped, plus a real `<a>`). Because it's `Markup`, both `flash(...)`
+  and an inline-banner `error` template variable could adopt it with **zero
+  template changes** — Jinja/MarkupSafe already skip their own escaping for
+  anything that's already `Markup`, and both call sites were already just a
+  bare `{{ message }}`/`{{ error }}`. Only JSON responses consumed by JS
+  (rendered via `.textContent`, which can't hold a real anchor tag) needed
+  different treatment: a separate `error_log_url` field plus a small shared
+  `renderErrorWithLink()` JS helper that appends a real `<a target="_blank">`
+  after the text.
+- **Explicitly scoped out, and said so rather than silently skipping:**
+  background worker `log_error()` calls (no request/flash context to target
+  at all — those failures already surface through their own status UI, not
+  a notification; wiring *that* to its ErrorLog row would need a new FK
+  column and migration, a bigger separate follow-up if ever wanted), the
+  global unhandled-exception handler (logs and hands off to Flask's generic
+  500 page — no notification UI to attach a link to), and `builders`'
+  repo-info failure path (its JS never displayed the error at all, on
+  either the branch/Dockerfile-picker helper or the JSON route behind it —
+  nothing existing to enhance, same reasoning as the background workers).
+- **Share button** on the error-detail dialog reuses the existing
+  copy-to-clipboard mechanism from the traceback-copy button (generalized
+  its class from `.copy-traceback-btn` to `.copy-to-clipboard-btn`, no new
+  JS) against a hidden span holding the absolute
+  `url_for(..., _external=True)` link.
+
+A caught-and-reverted mistake along the way, worth remembering: running
+`seeds/seed_menu.py` (as part of Part 6's item 11 consolidation, to retire
+a stale "Deployment Pods" menu row) created 11 duplicate sidebar rows,
+twice, because that script matches existing rows by exact `label` +
+`parent_id` and this dev DB's real menu labels have since been hand-renamed
+away from what the script expects (its own "Builder" vs. the script's
+"Image Builder", etc.) — a pre-existing drift between the script and this
+one database, unrelated to the current task. Cleaned up by deleting the
+exact duplicate rows by UUID (twice) rather than editing the script's
+matching logic, which was explicitly left as a separate, un-fixed known
+issue — **do not run `seeds/seed_menu.py` against this dev DB again**
+without addressing that first (e.g. matching by `url` instead of `label`).
+
+This feature's new/changed tests are folded into the same overall count as
+Part 6's items 9–12 — 503 total by the end of this session, not tracked
+separately. No new migration.

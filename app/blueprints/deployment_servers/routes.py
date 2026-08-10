@@ -10,7 +10,7 @@ from app.models import DeploymentExecution, DeploymentServer, Role
 from app.services.deployment.helpers import API_CONNECTION_TYPE, KUBE_CONNECTION_TYPE, encode_api_credentials, provider_for_server
 from app.utils.crypto import encrypt
 from app.utils.decorators import permission_required
-from app.utils.error_logger import log_error
+from app.utils.error_logger import error_detail_link, log_error
 from app.utils.logger import log_activity
 
 CREATE_PREFIX = "create-server-"
@@ -200,16 +200,16 @@ def test_connection(server_id):
         flash(f"Connection to '{server.name}' succeeded.", "success")
     except Exception as exc:
         server.status = "unreachable"
-        log_error(
+        entry = log_error(
             source="deployment_servers.test_connection",
             exc=exc,
             description=f"Connection test failed for server '{server.name}': {exc}",
         )
         # The full error (kubectl output, connection details, etc.) can be
         # long — it's already captured in full by log_error above and
-        # visible on the Error Logs page; the flash banner just needs to
-        # tell the user something failed, not reproduce it.
-        flash(f"Connection to '{server.name}' failed. See Error Logs for details.", "error")
+        # linked directly from the flash below; the flash banner just needs
+        # to tell the user something failed, not reproduce it.
+        flash(error_detail_link(f"Connection to '{server.name}' failed.", entry), "error")
 
     server.last_checked_at = datetime.utcnow()
     db.session.commit()

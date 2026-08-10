@@ -292,11 +292,11 @@ def generate_description(batch_id):
         provider = get_ai_provider(provider_type)
         description = provider.generate_description(prompt)
     except Exception as exc:
-        log_error(
+        entry = log_error(
             source="documentation.generate_description",
             exc=exc,
             description=f"AI description generation failed (provider '{provider_type}'): {exc}",
         )
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": str(exc), "error_log_url": url_for("logs.error_detail", error_id=entry.id)}), 400
 
     return jsonify({"description": description, "provider": provider_type})

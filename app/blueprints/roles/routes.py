@@ -28,6 +28,10 @@ RESOURCE_LABELS = {
     "registry": "Registries",
     "documentation": "Documentation",
     "aiprovider": "AI Providers",
+    "deployment_namespace": "Deployment Namespaces",
+    "deployment_secret": "Deployment Secrets",
+    "deployment_configmap": "Deployment ConfigMaps",
+    "deployment_workload": "Deployment Workloads",
 }
 # Display order for the sections above — mirrors the app's own sidebar
 # grouping (core admin, then Image Builder) rather than alphabetical, since

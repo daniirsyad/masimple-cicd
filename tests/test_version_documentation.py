@@ -576,7 +576,8 @@ class TestGenerateDescriptionEndpoint:
 
         response = doc_client.post(f"/documentation/{batch_id}/generate", json={"prompt": "hello"})
         assert response.status_code == 400
-        assert "No Qwen API key configured" in response.get_json()["error"]
+        data = response.get_json()
+        assert "No Qwen API key configured" in data["error"]
 
         with app.app_context():
             from app.models import ErrorLog
@@ -584,6 +585,7 @@ class TestGenerateDescriptionEndpoint:
             error_log = ErrorLog.query.filter_by(source="documentation.generate_description").first()
             assert error_log is not None
             assert "No Qwen API key configured" in error_log.message
+            assert data["error_log_url"] == f"/logs/errors/{error_log.id}"
 
     def test_unknown_batch_404s(self, doc_client):
         response = doc_client.post(

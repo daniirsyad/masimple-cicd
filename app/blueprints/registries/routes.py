@@ -7,7 +7,7 @@ from app.models import Builder, RegistryTarget
 from app.services.registry.factory import get_registry_provider
 from app.utils.crypto import decrypt, encrypt
 from app.utils.decorators import permission_required
-from app.utils.error_logger import log_error
+from app.utils.error_logger import error_detail_link, log_error
 from app.utils.logger import log_activity
 
 CREATE_PREFIX = "create-registry-"
@@ -26,9 +26,11 @@ def _edit_prefix(target_id):
 
 
 def _validate_credentials(provider_type, username, token):
-    """Returns (ok, error_message). Unimplemented provider types are treated
-    as ok (nothing to validate yet), matching the AI provider settings page's
-    handling of not-yet-implemented providers.
+    """Returns (ok, error). Unimplemented provider types are treated as ok
+    (nothing to validate yet), matching the AI provider settings page's
+    handling of not-yet-implemented providers. On failure, `error` is
+    already a flash()-ready Markup value (message + a link to the ErrorLog
+    row this call just created) — see error_detail_link().
     """
     if provider_type not in IMPLEMENTED_PROVIDER_TYPES:
         return True, None
@@ -36,12 +38,12 @@ def _validate_credentials(provider_type, username, token):
         get_registry_provider(provider_type, username=username, password=token).validate_credentials()
         return True, None
     except Exception as exc:
-        log_error(
+        entry = log_error(
             source="registries.validate_credentials",
             exc=exc,
             description=f"Credential validation failed for provider '{provider_type}': {exc}",
         )
-        return False, str(exc)
+        return False, error_detail_link(f"Could not validate credentials: {exc}", entry)
 
 
 def _render_index(create_form=None, open_modal=None, invalid_edit=None):
@@ -91,7 +93,7 @@ def create():
 
         ok, error = _validate_credentials(form.provider_type.data, form.username.data, form.token.data)
         if not ok:
-            flash(f"Could not validate credentials: {error}", "error")
+            flash(error, "error")
             return _render_index(create_form=form, open_modal="create-registry-modal")
 
         target = RegistryTarget(
@@ -133,7 +135,7 @@ def edit(target_id):
         token_for_validation = form.token.data or decrypt(target.encrypted_token)
         ok, error = _validate_credentials(form.provider_type.data, form.username.data, token_for_validation)
         if not ok:
-            flash(f"Could not validate credentials: {error}", "error")
+            flash(error, "error")
             return _render_index(
                 open_modal=f"edit-registry-modal-{target_id}", invalid_edit=(target_id, form)
             )

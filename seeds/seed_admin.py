@@ -54,6 +54,10 @@ BASE_PERMISSIONS = [
     ("deployment.stop", "Stop a deployed manifest"),
     ("deployment.restart", "Restart a deployed manifest's workload(s)"),
     ("deployment_pod.view", "View pod status, logs, and describe output on deployment servers"),
+    ("deployment_namespace.manage", "Create, edit, and delete Kubernetes namespaces"),
+    ("deployment_secret.manage", "Create, edit, and delete Kubernetes secrets"),
+    ("deployment_configmap.manage", "Create, edit, and delete Kubernetes ConfigMaps"),
+    ("deployment_workload.restart", "Trigger a rolling restart of a Kubernetes Deployment's pods"),
 ]
 
 # Retired in favor of the four granular deployment.* permissions above (one

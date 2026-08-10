@@ -12,7 +12,7 @@ from app.models import Builder, GitSource, ImageBuild, Repository
 from app.services.git.helpers import provider_for_git_source
 from app.utils.crypto import encrypt
 from app.utils.decorators import permission_required
-from app.utils.error_logger import log_error
+from app.utils.error_logger import error_detail_link, log_error
 from app.utils.logger import log_activity
 
 CREATE_CONNECTION_PREFIX = "create-connection-"
@@ -37,12 +37,12 @@ def _list_repos_for(git_source):
     try:
         return _provider_for(git_source).list_repos(), None
     except Exception as exc:
-        log_error(
+        entry = log_error(
             source="git_sources.list_repos",
             exc=exc,
             description=f"Failed to list repositories for connection '{git_source.name}': {exc}",
         )
-        return [], str(exc)
+        return [], error_detail_link(str(exc), entry)
 
 
 def _parse_uuid(value):
@@ -223,12 +223,12 @@ def register_repo():
     except Exception as exc:
         repository.status = "error"
         db.session.commit()
-        log_error(
+        entry = log_error(
             source="git_sources.register_repo",
             exc=exc,
             description=f"Failed to register '{full_name}' under connection '{source.name}': {exc}",
         )
-        flash(f"Failed to register '{full_name}': {exc}", "error")
+        flash(error_detail_link(f"Failed to register '{full_name}': {exc}", entry), "error")
         return redirect(url_for("git_sources.index"))
 
     repository.status = "ready"
@@ -267,12 +267,12 @@ def resync_repo(repository_id):
     except Exception as exc:
         repository.status = "error"
         db.session.commit()
-        log_error(
+        entry = log_error(
             source="git_sources.resync_repo",
             exc=exc,
             description=f"Re-sync failed for '{repository.full_name}': {exc}",
         )
-        flash(f"Re-sync failed: {exc}", "error")
+        flash(error_detail_link(f"Re-sync failed: {exc}", entry), "error")
         return redirect(url_for("git_sources.index"))
 
     repository.status = "ready"

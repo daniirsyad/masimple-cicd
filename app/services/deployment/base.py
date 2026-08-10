@@ -59,11 +59,13 @@ class DeploymentProvider(ABC):
 
     @abstractmethod
     def restart(self, manifest_yaml):
-        """Restart whatever's currently running from `manifest_yaml` —
-        recycles the workload's pods without changing the applied image or
-        config (see app/services/deployment/worker.py's action="restart"
-        executions). `manifest_yaml` is the exact rendered YAML that was
-        actually applied, same as delete(). Same DeployResult contract as
-        apply()/delete(); raise NotImplementedError if this provider type
-        has no equivalent operation.
+        """Restart whatever's currently running from `manifest_yaml` — tears
+        it down and reapplies it (delete then apply of the same rendered
+        YAML) without changing the applied image or config (see
+        app/services/deployment/worker.py's action="restart" executions).
+        Not a live rolling recycle — there's a real gap with nothing running
+        between the delete and the apply. `manifest_yaml` is the exact
+        rendered YAML that was actually applied, same as delete(). Same
+        DeployResult contract as apply()/delete(); raise NotImplementedError
+        if this provider type has no equivalent operation.
         """

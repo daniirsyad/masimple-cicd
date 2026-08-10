@@ -46,7 +46,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | Kubernetes integration | shells out to the `kubectl` CLI (no `kubernetes` client library), provider-abstracted (`DeploymentProvider` → `KubernetesProvider`/`CustomAPIProvider`) — `kubectl` must be installed wherever MASIMPLE CICD itself runs |
 | AI description generation | provider-abstracted (`AIProvider`); Qwen implemented, Claude/Gemini/Custom API are stubs |
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
-| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), ~425 tests |
+| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), ~503 tests |
 
 ## Architecture conventions
 
@@ -57,8 +57,9 @@ different roles) — not a SaaS product with per-customer isolation.
   `permissions`, `menus`, `logs`, `ai_settings`, `git_sources`, `registries`,
   `versions`, `builders`, `images`, `documentation`, `system_config`,
   `deployment_servers`, `deployment_manifests`, `deployment_runs`,
-  `deployment_pods` (this last one has no `forms.py` — read-only pages, no
-  create/edit forms).
+  `deployment_pods` (this last one now has a `forms.py` too — Namespace/
+  Secret/ConfigMap create-edit-delete forms, on top of its original
+  read-only Pods/Nodes/Services/Ingress/PVs/PVCs/Workloads browsing).
 - **One model file per table** under `app/models/`.
 - All model PKs are `UUID` (`sqlalchemy.dialects.postgresql.UUID`,
   `default=uuid.uuid4`) — never integer autoincrement.
@@ -183,7 +184,7 @@ in exception-swallowing code paths).
   and a deploy-engine busy/idle indicator; a recent-errors count; a
   recent-builds table; recent activity log.
 - **`/users`, `/roles`, `/permissions`** — standard RBAC CRUD. The Roles
-  page's permission picker groups the ~26 permissions under friendly
+  page's permission picker groups the ~41 permissions under friendly
   resource headings (Users, Builders, AI Providers, …) with human
   descriptions, not raw codes. Users support both soft-delete
   (`is_active=False`) and hard delete (blocks self-deletion, reassigns
@@ -230,8 +231,10 @@ in exception-swallowing code paths).
   interval.
 - **`/deployment-servers`** — register/edit target servers (kubeconfig or
   custom-agent credentials, never re-shown after save), per-server "Test
-  Connection", `allowed_roles` picker, link to that server's Pods page (kube
-  type only).
+  Connection", `allowed_roles` picker, per-row "Kubernetes" link into that
+  server's Pods page (kube type only) — this is now the *only* entry point
+  into `/deployment-pods`; there's no separate server-picker page there
+  anymore (see below).
 - **`/deployment-manifests`** — manifest CRUD grouped by `group_name`
   (drag-and-drop reorder within a group via SortableJS); per-manifest
   version-binding picker (scan YAML for placeholders, pick a Builder +
@@ -249,13 +252,36 @@ in exception-swallowing code paths).
   `localStorage`-persisted). A standalone run's title shows the manifest
   name (`"<name> (standalone)"`), not a generic label. Run detail page
   shows per-execution logs.
-- **`/deployment-pods`** — pick a registered Kubernetes server, then browse
-  **read-only** live cluster state: Pods (list + Logs/Describe as modals,
-  auto-scrolled to the bottom), Namespaces, Nodes, Services, Ingress,
-  PersistentVolumes, PersistentVolumeClaims (list + Describe modal). No
-  delete/edit actions anywhere in this section — deliberate scope choice.
-  `"api"`-type servers aren't supported here (no pod/namespace concept for
-  a generic agent endpoint) and 404 if tried.
+- **`/deployment-pods`** — a tabbed browser for one Kubernetes server's live
+  cluster state, reached via a per-row link on `/deployment-servers` (its
+  own former server-picker index page was retired as duplication — the URL
+  itself now just redirects to `/deployment-servers`). Tabs:
+  - **Pods** — list + Logs/Describe as modals, auto-scrolled to the bottom.
+  - **Namespaces** — full CRUD (create/edit labels/delete,
+    `deployment_namespace.manage`); delete warns it cascades every
+    resource inside.
+  - **Secrets** — full CRUD (`deployment_secret.manage`) for both generic
+    Opaque key/value secrets and `kubernetes.io/dockerconfigjson` image-pull
+    secrets. Values are write-only (never decoded/re-shown/logged — edit
+    pre-fills existing key *names* only, blank value = keep); data entry
+    supports manual key/value rows, importing a file (`.env`-style parsed
+    into rows, or the whole file as one blob keyed by filename), or pasting
+    `KEY=VALUE` text to convert into rows.
+  - **ConfigMaps** — full CRUD (`deployment_configmap.manage`); unlike
+    Secrets, data isn't sensitive so edit pre-fills real current values
+    directly (no blank-to-keep dance) and list rows show real key names.
+    Same file-import/paste-as-text data entry as Secrets.
+  - **Workloads** — read-only list of raw Kubernetes `Deployment` objects
+    (ready/desired replica count, image) plus a per-row Restart button
+    (`deployment_workload.restart`) that does a true `kubectl rollout
+    restart deployment/<name>` — a zero-downtime rolling recycle, unlike
+    `DeploymentManifest`'s own Restart action (see Known Gaps).
+  - **Nodes, Services, Ingress, PersistentVolumes,
+    PersistentVolumeClaims** — read-only, list + Describe modal only,
+    deliberate scope choice (unlike the four sections above).
+
+  `"api"`-type servers aren't supported anywhere in this whole section (no
+  pod/namespace/etc. concept for a generic agent endpoint) and 404 if tried.
 
 ## Conventions a new feature should follow
 
@@ -314,9 +340,14 @@ in exception-swallowing code paths).
   matched against a real agent implementation. It also doesn't support
   restart, live-status polling, or any of the `/deployment-pods` browsing
   (all raise `NotImplementedError` / 404, by design, not by omission).
-- `kubectl rollout restart -f -` (the Restart action) only supports
-  Deployment/DaemonSet/StatefulSet kinds — a manifest that also declares
-  Services/ConfigMaps/etc. alongside a restartable workload will show
-  per-resource errors in the log for those other kinds even when the
-  actual workload restart succeeds. Not filtered by kind (this module never
-  parses YAML anywhere, by design — regex-only placeholder substitution).
+- `DeploymentManifest`'s Restart action is `delete()` + `apply()` of the same
+  rendered YAML, not `kubectl rollout restart` — so there's a real gap with
+  nothing running between the two steps, not a zero-downtime rolling
+  recycle. Chosen over rollout restart specifically because rollout restart
+  only understands Deployment/DaemonSet/StatefulSet and left every other
+  resource kind in a manifest erroring per-resource; delete+apply work
+  uniformly across whatever the manifest declares. For a true
+  zero-downtime rolling restart of a single named Kubernetes `Deployment`,
+  use the Restart button on `/deployment-pods/<server_id>/workloads`
+  instead (`kubectl rollout restart deployment/<name>`) — a separate,
+  narrower action that only exists for that one resource kind.

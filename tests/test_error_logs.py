@@ -156,7 +156,7 @@ class TestViewErrorLogsPage:
 
         response = logs_client.get("/logs/errors")
         assert response.status_code == 200
-        assert b"copy-traceback-btn" in response.data
+        assert b"copy-to-clipboard-btn" in response.data
         assert f'data-copy-target="traceback-{log_id}"'.encode() in response.data
         assert b"<svg" in response.data
 
@@ -167,7 +167,10 @@ class TestViewErrorLogsPage:
 
         response = logs_client.get("/logs/errors")
         assert response.status_code == 200
-        assert b"copy-traceback-btn" not in response.data
+        # The generic copy-to-clipboard class is also used by the always-
+        # present Share button now, so check specifically for the
+        # traceback-targeting button rather than the shared class name.
+        assert b'data-copy-target="traceback-' not in response.data
 
 
 class TestUnhandledExceptionIsLogged:
@@ -187,3 +190,46 @@ class TestUnhandledExceptionIsLogged:
             assert error_log.traceback is not None
             assert error_log.method == "GET"
             assert error_log.path == "/images/status"
+
+
+class TestErrorDetailLink:
+    def test_requires_permission(self, noperm_client, app):
+        with app.app_context():
+            log = ErrorLog(source="unit.test", message="boom")
+            db.session.add(log)
+            db.session.commit()
+            log_id = log.id
+        assert noperm_client.get(f"/logs/errors/{log_id}").status_code == 403
+
+    def test_nonexistent_id_is_404(self, logs_client):
+        assert logs_client.get("/logs/errors/00000000-0000-0000-0000-000000000000").status_code == 404
+
+    def test_renders_only_the_one_row_with_its_modal_set_to_auto_open(self, logs_client, app):
+        with app.app_context():
+            # A second, unrelated error — must NOT show up in the single-error view.
+            db.session.add(ErrorLog(source="other.source", message="unrelated"))
+            log = ErrorLog(source="unit.test", message="the specific error")
+            db.session.add(log)
+            db.session.commit()
+            log_id = log.id
+
+        response = logs_client.get(f"/logs/errors/{log_id}")
+        assert response.status_code == 200
+        assert b"the specific error" in response.data
+        assert b"unrelated" not in response.data
+        assert f'data-open-modal="error-detail-modal-{log_id}"'.encode() in response.data
+        assert b"Viewing one linked error" in response.data
+        # Filter form / pagination controls are hidden in single-error view.
+        assert b'name="source"' not in response.data
+
+    def test_share_button_copy_target_holds_the_absolute_link(self, logs_client, app):
+        with app.app_context():
+            log = ErrorLog(source="unit.test", message="boom")
+            db.session.add(log)
+            db.session.commit()
+            log_id = log.id
+
+        response = logs_client.get(f"/logs/errors/{log_id}")
+        assert response.status_code == 200
+        assert f'data-copy-target="share-link-{log_id}"'.encode() in response.data
+        assert f"/logs/errors/{log_id}".encode() in response.data

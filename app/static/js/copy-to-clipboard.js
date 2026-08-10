@@ -1,5 +1,5 @@
 document.addEventListener("DOMContentLoaded", () => {
-  document.querySelectorAll(".copy-traceback-btn").forEach((btn) => {
+  document.querySelectorAll(".copy-to-clipboard-btn").forEach((btn) => {
     const target = document.getElementById(btn.dataset.copyTarget);
     const copyIcon = btn.querySelector(".copy-icon");
     const checkIcon = btn.querySelector(".check-icon");

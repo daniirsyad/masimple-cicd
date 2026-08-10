@@ -1,0 +1,353 @@
+{% extends "base.html" %} {% block title %}ConfigMaps: {{ server.name }} - MASIMPLE CICD{% endblock %} {% block content %}
+<span id="deployment-pods-list-page" data-server-id="{{ server.id }}" class="hidden"></span>
+{% set active_kind = 'configmaps' %}
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold">ConfigMaps: {{ server.name }}</h1>
+  <div class="flex gap-2">
+    <button
+      type="button"
+      class="btn btn-primary btn-sm"
+      onclick="document.getElementById('create-configmap-modal').showModal()"
+    >
+      New ConfigMap
+    </button>
+    <a href="{{ url_for('deployment_pods.index') }}" class="btn btn-sm">Back to Servers</a>
+  </div>
+</div>
+{% include "deployment_pods/_nav.html" %}
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <form method="get" class="flex flex-wrap items-end gap-2">
+      <div>
+        <label class="label text-sm">Namespace</label>
+        <input
+          type="text"
+          name="namespace"
+          value="{{ namespace_filter }}"
+          placeholder="all namespaces"
+          class="input input-bordered input-sm"
+        />
+      </div>
+      <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+    </form>
+
+    {% if error %}
+    <div class="alert alert-error mt-4 text-sm">{{ error }}</div>
+    {% elif not rows %}
+    <p class="mt-4 text-sm text-base-content/60">
+      No configmaps found{{ ' in namespace "' ~ namespace_filter ~ '"' if namespace_filter }}.
+    </p>
+    {% else %}
+    <div class="mt-4 overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Namespace</th>
+            <th>Keys</th>
+            <th>Created</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td>{{ row.name }}</td>
+            <td>{{ row.namespace }}</td>
+            <td class="text-xs text-base-content/60">{{ row.configmap_keys | join(', ') if row.configmap_keys else '—' }}</td>
+            <td class="text-xs text-base-content/60">{{ row.created_at or "—" }}</td>
+            <td class="flex gap-2">
+              <button
+                type="button"
+                class="btn btn-xs"
+                onclick="document.getElementById('edit-configmap-modal-{{ row.namespace }}-{{ row.name }}').showModal()"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                class="btn btn-xs btn-error"
+                onclick="document.getElementById('delete-configmap-modal-{{ row.namespace }}-{{ row.name }}').showModal()"
+              >
+                Delete
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<dialog id="create-configmap-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">New ConfigMap</h3>
+    <form
+      method="post"
+      action="{{ url_for('deployment_pods.create_configmap', server_id=server.id) }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ create_form.hidden_tag() }}
+      <div>
+        {{ create_form.name.label(class="label text-sm") }}
+        {{ create_form.name(class="input input-bordered input-sm w-full", placeholder="e.g. app-config") }}
+        {% for error in create_form.name.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+      <div>
+        {{ create_form.namespace.label(class="label text-sm") }}
+        {{ create_form.namespace(class="select select-bordered select-sm w-full") }}
+      </div>
+      <div class="flex flex-col gap-2">
+        <div>
+          <label class="label text-sm pb-0">Data</label>
+          <p class="text-xs text-base-content/60">Add one or more key/value pairs for this ConfigMap.</p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <label class="btn btn-xs btn-outline">
+            📄 Import File
+            <input
+              type="file"
+              class="hidden secret-import-file-input"
+              data-container="configmap-create-entries"
+              data-template="configmap-create-entry-template"
+            />
+          </label>
+          <button type="button" class="btn btn-xs btn-outline secret-paste-toggle-btn" data-target="configmap-create-paste-box">
+            📝 Paste as Text
+          </button>
+        </div>
+        <div id="configmap-create-paste-box" class="hidden flex flex-col gap-2 rounded-lg border border-base-300 bg-base-200/30 p-3">
+          <label class="text-xs font-semibold text-base-content/70">
+            Paste KEY=VALUE lines (one per line), then convert them into the fields below.
+          </label>
+          <textarea
+            class="secret-paste-textarea textarea textarea-bordered textarea-sm w-full font-mono"
+            rows="4"
+            placeholder="app.name=my-app&#10;log.level=debug"
+          ></textarea>
+          <div class="flex gap-2">
+            <button
+              type="button"
+              class="secret-paste-apply-btn btn btn-xs btn-primary"
+              data-container="configmap-create-entries"
+              data-template="configmap-create-entry-template"
+              data-target="configmap-create-paste-box"
+            >
+              Convert to Fields
+            </button>
+            <button type="button" class="secret-paste-cancel-btn btn btn-xs" data-target="configmap-create-paste-box">Cancel</button>
+          </div>
+        </div>
+        <div
+          id="configmap-create-entries"
+          class="secret-entries flex flex-col gap-3"
+          data-next-index="{{ create_form.entries|length }}"
+        >
+          {% for subform in create_form.entries %}
+          <div class="secret-entry-row rounded-lg border border-base-300 bg-base-200/40 p-3">
+            <div class="flex items-center justify-between gap-2">
+              <label class="text-xs font-semibold text-base-content/70">Key</label>
+              <button type="button" class="remove-entry-row-btn btn btn-xs btn-circle btn-ghost text-error" title="Remove this key">
+                ✕
+              </button>
+            </div>
+            {{ subform.key(class="input input-bordered input-sm w-full font-mono mt-1", placeholder="e.g. app.properties") }}
+            <label class="mt-2 block text-xs font-semibold text-base-content/70">Value</label>
+            {{ subform.value(class="textarea textarea-bordered textarea-sm w-full font-mono mt-1", rows="3", placeholder="value") }}
+          </div>
+          {% endfor %}
+        </div>
+        <button
+          type="button"
+          class="add-entry-row-btn btn btn-sm btn-outline border-dashed w-full"
+          data-container="configmap-create-entries"
+          data-template="configmap-create-entry-template"
+        >
+          + Add Another Key
+        </button>
+        <template id="configmap-create-entry-template">
+          <div class="secret-entry-row rounded-lg border border-base-300 bg-base-200/40 p-3">
+            <div class="flex items-center justify-between gap-2">
+              <label class="text-xs font-semibold text-base-content/70">Key</label>
+              <button type="button" class="remove-entry-row-btn btn btn-xs btn-circle btn-ghost text-error" title="Remove this key">
+                ✕
+              </button>
+            </div>
+            <input
+              type="text"
+              name="create-configmap-entries-__INDEX__-key"
+              placeholder="e.g. app.properties"
+              class="input input-bordered input-sm w-full font-mono mt-1"
+            />
+            <label class="mt-2 block text-xs font-semibold text-base-content/70">Value</label>
+            <textarea
+              name="create-configmap-entries-__INDEX__-value"
+              placeholder="value"
+              rows="3"
+              class="textarea textarea-bordered textarea-sm w-full font-mono mt-1"
+            ></textarea>
+          </div>
+        </template>
+      </div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        {{ create_form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+{% for row in rows %}
+<dialog id="edit-configmap-modal-{{ row.namespace }}-{{ row.name }}" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">Edit ConfigMap: {{ row.name }}</h3>
+    {% set form = row.edit_form %}
+    <form
+      method="post"
+      action="{{ url_for('deployment_pods.edit_configmap', server_id=server.id, namespace=row.namespace, name=row.name) }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ form.hidden_tag() }}
+      <div class="flex flex-col gap-2">
+        <label class="label text-sm">Data</label>
+        <div class="flex flex-wrap gap-2">
+          <label class="btn btn-xs btn-outline">
+            📄 Import File
+            <input
+              type="file"
+              class="hidden secret-import-file-input"
+              data-container="configmap-edit-entries-{{ row.namespace }}-{{ row.name }}"
+              data-template="configmap-edit-entry-template-{{ row.namespace }}-{{ row.name }}"
+            />
+          </label>
+          <button
+            type="button"
+            class="btn btn-xs btn-outline secret-paste-toggle-btn"
+            data-target="configmap-edit-paste-box-{{ row.namespace }}-{{ row.name }}"
+          >
+            📝 Paste as Text
+          </button>
+        </div>
+        <div
+          id="configmap-edit-paste-box-{{ row.namespace }}-{{ row.name }}"
+          class="hidden flex flex-col gap-2 rounded-lg border border-base-300 bg-base-200/30 p-3"
+        >
+          <label class="text-xs font-semibold text-base-content/70">
+            Paste KEY=VALUE lines (one per line), then convert them into the fields below.
+          </label>
+          <textarea
+            class="secret-paste-textarea textarea textarea-bordered textarea-sm w-full font-mono"
+            rows="4"
+            placeholder="app.name=my-app&#10;log.level=debug"
+          ></textarea>
+          <div class="flex gap-2">
+            <button
+              type="button"
+              class="secret-paste-apply-btn btn btn-xs btn-primary"
+              data-container="configmap-edit-entries-{{ row.namespace }}-{{ row.name }}"
+              data-template="configmap-edit-entry-template-{{ row.namespace }}-{{ row.name }}"
+              data-target="configmap-edit-paste-box-{{ row.namespace }}-{{ row.name }}"
+            >
+              Convert to Fields
+            </button>
+            <button
+              type="button"
+              class="secret-paste-cancel-btn btn btn-xs"
+              data-target="configmap-edit-paste-box-{{ row.namespace }}-{{ row.name }}"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+        <div
+          id="configmap-edit-entries-{{ row.namespace }}-{{ row.name }}"
+          class="secret-entries flex flex-col gap-3"
+          data-next-index="{{ form.entries|length }}"
+        >
+          {% for subform in form.entries %}
+          <div class="secret-entry-row rounded-lg border border-base-300 bg-base-200/40 p-3">
+            <div class="flex items-center justify-between gap-2">
+              <label class="text-xs font-semibold text-base-content/70">Key</label>
+              <button type="button" class="remove-entry-row-btn btn btn-xs btn-circle btn-ghost text-error" title="Remove this key">
+                ✕
+              </button>
+            </div>
+            {{ subform.key(class="input input-bordered input-sm w-full font-mono mt-1") }}
+            <label class="mt-2 block text-xs font-semibold text-base-content/70">Value</label>
+            {{ subform.value(class="textarea textarea-bordered textarea-sm w-full font-mono mt-1", rows="3") }}
+          </div>
+          {% endfor %}
+        </div>
+        <button
+          type="button"
+          class="add-entry-row-btn btn btn-sm btn-outline border-dashed w-full"
+          data-container="configmap-edit-entries-{{ row.namespace }}-{{ row.name }}"
+          data-template="configmap-edit-entry-template-{{ row.namespace }}-{{ row.name }}"
+        >
+          + Add Another Key
+        </button>
+        <template id="configmap-edit-entry-template-{{ row.namespace }}-{{ row.name }}">
+          <div class="secret-entry-row rounded-lg border border-base-300 bg-base-200/40 p-3">
+            <div class="flex items-center justify-between gap-2">
+              <label class="text-xs font-semibold text-base-content/70">Key</label>
+              <button type="button" class="remove-entry-row-btn btn btn-xs btn-circle btn-ghost text-error" title="Remove this key">
+                ✕
+              </button>
+            </div>
+            <input
+              type="text"
+              name="{{ form.entries.name }}-__INDEX__-key"
+              placeholder="e.g. app.properties"
+              class="input input-bordered input-sm w-full font-mono mt-1"
+            />
+            <label class="mt-2 block text-xs font-semibold text-base-content/70">Value</label>
+            <textarea
+              name="{{ form.entries.name }}-__INDEX__-value"
+              placeholder="value"
+              rows="3"
+              class="textarea textarea-bordered textarea-sm w-full font-mono mt-1"
+            ></textarea>
+          </div>
+        </template>
+      </div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        {{ form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<dialog id="delete-configmap-modal-{{ row.namespace }}-{{ row.name }}" class="modal">
+  <div class="modal-box w-11/12 max-w-sm">
+    <h3 class="text-lg font-bold">Delete ConfigMap</h3>
+    <p class="py-4 text-sm">
+      Are you sure you want to delete "{{ row.name }}" in namespace "{{ row.namespace }}"? This cannot be undone —
+      anything referencing this ConfigMap (e.g. a pod's env/volume) will start failing.
+    </p>
+    <div class="modal-action">
+      <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+      <form
+        method="post"
+        action="{{ url_for('deployment_pods.delete_configmap', server_id=server.id, namespace=row.namespace, name=row.name) }}"
+      >
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+        <button type="submit" class="btn btn-sm btn-error">Delete</button>
+      </form>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{% endfor %}
+
+<script src="{{ url_for('static', filename='js/deployment_pods.js') }}"></script>
+{% endblock %}

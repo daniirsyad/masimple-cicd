@@ -26,6 +26,24 @@ def get_or_create(label, parent_id=None, **kwargs):
     return menu
 
 
+def migrate_remove_deployment_pods_menu():
+    """One-off data migration: the "Deployment Pods" sidebar entry (linking
+    to /deployment-pods, a standalone server-picker page) was retired once
+    /deployment-servers grew its own per-row Pods/Namespaces/Secrets/
+    ConfigMaps links, making the picker page (and its menu entry) pure
+    duplication. /deployment-pods itself now just redirects into
+    /deployment-servers rather than 404ing, so nothing breaks for anyone who
+    still has this row — this only removes the now-redundant sidebar entry.
+    Safe to re-run — a no-op once the row is gone.
+    """
+    menu = Menu.query.filter_by(label="Deployment Pods", url="/deployment-pods").first()
+    if menu is None:
+        return
+    db.session.delete(menu)
+    db.session.commit()
+    print("Retired menu: Deployment Pods")
+
+
 def run():
     app = create_app()
     with app.app_context():
@@ -202,15 +220,9 @@ def run():
             show_in_navbar=False,
             show_in_sidebar=True,
         )
-        get_or_create(
-            "Deployment Pods",
-            parent_id=deployment.id,
-            url="/deployment-pods",
-            permission_code="deployment_pod.view",
-            order=3,
-            show_in_navbar=False,
-            show_in_sidebar=True,
-        )
+        # No "Deployment Pods" entry here anymore — retired in favor of
+        # per-row links on Deployment Servers, see
+        # migrate_remove_deployment_pods_menu below.
 
         system_group = get_or_create(
             "System", url=None, order=4, show_in_navbar=False, show_in_sidebar=True
@@ -226,6 +238,8 @@ def run():
         )
 
         db.session.commit()
+
+        migrate_remove_deployment_pods_menu()
 
 
 if __name__ == "__main__":

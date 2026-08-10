@@ -1,0 +1,150 @@
+{% extends "base.html" %} {% block title %}Namespaces: {{ server.name }} - MASIMPLE CICD{% endblock %} {% block content %}
+<span id="deployment-pods-list-page" data-server-id="{{ server.id }}" class="hidden"></span>
+{% set active_kind = 'namespaces' %}
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold">Namespaces: {{ server.name }}</h1>
+  <div class="flex gap-2">
+    <button
+      type="button"
+      class="btn btn-primary btn-sm"
+      onclick="document.getElementById('create-namespace-modal').showModal()"
+    >
+      New Namespace
+    </button>
+    <a href="{{ url_for('deployment_pods.index') }}" class="btn btn-sm">Back to Servers</a>
+  </div>
+</div>
+{% include "deployment_pods/_nav.html" %}
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    {% if error %}
+    <div class="alert alert-error text-sm">{{ error }}</div>
+    {% elif not rows %}
+    <p class="text-sm text-base-content/60">No namespaces found.</p>
+    {% else %}
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Status</th>
+            <th>Created</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td>{{ row.name }}</td>
+            <td>
+              <span class="badge badge-sm {{ 'badge-success' if row.phase == 'Active' else 'badge-ghost' }}">
+                {{ row.phase }}
+              </span>
+            </td>
+            <td class="text-xs text-base-content/60">{{ row.created_at or "—" }}</td>
+            <td class="flex gap-2">
+              <button
+                type="button"
+                class="btn btn-xs"
+                onclick="document.getElementById('edit-namespace-modal-{{ row.name }}').showModal()"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                class="btn btn-xs btn-error"
+                onclick="document.getElementById('delete-namespace-modal-{{ row.name }}').showModal()"
+              >
+                Delete
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<dialog id="create-namespace-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">New Namespace</h3>
+    <form
+      method="post"
+      action="{{ url_for('deployment_pods.create_namespace', server_id=server.id) }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ create_form.hidden_tag() }}
+      <div>
+        {{ create_form.name.label(class="label text-sm") }}
+        {{ create_form.name(class="input input-bordered input-sm w-full") }}
+        {% for error in create_form.name.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+      <div>
+        {{ create_form.labels.label(class="label text-sm") }}
+        {{ create_form.labels(class="textarea textarea-bordered textarea-sm w-full font-mono", rows="4", placeholder="team=platform\nenv=prod") }}
+        {% for error in create_form.labels.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        {{ create_form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+{% for row in rows %}
+<dialog id="edit-namespace-modal-{{ row.name }}" class="modal">
+  <div class="modal-box w-11/12 max-w-lg">
+    <h3 class="text-lg font-bold">Edit Namespace: {{ row.name }}</h3>
+    {% set form = row.edit_form %}
+    <form
+      method="post"
+      action="{{ url_for('deployment_pods.edit_namespace', server_id=server.id, name=row.name) }}"
+      novalidate
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ form.hidden_tag() }}
+      <div>
+        {{ form.labels.label(class="label text-sm") }}
+        {{ form.labels(class="textarea textarea-bordered textarea-sm w-full font-mono", rows="4") }}
+        {% for error in form.labels.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        {{ form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<dialog id="delete-namespace-modal-{{ row.name }}" class="modal">
+  <div class="modal-box w-11/12 max-w-sm">
+    <h3 class="text-lg font-bold">Delete Namespace</h3>
+    <p class="py-4 text-sm">
+      Are you sure you want to delete "{{ row.name }}"? This deletes every resource inside this namespace on the
+      cluster — pods, services, secrets, everything. This cannot be undone.
+    </p>
+    <div class="modal-action">
+      <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+      <form method="post" action="{{ url_for('deployment_pods.delete_namespace', server_id=server.id, name=row.name) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+        <button type="submit" class="btn btn-sm btn-error">Delete</button>
+      </form>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{% endfor %}
+{% endblock %}

@@ -9,6 +9,30 @@
   >
     Pods
   </a>
+  <a
+    href="{{ url_for('deployment_pods.namespaces', server_id=server.id) }}"
+    class="tab {{ 'tab-active' if active_kind == 'namespaces' else '' }}"
+  >
+    Namespaces
+  </a>
+  <a
+    href="{{ url_for('deployment_pods.secrets', server_id=server.id) }}"
+    class="tab {{ 'tab-active' if active_kind == 'secrets' else '' }}"
+  >
+    Secrets
+  </a>
+  <a
+    href="{{ url_for('deployment_pods.configmaps', server_id=server.id) }}"
+    class="tab {{ 'tab-active' if active_kind == 'configmaps' else '' }}"
+  >
+    ConfigMaps
+  </a>
+  <a
+    href="{{ url_for('deployment_pods.workloads', server_id=server.id) }}"
+    class="tab {{ 'tab-active' if active_kind == 'workloads' else '' }}"
+  >
+    Workloads
+  </a>
   {% for slug, config in (resource_kinds or {}).items() %}
   <a
     href="{{ url_for('deployment_pods.list_resources', server_id=server.id, kind=slug) }}"

@@ -7,6 +7,14 @@
   <a role="tab" class="tab tab-active">Errors</a>
 </div>
 
+{% if single_error_view %}
+<div class="alert mt-4 text-sm">
+  <span>
+    Viewing one linked error.
+    <a href="{{ url_for('logs.view_error_logs') }}" class="link link-primary">View all Error Logs →</a>
+  </span>
+</div>
+{% else %}
 <form method="get" class="mt-4 flex flex-wrap items-end gap-3">
   <div>
     <label class="label text-sm">Source</label>
@@ -43,6 +51,7 @@
   <button type="submit" class="btn btn-primary btn-sm">Filter</button>
   <a href="{{ url_for('logs.view_error_logs') }}" class="btn btn-ghost btn-sm">Reset</a>
 </form>
+{% endif %}
 
 <div class="mt-4 overflow-x-auto">
   <table class="table table-sm">
@@ -114,7 +123,7 @@
         {% if log.traceback %}
         <button
           type="button"
-          class="copy-traceback-btn btn btn-xs btn-square"
+          class="copy-to-clipboard-btn btn btn-xs btn-square"
           data-copy-target="traceback-{{ log.id }}"
           title="Copy traceback"
           aria-label="Copy traceback"
@@ -153,7 +162,41 @@
       {% endif %}
     </div>
 
+    <span id="share-link-{{ log.id }}" class="hidden">{{ url_for('logs.error_detail', error_id=log.id, _external=True) }}</span>
+
     <div class="modal-action">
+      <button
+        type="button"
+        class="copy-to-clipboard-btn btn btn-sm"
+        data-copy-target="share-link-{{ log.id }}"
+        title="Copy a direct link to this error"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          class="copy-icon h-4 w-4"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M8.684 13.342a4 4 0 000-2.684m0 2.684a4 4 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a4 4 0 105.367-5.367 4 4 0 00-5.367 5.367zm0 9.316a4 4 0 105.367 5.367 4 4 0 00-5.367-5.367z"
+          />
+        </svg>
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          class="check-icon hidden h-4 w-4"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+        </svg>
+        Share
+      </button>
       <form method="dialog"><button class="btn btn-sm">Close</button></form>
     </div>
   </div>
@@ -163,7 +206,7 @@
 </dialog>
 {% endfor %}
 
-{% if pagination.pages > 1 %}
+{% if pagination and pagination.pages > 1 %}
 <div class="join mt-4">
   {% for page_num in pagination.iter_pages() %} {% if page_num %}
   <a

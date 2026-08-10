@@ -1,0 +1,96 @@
+{% extends "base.html" %} {% block title %}Workloads: {{ server.name }} - MASIMPLE CICD{% endblock %} {% block content %}
+<span id="deployment-pods-list-page" data-server-id="{{ server.id }}" class="hidden"></span>
+{% set active_kind = 'workloads' %}
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold">Workloads: {{ server.name }}</h1>
+  <a href="{{ url_for('deployment_pods.index') }}" class="btn btn-sm">Back to Servers</a>
+</div>
+{% include "deployment_pods/_nav.html" %}
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <form method="get" class="flex flex-wrap items-end gap-2">
+      <div>
+        <label class="label text-sm">Namespace</label>
+        <input
+          type="text"
+          name="namespace"
+          value="{{ namespace_filter }}"
+          placeholder="all namespaces"
+          class="input input-bordered input-sm"
+        />
+      </div>
+      <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+    </form>
+
+    {% if error %}
+    <div class="alert alert-error mt-4 text-sm">{{ error }}</div>
+    {% elif not rows %}
+    <p class="mt-4 text-sm text-base-content/60">
+      No workloads found{{ ' in namespace "' ~ namespace_filter ~ '"' if namespace_filter }}.
+    </p>
+    {% else %}
+    <div class="mt-4 overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Namespace</th>
+            <th>Ready</th>
+            <th>Image(s)</th>
+            <th>Created</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td>{{ row.name }}</td>
+            <td>{{ row.namespace }}</td>
+            <td>{{ row.ready }}</td>
+            <td class="text-xs text-base-content/60">{{ row.images }}</td>
+            <td class="text-xs text-base-content/60">{{ row.created_at or "—" }}</td>
+            <td>
+              <button
+                type="button"
+                class="btn btn-xs"
+                onclick="document.getElementById('restart-workload-modal-{{ row.namespace }}-{{ row.name }}').showModal()"
+              >
+                Restart
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% for row in rows %}
+<dialog id="restart-workload-modal-{{ row.namespace }}-{{ row.name }}" class="modal">
+  <div class="modal-box w-11/12 max-w-sm">
+    <h3 class="text-lg font-bold">Restart Workload</h3>
+    <p class="py-4 text-sm">
+      Trigger a rolling restart of "{{ row.name }}" in namespace "{{ row.namespace }}"? Kubernetes recreates its pods
+      one at a time — the deployed image/config doesn't change, and this is zero-downtime (unlike a Deployment
+      Manifest's own Restart action, which tears down and reapplies everything).
+    </p>
+    <div class="modal-action">
+      <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+      <form
+        method="post"
+        action="{{ url_for('deployment_pods.restart_workload', server_id=server.id, namespace=row.namespace, name=row.name) }}"
+      >
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+        <button type="submit" class="btn btn-sm btn-primary">Restart</button>
+      </form>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{% endfor %}
+
+<script src="{{ url_for('static', filename='js/deployment_pods.js') }}"></script>
+{% endblock %}

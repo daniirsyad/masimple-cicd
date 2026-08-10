@@ -1,7 +1,8 @@
 import traceback as tb_module
 
-from flask import has_request_context, request
+from flask import has_request_context, request, url_for
 from flask_login import current_user
+from markupsafe import Markup, escape
 
 from app.extensions import db
 from app.models import ErrorLog
@@ -57,3 +58,21 @@ def log_error(source, exc=None, description=None, detail=None):
         db.session.add(entry)
         db.session.commit()
     return entry
+
+
+def error_detail_link(message, entry):
+    """`message` plus a real link straight to the ErrorLog row `log_error`
+    just created — the same "See Error Logs for details" flashes/inline
+    banners used to say, now pointing at the specific row instead of making
+    the user go find it themselves.
+
+    Returns a `Markup` (Jinja-safe) string, not a plain str — `message` is
+    the only piece of this call site's own text mixed in here, so it's the
+    only thing that gets escaped; the link's href comes only from
+    `entry.id` (a UUID) via `url_for()`, never from request/user input.
+    Safe to hand directly to `flash()` or to a template `error` variable:
+    both are rendered via a bare `{{ }}`, and Jinja/MarkupSafe skip their
+    own escaping for anything that's already `Markup`.
+    """
+    link = url_for("logs.error_detail", error_id=entry.id)
+    return Markup(f'{escape(message)} <a href="{link}" target="_blank" class="link link-primary">View error details</a>')

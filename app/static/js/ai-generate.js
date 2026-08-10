@@ -17,8 +17,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let lastDraft = "";
 
-  function showError(message) {
+  function showError(message, errorLogUrl) {
     errorEl.textContent = message;
+    if (errorLogUrl) {
+      errorEl.appendChild(document.createElement("br"));
+      const link = document.createElement("a");
+      link.href = errorLogUrl;
+      link.target = "_blank";
+      link.className = "link link-primary";
+      link.textContent = "View error details";
+      errorEl.appendChild(link);
+    }
     errorEl.classList.remove("hidden");
   }
 
@@ -46,7 +55,7 @@ document.addEventListener("DOMContentLoaded", () => {
       .then((response) => response.json().then((data) => ({ ok: response.ok, data })))
       .then(({ ok, data }) => {
         if (!ok) {
-          showError(data.error || "Failed to generate a description.");
+          showError(data.error || "Failed to generate a description.", data.error_log_url);
           return;
         }
         lastDraft = data.description;

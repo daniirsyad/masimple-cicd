@@ -220,11 +220,11 @@ class TestConnectionTest:
 
         response = server_client.post(f"/deployment-servers/{server_id}/test", follow_redirects=True)
         assert response.status_code == 200
-        # The flash banner stays short and points at the Error Logs page —
-        # the actual exception text ("connection refused") must not leak
-        # into it, only into the ErrorLog entry (checked below).
+        # The flash banner stays short and links straight to the Error Logs
+        # entry — the actual exception text ("connection refused") must not
+        # leak into it, only into the ErrorLog entry (checked below).
         assert b"connection refused" not in response.data
-        assert b"See Error Logs for details" in response.data
+        assert b"View error details" in response.data
         with app.app_context():
             server = DeploymentServer.query.get(server_id)
             assert server.status == "unreachable"
@@ -232,4 +232,5 @@ class TestConnectionTest:
             error_log = ErrorLog.query.filter_by(source="deployment_servers.test_connection").first()
             assert error_log is not None
             assert "connection refused" in error_log.message
+            assert f"/logs/errors/{error_log.id}".encode() in response.data
             assert "connection refused" in error_log.traceback

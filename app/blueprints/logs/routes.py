@@ -113,3 +113,33 @@ def view_error_logs():
         date_from=date_from,
         date_to=date_to,
     )
+
+
+@logs_bp.route("/errors/<uuid:error_id>")
+@permission_required("logs.view")
+def error_detail(error_id):
+    """A direct, shareable link to one specific ErrorLog row — used by
+    error_detail_link() (app/utils/error_logger.py) wherever a failure is
+    surfaced to a user (flash message, inline banner, or JSON error field),
+    and by the Share button on the detail dialog itself.
+
+    Deliberately ignores view_error_logs()'s own filtering/pagination: a
+    linked error could be old or filtered out by whatever the *viewer's*
+    default filters would be, so this always renders exactly the one row
+    requested rather than trying to land it on "the right page" of the
+    normal list. That also guarantees its error-detail-modal-<id> dialog
+    actually exists in the DOM for modal-form.js's data-open-modal
+    auto-open to find.
+    """
+    error = ErrorLog.query.get_or_404(error_id)
+    return render_template(
+        "logs/errors.html",
+        pagination=None,
+        logs=[error],
+        sources=[],
+        selected_source="",
+        date_from="",
+        date_to="",
+        single_error_view=True,
+        open_modal=f"error-detail-modal-{error.id}",
+    )

@@ -62,7 +62,7 @@ MASIMPLE CICD{% endblock %}
                 <button type="submit" class="btn btn-sm">Test Connection</button>
               </form>
               {% if server.connection_type == 'kube' %}
-              <a href="{{ url_for('deployment_pods.list_pods', server_id=server.id) }}" class="btn btn-sm">Pods</a>
+              <a href="{{ url_for('deployment_pods.list_pods', server_id=server.id) }}" class="btn btn-sm">Kubernetes</a>
               {% endif %}
               <button
                 type="button"
