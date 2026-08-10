@@ -29,15 +29,13 @@ document.addEventListener("DOMContentLoaded", () => {
     el.appendChild(link);
   }
 
-  // --- Live-refresh helper, shared by the Logs and Describe modals below.
-  // Plain setInterval polling, not a real stream (kubectl logs -f / a
-  // WebSocket/SSE endpoint) — this app has no streaming infrastructure
-  // anywhere else (the existing "Deploy Status"/"Deployment Runs"
-  // auto-refresh widgets are both plain interval polling too), so this
-  // stays consistent rather than introducing a new mechanism for one page.
-  // Auto-starts when a modal opens (Logs/Describe are opened specifically
-  // to watch something happening) and always stops on close, so nothing
-  // keeps polling in the background once nobody's looking. ---
+  // --- Live-refresh helper, used by the Describe modal below. Plain
+  // setInterval polling, not a real stream — `kubectl describe` has no
+  // follow/watch mode to stream from, unlike pod logs (see the Logs modal
+  // below, which now uses a real SSE stream instead of this helper).
+  // Auto-starts when the modal opens (Describe is opened specifically to
+  // watch something happening) and always stops on close, so nothing keeps
+  // polling in the background once nobody's looking. ---
   function createLiveRefresher(intervalMs, loadFn, toggleButton, indicatorEl) {
     let timer = null;
     let live = false;
@@ -76,7 +74,13 @@ document.addEventListener("DOMContentLoaded", () => {
     return { start, stop };
   }
 
-  // --- Logs modal ---
+  // --- Logs modal — a real stream (`kubectl logs -f` over Server-Sent
+  // Events, see deployment_pods.routes.pod_logs_stream), unlike the Describe
+  // modal below which stays on setInterval polling (kubectl describe has no
+  // follow/watch mode to stream from). One EventSource per "open", torn
+  // down and replaced on close/Pause/container-filter-change/reopen rather
+  // than reused, so there's never more than one live kubectl process behind
+  // an open modal. ---
   const logsModal = document.getElementById("pod-logs-modal");
   const logsTitle = document.getElementById("pod-logs-title");
   const logsContent = document.getElementById("pod-logs-content");
@@ -85,52 +89,85 @@ document.addEventListener("DOMContentLoaded", () => {
   const logsLiveToggle = document.getElementById("pod-logs-live-toggle");
   const logsLiveIndicator = document.getElementById("pod-logs-live-indicator");
   let currentLogsPod = null;
+  let logsEventSource = null;
 
-  function loadLogs(showLoading = true) {
+  function setLogsLiveUi(live) {
+    if (logsLiveToggle) logsLiveToggle.textContent = live ? "Pause" : "Resume Live";
+    if (logsLiveIndicator) {
+      logsLiveIndicator.textContent = live ? "Live" : "Paused";
+      logsLiveIndicator.classList.toggle("badge-success", live);
+      logsLiveIndicator.classList.toggle("badge-ghost", !live);
+    }
+  }
+
+  function appendLogLine(line) {
+    if (logsContent.textContent === "Waiting for log output...") logsContent.textContent = "";
+    const atBottom = logsContent.scrollHeight - logsContent.scrollTop <= logsContent.clientHeight + 20;
+    logsContent.textContent += (logsContent.textContent ? "\n" : "") + line;
+    // Logs read newest-at-the-bottom — keep following the tail only if the
+    // user hasn't scrolled up to read older lines themselves.
+    if (atBottom) scrollToBottom(logsContent);
+  }
+
+  function stopLogsStream() {
+    if (logsEventSource) {
+      logsEventSource.close();
+      logsEventSource = null;
+    }
+    setLogsLiveUi(false);
+  }
+
+  function startLogsStream() {
     if (!currentLogsPod) return;
-    if (showLoading) logsContent.textContent = "Loading...";
+    stopLogsStream();
+    logsContent.textContent = "Waiting for log output...";
 
     const container = logsContainerInput.value.trim();
-    const url = new URL(podUrl(currentLogsPod.namespace, currentLogsPod.podName, "logs"), window.location.origin);
+    const url = new URL(
+      podUrl(currentLogsPod.namespace, currentLogsPod.podName, "logs/stream"),
+      window.location.origin
+    );
     if (container) url.searchParams.set("container", container);
 
-    fetch(url)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.error) {
-          renderErrorWithLink(logsContent, data.error, data.error_log_url);
-        } else {
-          logsContent.textContent = data.logs || "(no log output)";
-        }
-        // Logs read newest-at-the-bottom — land on the most recent lines by
-        // default rather than making the user scroll down themselves.
-        scrollToBottom(logsContent);
-      })
-      .catch(() => {
-        logsContent.textContent = "Failed to fetch logs.";
-      });
+    logsEventSource = new EventSource(url);
+    logsEventSource.onmessage = (event) => {
+      appendLogLine(JSON.parse(event.data).line);
+    };
+    // A named "log-error" event means the server hit a genuine kubectl
+    // failure (bad pod, permission, etc.) — stop instead of letting
+    // EventSource's default auto-reconnect hammer the same broken call
+    // every few seconds. A plain connection drop (pod restart, network
+    // blip) fires the unnamed native "error" event instead, which is left
+    // alone so the browser's normal auto-reconnect just resumes the tail.
+    logsEventSource.addEventListener("log-error", (event) => {
+      const data = JSON.parse(event.data);
+      renderErrorWithLink(logsContent, data.error, data.error_log_url);
+      stopLogsStream();
+    });
+    setLogsLiveUi(true);
   }
 
   if (logsModal) {
-    const logsLive = createLiveRefresher(3000, loadLogs, logsLiveToggle, logsLiveIndicator);
-
     document.querySelectorAll(".pod-logs-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         currentLogsPod = { namespace: btn.dataset.namespace, podName: btn.dataset.podName };
         logsTitle.textContent = currentLogsPod.podName;
         logsContainerInput.value = "";
         logsModal.showModal();
-        loadLogs();
-        logsLive.start();
+        startLogsStream();
       });
     });
 
     logsContainerForm.addEventListener("submit", (event) => {
       event.preventDefault();
-      loadLogs();
+      startLogsStream();
     });
 
-    logsModal.addEventListener("close", () => logsLive.stop());
+    if (logsLiveToggle) {
+      logsLiveToggle.addEventListener("click", () => (logsEventSource ? stopLogsStream() : startLogsStream()));
+    }
+
+    logsModal.addEventListener("close", () => stopLogsStream());
   }
 
   // --- Describe modal ---

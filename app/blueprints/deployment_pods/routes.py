@@ -1,4 +1,6 @@
-from flask import abort, flash, jsonify, redirect, render_template, request, url_for
+import json
+
+from flask import Response, abort, flash, jsonify, redirect, render_template, request, stream_with_context, url_for
 from flask_login import current_user
 
 from app.blueprints.deployment_pods import deployment_pods_bp
@@ -181,6 +183,44 @@ def pod_logs(server_id, namespace, pod_name):
                 "error_log_url": url_for("logs.error_detail", error_id=entry.id),
             }
         )
+
+
+@deployment_pods_bp.route("/<uuid:server_id>/pods/<namespace>/<pod_name>/logs/stream")
+@permission_required("deployment_pod.view")
+def pod_logs_stream(server_id, namespace, pod_name):
+    """Server-Sent Events — one `kubectl logs -f` per connection (see
+    KubernetesProvider.stream_pod_logs), fed to the Logs modal on
+    deployment_pods/list.html in place of its old 3s poll-and-refetch of
+    pod_logs() above. Each log line is sent as its own `data:` event; a
+    genuine kubectl failure is sent as a named `log-error` event instead so
+    the client can distinguish it from an ordinary connection drop (which
+    EventSource retries on its own) and stop rather than loop.
+    """
+    server = _kube_server_or_404(server_id)
+    container = request.args.get("container") or ""
+    provider = provider_for_server(server)
+
+    def generate():
+        try:
+            for line in provider.stream_pod_logs(namespace, pod_name, container=container or None):
+                yield f"data: {json.dumps({'line': line})}\n\n"
+        except Exception as exc:
+            entry = log_error(
+                source="deployment_pods.pod_logs_stream",
+                exc=exc,
+                description=f"Could not stream logs for pod '{pod_name}' ({namespace}) on '{server.name}': {exc}",
+            )
+            payload = {
+                "error": "Could not stream logs.",
+                "error_log_url": url_for("logs.error_detail", error_id=entry.id),
+            }
+            yield f"event: log-error\ndata: {json.dumps(payload)}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @deployment_pods_bp.route("/<uuid:server_id>/pods/<namespace>/<pod_name>/describe")

@@ -171,6 +171,53 @@ class KubernetesProvider(DeploymentProvider):
             raise RuntimeError(process.stderr.strip() or "kubectl logs failed.")
         return process.stdout
 
+    def stream_pod_logs(self, namespace, pod_name, container=None):
+        """Yields decoded stdout lines from `kubectl logs -f` as they're
+        written — used by the SSE log-tail endpoint
+        (deployment_pods.routes.pod_logs_stream) in place of pod_logs()'s
+        one-shot tail, so watching a pod's logs live no longer means
+        re-spawning kubectl (and a fresh kubeconfig auth handshake) every few
+        seconds. Unlike `_run_kubectl`, this uses `Popen` directly since the
+        process must stay alive for the generator's lifetime rather than
+        being waited on immediately; the `finally` block tears it down
+        whenever the generator is closed (client disconnect, or the SSE
+        route's own request ending), same lifetime pattern as the
+        `tempfile.TemporaryDirectory` it runs inside.
+        """
+        args = ["logs", pod_name, "-n", namespace, "-f", f"--tail={POD_LOG_TAIL_LINES}"]
+        if container:
+            args += ["-c", container]
+
+        with tempfile.TemporaryDirectory() as config_dir:
+            config_path = os.path.join(config_dir, "kubeconfig.yaml")
+            with open(config_path, "w") as config_file:
+                config_file.write(self.kubeconfig)
+
+            env = {**os.environ, "KUBECONFIG": config_path}
+            process = subprocess.Popen(
+                [KUBECTL_PATH, *args],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                bufsize=1,
+            )
+            try:
+                for line in process.stdout:
+                    yield line.rstrip("\n")
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+
+            if process.returncode not in (0, None):
+                stderr = (process.stderr.read() or "").strip()
+                raise RuntimeError(stderr or f"kubectl logs -f exited with code {process.returncode}")
+
     def describe_pod(self, namespace, pod_name):
         try:
             process = self._run_kubectl(

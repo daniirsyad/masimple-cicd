@@ -248,6 +248,51 @@ class TestPodLogsAndDescribe:
             assert error_log is not None
             assert data["error_log_url"] == f"/logs/errors/{error_log.id}"
 
+    def test_logs_stream_emits_one_sse_data_event_per_line(self, pod_client, kube_server, monkeypatch):
+        def _fake_stream(self, namespace, pod_name, container=None):
+            yield "line one"
+            yield "line two"
+
+        monkeypatch.setattr(KubernetesProvider, "stream_pod_logs", _fake_stream)
+        response = pod_client.get(f"/deployment-pods/{kube_server}/pods/default/app-abc123/logs/stream")
+        assert response.status_code == 200
+        assert response.mimetype == "text/event-stream"
+        body = response.get_data(as_text=True)
+        assert 'data: {"line": "line one"}' in body
+        assert 'data: {"line": "line two"}' in body
+
+    def test_logs_stream_passes_container_query_param_through(self, pod_client, kube_server, monkeypatch):
+        received = {}
+
+        def _fake_stream(self, namespace, pod_name, container=None):
+            received["container"] = container
+            return
+            yield  # pragma: no cover - makes this a generator function
+
+        monkeypatch.setattr(KubernetesProvider, "stream_pod_logs", _fake_stream)
+        response = pod_client.get(
+            f"/deployment-pods/{kube_server}/pods/default/app-abc123/logs/stream?container=sidecar"
+        )
+        assert response.status_code == 200
+        assert received["container"] == "sidecar"
+
+    def test_logs_stream_provider_error_sends_named_log_error_event(self, pod_client, kube_server, monkeypatch, app):
+        def _raise(self, namespace, pod_name, container=None):
+            raise RuntimeError("kubectl logs -f failed.")
+            yield  # pragma: no cover - makes this a generator function
+
+        monkeypatch.setattr(KubernetesProvider, "stream_pod_logs", _raise)
+        response = pod_client.get(f"/deployment-pods/{kube_server}/pods/default/app-abc123/logs/stream")
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        assert "event: log-error" in body
+        assert "Could not stream logs." in body
+
+        with app.app_context():
+            error_log = ErrorLog.query.filter_by(source="deployment_pods.pod_logs_stream").first()
+            assert error_log is not None
+            assert f"/logs/errors/{error_log.id}" in body
+
     def test_describe_returns_provider_output_as_json(self, pod_client, kube_server, monkeypatch):
         monkeypatch.setattr(
             KubernetesProvider, "describe_pod", lambda self, namespace, pod_name: "Name: app-abc123\nStatus: Running\n"
