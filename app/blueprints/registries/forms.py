@@ -5,7 +5,7 @@ from wtforms.validators import DataRequired, Length, Optional
 PROVIDER_TYPE_CHOICES = [
     ("dockerhub", "Docker Hub"),
     ("ghcr", "GHCR"),
-    ("harbor", "Harbor (not yet implemented)"),
+    ("harbor", "Harbor"),
     ("ecr", "ECR (not yet implemented)"),
     ("custom", "Custom (not yet implemented)"),
 ]
