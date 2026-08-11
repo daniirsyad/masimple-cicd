@@ -325,6 +325,49 @@ class TestRepoInfo:
         assert data["default_branch"] == "main"
 
 
+class TestEditFormBranchChoicesSurviveAMissingClone:
+    """Regression coverage for the "already-saved branch silently vanishes
+    from its own edit dropdown" bug: when a repo's local clone is missing
+    (e.g. lost on container restart before the repo_clones volume existed),
+    the live branch picker returns an empty list, but a Builder's own
+    already-saved default_branch must still render as a selectable/selected
+    option — see _branch_choices in app/blueprints/builders/routes.py.
+    """
+
+    def test_saved_branch_still_selectable_when_picker_returns_empty(
+        self, builder_client, app, base_entities, _fake_git_provider
+    ):
+        _fake_git_provider.branches = []  # simulates a missing local clone
+
+        with app.app_context():
+            builder = _make_builder(base_entities, name="b1", default_branch="release/1.0")
+            db.session.commit()
+            builder_id = builder.id
+
+        response = builder_client.get("/builders/")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+
+        assert '<option selected value="release/1.0">release/1.0</option>' in html
+
+    def test_other_saved_branches_are_unaffected_when_present_in_the_live_list(
+        self, builder_client, app, base_entities, _fake_git_provider
+    ):
+        _fake_git_provider.branches = ["main", "develop"]
+
+        with app.app_context():
+            builder = _make_builder(base_entities, name="b1", default_branch="main")
+            db.session.commit()
+
+        response = builder_client.get("/builders/")
+        html = response.get_data(as_text=True)
+
+        # Exactly one "main" option in this builder's branch select — the
+        # defensive fallback must not duplicate a branch already present in
+        # the live list.
+        assert html.count('value="main">main</option>') == 1
+
+
 class TestCreateBuilder:
     def test_creates_a_builder_with_build_args(self, builder_client, app, base_entities):
         response = builder_client.post(

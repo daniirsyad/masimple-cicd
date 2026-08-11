@@ -12,11 +12,13 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # Persistent clones of registered repos (see "Repo registration &
       # persistent clones") live at REPO_CLONE_ROOT, which defaults to
-      # ./data/repos inside the app itself (see config.py) — no volume is
-      # declared for it here on purpose. Without one, clones just live in the
-      # container's own writable layer and are lost on recreation; mount your
-      # own persistent storage onto /app/data/repos (bind mount, named
-      # volume, etc.) if you need them to survive it.
+      # ./data/repos inside the app itself (see config.py) — /app/data/repos
+      # in the container. Without this volume, clones live in the
+      # container's own writable layer and are lost on recreation, silently
+      # degrading Builder branch/Dockerfile pickers (and worse, hiding an
+      # already-saved Builder's own branch from its edit form) until the
+      # next manual Re-sync or build re-clones them.
+      - repo_clones:/app/data/repos
     depends_on:
       db:
         condition: service_healthy
@@ -39,3 +41,4 @@ services:
 
 volumes:
   db_data:
+  repo_clones:

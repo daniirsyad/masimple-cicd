@@ -84,6 +84,21 @@ def _repo_info(repository, cache):
     return cache[repository.id]
 
 
+def _branch_choices(info, saved_branch):
+    """Branch choices for a Builder's edit form, defensively including
+    `saved_branch` even if the live picker (`_repo_info`) came back empty —
+    e.g. the repo's local clone is temporarily missing. WTForms only ever
+    renders options from `.choices`, so without this a Builder whose config
+    is completely fine would have its own already-saved branch silently
+    vanish from its dropdown, reading as "something is broken" when nothing
+    is.
+    """
+    branches = list(info["branches"])
+    if saved_branch and saved_branch not in branches:
+        branches.append(saved_branch)
+    return [(b, b) for b in branches]
+
+
 def _parse_build_args():
     keys = request.form.getlist("build_arg_key")
     values = request.form.getlist("build_arg_value")
@@ -186,7 +201,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None, selected
             invalid_form.repository_id.choices = _repository_choices()
             invalid_form.registry_target_id.choices = _registry_choices()
             invalid_form.allowed_role_ids.choices = _role_choices()
-            invalid_form.default_branch.choices = [(b, b) for b in info["branches"]]
+            invalid_form.default_branch.choices = _branch_choices(info, invalid_form.default_branch.data)
             edit_forms[builder.id] = invalid_form
         else:
             form = BuilderForm(obj=builder, prefix=_edit_prefix(builder.id))
@@ -198,7 +213,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None, selected
             form.repository_id.data = str(builder.repository_id)
             form.registry_target_id.data = str(builder.registry_target_id)
             form.allowed_role_ids.data = [str(role.id) for role in builder.allowed_roles]
-            form.default_branch.choices = [(b, b) for b in info["branches"]]
+            form.default_branch.choices = _branch_choices(info, builder.default_branch)
             form.default_branch.data = builder.default_branch
             edit_forms[builder.id] = form
 
