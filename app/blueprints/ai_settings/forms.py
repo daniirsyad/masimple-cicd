@@ -4,7 +4,7 @@ from wtforms.validators import DataRequired, Length, Optional
 
 PROVIDER_TYPE_CHOICES = [
     ("qwen", "Qwen"),
-    ("claude", "Claude (not yet implemented)"),
+    ("claude", "Claude"),
     ("gemini", "Gemini (not yet implemented)"),
     ("custom", "Custom API (not yet implemented)"),
 ]

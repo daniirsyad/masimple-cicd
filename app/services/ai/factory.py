@@ -2,10 +2,12 @@ import os
 
 from app.models import AIProviderConfig
 from app.utils.crypto import decrypt
+from app.services.ai.claude import ClaudeProvider
 from app.services.ai.qwen import QwenProvider
 
 _PROVIDERS = {
     "qwen": QwenProvider,
+    "claude": ClaudeProvider,
 }
 
 
