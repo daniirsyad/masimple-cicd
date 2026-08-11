@@ -3,6 +3,7 @@ import os
 from app.models import AIProviderConfig
 from app.utils.crypto import decrypt
 from app.services.ai.claude import ClaudeProvider
+from app.services.ai.custom_api import CustomAPIProvider
 from app.services.ai.gemini import GeminiProvider
 from app.services.ai.qwen import QwenProvider
 
@@ -10,6 +11,7 @@ _PROVIDERS = {
     "qwen": QwenProvider,
     "claude": ClaudeProvider,
     "gemini": GeminiProvider,
+    "custom": CustomAPIProvider,
 }
 
 
@@ -64,4 +66,5 @@ def get_ai_provider(provider_type=None):
 
     api_key = _resolve_api_key(provider_type, config)
     model_name = config.model_name if config else None
-    return provider_cls(api_key=api_key, model_name=model_name)
+    endpoint_url = config.endpoint_url if config else None
+    return provider_cls(api_key=api_key, model_name=model_name, endpoint_url=endpoint_url)

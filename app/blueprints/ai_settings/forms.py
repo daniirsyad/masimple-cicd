@@ -6,7 +6,7 @@ PROVIDER_TYPE_CHOICES = [
     ("qwen", "Qwen"),
     ("claude", "Claude"),
     ("gemini", "Gemini"),
-    ("custom", "Custom API (not yet implemented)"),
+    ("custom", "Custom API"),
 ]
 
 
