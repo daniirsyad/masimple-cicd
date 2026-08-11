@@ -1,7 +1,9 @@
 from app.services.registry.dockerhub import DockerHubProvider
+from app.services.registry.ghcr import GHCRProvider
 
 _PROVIDERS = {
     "dockerhub": DockerHubProvider,
+    "ghcr": GHCRProvider,
 }
 
 

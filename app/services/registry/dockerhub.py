@@ -14,7 +14,12 @@ class DockerHubProvider(RegistryProvider):
     use, so adding those later only needs a different realm/host, not different calling code.
     """
 
-    def __init__(self, username=None, password=None):
+    def __init__(self, username=None, password=None, registry_url=None):
+        # registry_url is accepted (not just DockerHubProvider — every
+        # RegistryProvider now takes the same superset of constructor
+        # kwargs, see get_registry_provider's call sites) but unused here:
+        # Docker Hub's host is fixed (REGISTRY_HOST below), unlike a
+        # self-hosted registry (Harbor) or one needing a derived host (ECR).
         self.username = username or os.environ.get("DOCKERHUB_USERNAME")
         self.password = password or os.environ.get("DOCKERHUB_TOKEN")
 

@@ -142,32 +142,32 @@ class TestCreateRegistry:
         registry_client.post(
             "/registries/create",
             data={
-                "create-registry-name": "ghcr-no-url",
-                "create-registry-provider_type": "ghcr",
+                "create-registry-name": "harbor-no-url",
+                "create-registry-provider_type": "harbor",
                 "create-registry-username": "someuser",
                 "create-registry-token": "sometoken",
             },
         )
         with app.app_context():
-            assert RegistryTarget.query.filter_by(name="ghcr-no-url").first() is None
+            assert RegistryTarget.query.filter_by(name="harbor-no-url").first() is None
 
     def test_unimplemented_provider_type_skips_validation_and_still_saves(self, registry_client, app):
         response = registry_client.post(
             "/registries/create",
             data={
-                "create-registry-name": "ghcr-future",
-                "create-registry-provider_type": "ghcr",
+                "create-registry-name": "custom-future",
+                "create-registry-provider_type": "custom",
                 "create-registry-username": "someuser",
                 "create-registry-token": "sometoken",
-                "create-registry-registry_url": "ghcr.io",
+                "create-registry-registry_url": "registry.example.com",
             },
             follow_redirects=True,
         )
         assert response.status_code == 200
         with app.app_context():
-            target = RegistryTarget.query.filter_by(name="ghcr-future").first()
+            target = RegistryTarget.query.filter_by(name="custom-future").first()
             assert target is not None
-            assert target.provider_type == "ghcr"
+            assert target.provider_type == "custom"
 
 
 class TestEditRegistry:

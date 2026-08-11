@@ -762,7 +762,7 @@ class TestRunBuild:
         monkeypatch.setattr("app.services.build.worker.get_build_engine", lambda: fake_engine)
         monkeypatch.setattr(
             "app.services.build.worker.get_registry_provider",
-            lambda provider_type, username, password: fake_registry,
+            lambda provider_type, username, password, registry_url=None: fake_registry,
         )
 
         _run_build(app, build_id)
@@ -801,7 +801,7 @@ class TestRunBuild:
         monkeypatch.setattr("app.services.build.worker.get_build_engine", lambda: fake_engine)
         monkeypatch.setattr(
             "app.services.build.worker.get_registry_provider",
-            lambda provider_type, username, password: _FakeRegistryProvider(),
+            lambda provider_type, username, password, registry_url=None: _FakeRegistryProvider(),
         )
 
         _run_build(app, build_id)
@@ -830,7 +830,7 @@ class TestRunBuild:
         monkeypatch.setattr("app.services.build.worker.get_build_engine", lambda: fake_engine)
         monkeypatch.setattr(
             "app.services.build.worker.get_registry_provider",
-            lambda provider_type, username, password: fake_registry,
+            lambda provider_type, username, password, registry_url=None: fake_registry,
         )
 
         _run_build(app, build_id)
@@ -859,7 +859,7 @@ class TestRunBuild:
         )
         monkeypatch.setattr(
             "app.services.build.worker.get_registry_provider",
-            lambda provider_type, username, password: _FakeRegistryProvider(),
+            lambda provider_type, username, password, registry_url=None: _FakeRegistryProvider(),
         )
 
         _run_build(app, build_id)
@@ -887,7 +887,7 @@ class TestRunBuild:
         )
         monkeypatch.setattr(
             "app.services.build.worker.get_registry_provider",
-            lambda provider_type, username, password: fake_registry,
+            lambda provider_type, username, password, registry_url=None: fake_registry,
         )
 
         _run_build(app, build_id)
@@ -918,7 +918,7 @@ class TestRunBuildFailureModes:
         )
         monkeypatch.setattr(
             "app.services.build.worker.get_registry_provider",
-            lambda provider_type, username, password: fake_registry,
+            lambda provider_type, username, password, registry_url=None: fake_registry,
         )
 
         _run_build(app, build_id)
@@ -958,7 +958,7 @@ class TestRunBuildFailureModes:
         )
         monkeypatch.setattr(
             "app.services.build.worker.get_registry_provider",
-            lambda provider_type, username, password: _FakeRegistryProvider(),
+            lambda provider_type, username, password, registry_url=None: _FakeRegistryProvider(),
         )
 
         _run_build(app, build_id)

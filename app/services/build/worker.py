@@ -407,6 +407,7 @@ def _run_build(app, build_id):
                 registry_target.provider_type,
                 username=registry_target.username,
                 password=decrypt(registry_target.encrypted_token),
+                registry_url=registry_target.registry_url,
             )
             # Store the fully-qualified pushed reference (e.g. with the Docker
             # Hub account name prepended), not just the local build tag, so
