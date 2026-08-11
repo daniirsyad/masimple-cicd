@@ -1,3 +1,6 @@
+import threading
+from datetime import datetime, timedelta
+
 from app.extensions import db
 from app.models import (
     Builder,
@@ -14,11 +17,15 @@ from app.models import (
     Version,
     VersionType,
 )
+from app.services.deployment import worker as deployment_worker
 from app.services.deployment.base import DeployResult
 from app.services.deployment.kubernetes_provider import KubernetesProvider
 from app.services.deployment.worker import (
+    HEARTBEAT_STALE_SECONDS,
     _claim_next_job,
+    _heartbeat_tick,
     _live_check_candidates,
+    _reap_stale_running_job,
     _refresh_live_status,
     _run_deployment,
     _update_run_status,
@@ -108,6 +115,128 @@ class TestClaimNextJob:
     def test_returns_none_when_nothing_queued(self, app):
         with app.app_context():
             assert _claim_next_job() is None
+
+
+def _enqueue_and_claim(app, entities):
+    """Enqueue a single-execution deploy run and claim it — the realistic
+    way to reach "running" for the reap/heartbeat tests below.
+    """
+    with app.app_context():
+        manifest = DeploymentManifest.query.get(entities["manifest_id"])
+        enqueue_deployment_run(manifests=[manifest], triggered_by=None)
+        claimed_id = _claim_next_job()
+        return claimed_id
+
+
+class TestReapStaleRunningJob:
+    def test_recent_heartbeat_is_not_reaped(self, app):
+        entities = _make_entities(app)
+        execution_id = _enqueue_and_claim(app, entities)
+        with app.app_context():
+            execution = DeploymentExecution.query.get(execution_id)
+            execution.heartbeat_at = datetime.utcnow()
+            db.session.commit()
+
+            _reap_stale_running_job()
+            assert DeploymentExecution.query.get(execution_id).status == "running"
+
+    def test_stale_heartbeat_is_reaped_and_run_status_updates(self, app):
+        entities = _make_entities(app)
+        execution_id = _enqueue_and_claim(app, entities)
+        with app.app_context():
+            execution = DeploymentExecution.query.get(execution_id)
+            run_id = execution.run_id
+            execution.heartbeat_at = datetime.utcnow() - timedelta(seconds=HEARTBEAT_STALE_SECONDS + 1)
+            db.session.commit()
+
+            _reap_stale_running_job()
+
+            execution = DeploymentExecution.query.get(execution_id)
+            assert execution.status == "failed"
+            assert execution.finished_at is not None
+            assert "[reaper]" in execution.log
+            assert DeploymentRun.query.get(run_id).status == "failed"
+
+    def test_null_heartbeat_is_treated_as_stale(self, app):
+        """A legacy pre-migration ghost row: heartbeat_at was never set."""
+        entities = _make_entities(app)
+        execution_id = _enqueue_and_claim(app, entities)
+        with app.app_context():
+            execution = DeploymentExecution.query.get(execution_id)
+            execution.heartbeat_at = None
+            db.session.commit()
+
+            _reap_stale_running_job()
+            assert DeploymentExecution.query.get(execution_id).status == "failed"
+
+    def test_no_running_job_is_a_noop(self, app):
+        with app.app_context():
+            _reap_stale_running_job()  # must not raise
+
+    def test_reaping_frees_the_slot_for_the_next_queued_execution(self, app):
+        entities = _make_entities(app)
+        first_id = _enqueue_and_claim(app, entities)
+        with app.app_context():
+            manifest = DeploymentManifest.query.get(entities["manifest_id"])
+            enqueue_deployment_run(manifests=[manifest], triggered_by=None)
+            second_id = (
+                DeploymentExecution.query.filter(DeploymentExecution.status == "queued").first().id
+            )
+
+            execution = DeploymentExecution.query.get(first_id)
+            execution.heartbeat_at = datetime.utcnow() - timedelta(seconds=HEARTBEAT_STALE_SECONDS + 1)
+            db.session.commit()
+
+            _reap_stale_running_job()
+            assert _claim_next_job() == second_id
+
+    def test_concurrent_reap_attempts_only_apply_once(self, app):
+        """Mirrors build.worker's own concurrent-reap test — two processes'
+        reap checks racing on the same stale row must not both apply the
+        transition."""
+        entities = _make_entities(app)
+        execution_id = _enqueue_and_claim(app, entities)
+        with app.app_context():
+            execution = DeploymentExecution.query.get(execution_id)
+            execution.heartbeat_at = datetime.utcnow() - timedelta(seconds=HEARTBEAT_STALE_SECONDS + 1)
+            db.session.commit()
+
+        def attempt_reap():
+            with app.app_context():
+                _reap_stale_running_job()
+                db.session.remove()
+
+        threads = [threading.Thread(target=attempt_reap) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        with app.app_context():
+            execution = DeploymentExecution.query.get(execution_id)
+            assert execution.status == "failed"
+            assert execution.log.count("[reaper]") == 1
+
+
+class TestHeartbeatTick:
+    def test_ticks_heartbeat_for_the_currently_owned_execution(self, app):
+        entities = _make_entities(app)
+        execution_id = _enqueue_and_claim(app, entities)
+        with app.app_context():
+            old_heartbeat = DeploymentExecution.query.get(execution_id).heartbeat_at
+
+        deployment_worker._current_execution_id = execution_id
+        try:
+            _heartbeat_tick(app)
+        finally:
+            deployment_worker._current_execution_id = None
+
+        with app.app_context():
+            assert DeploymentExecution.query.get(execution_id).heartbeat_at > old_heartbeat
+
+    def test_noop_when_no_execution_is_currently_owned(self, app):
+        deployment_worker._current_execution_id = None
+        _heartbeat_tick(app)  # must not raise
 
 
 class TestRunDeployment:

@@ -29,6 +29,7 @@ class ImageBuild(db.Model):
     queue_position = db.Column(db.Integer, nullable=True)
     started_at = db.Column(db.DateTime, nullable=True)
     finished_at = db.Column(db.DateTime, nullable=True)
+    heartbeat_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     batch = db.relationship("BuildBatch", backref=db.backref("image_builds", lazy="dynamic"))

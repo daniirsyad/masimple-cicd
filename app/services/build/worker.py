@@ -1,7 +1,7 @@
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy.exc import IntegrityError
 
@@ -20,8 +20,23 @@ from app.utils.error_logger import log_error
 POLL_INTERVAL_SECONDS = 2
 LOG_FLUSH_EVERY_N_LINES = 20
 
+# Heartbeat cadence for detecting a worker process that died mid-build (see
+# _heartbeat_loop/_reap_stale_running_job). Deliberately decoupled from
+# build log activity (flush_log/on_log_line) so a legitimately slow, quiet
+# build (large layer pull, slow git clone) never false-positives — only the
+# owning thread/process itself dying stops the heartbeat. 4x the interval
+# gives margin against scheduler jitter under load.
+HEARTBEAT_INTERVAL_SECONDS = 15
+HEARTBEAT_STALE_SECONDS = HEARTBEAT_INTERVAL_SECONDS * 4
+
 _worker_started = False
 _worker_lock = threading.Lock()
+
+# Which ImageBuild id (if any) *this process* currently owns — at most one
+# of the fleet's processes will ever have this set, since only one
+# ImageBuild can be 'running' system-wide (ix_image_builds_single_running).
+_current_build_id = None
+_current_build_lock = threading.Lock()
 
 
 def enqueue_build_batch(
@@ -139,6 +154,7 @@ def _claim_next_job():
 
     build.status = "running"
     build.started_at = datetime.utcnow()
+    build.heartbeat_at = build.started_at
 
     # no_autoflush: build.batch/batch.version are lazy-loaded relationships,
     # and loading them would otherwise autoflush the pending build.status
@@ -159,6 +175,90 @@ def _claim_next_job():
         db.session.rollback()
         return None
     return build.id
+
+
+def _heartbeat_tick(app):
+    """Bump heartbeat_at on the ImageBuild this process currently owns, if
+    any. No-ops for the other (at most 2) processes in the fleet that aren't
+    running anything right now — see _current_build_id's docstring.
+    """
+    with _current_build_lock:
+        build_id = _current_build_id
+    if build_id is None:
+        return
+
+    with app.app_context():
+        ImageBuild.query.filter_by(id=build_id, status="running").update(
+            {"heartbeat_at": datetime.utcnow()}, synchronize_session=False
+        )
+        db.session.commit()
+        db.session.remove()
+
+
+def _heartbeat_loop(app):
+    while True:
+        try:
+            _heartbeat_tick(app)
+        except Exception as exc:  # a bad tick must not kill the heartbeat thread
+            with app.app_context():
+                log_error(
+                    source="worker.heartbeat",
+                    exc=exc,
+                    description=f"Build worker heartbeat tick failed: {exc}",
+                )
+        time.sleep(HEARTBEAT_INTERVAL_SECONDS)
+
+
+def _reap_stale_running_job():
+    """If the single 'running' ImageBuild's heartbeat has gone stale (or was
+    never set — a pre-migration ghost row), the process that claimed it is
+    assumed to have died mid-build. Fails it out so the single-flight slot
+    (ix_image_builds_single_running) frees up for the next queued build,
+    instead of staying wedged forever.
+
+    Uses a WHERE-guarded UPDATE + rowcount check rather than relying on a
+    unique-index collision like _claim_next_job does — there's no constraint
+    protecting this particular transition — so a no-op rowcount is treated
+    the same way a lost race is treated there: nothing to do. This also
+    makes it safe against the job actually finishing (success/failed) in its
+    owning process at almost the same moment: that commit already moved
+    status off 'running', so this UPDATE's WHERE clause matches zero rows.
+    """
+    stale = ImageBuild.query.filter_by(status="running").first()
+    if stale is None:
+        db.session.rollback()
+        return
+
+    threshold = datetime.utcnow() - timedelta(seconds=HEARTBEAT_STALE_SECONDS)
+    if stale.heartbeat_at is not None and stale.heartbeat_at >= threshold:
+        db.session.rollback()
+        return
+
+    rowcount = (
+        ImageBuild.query.filter(
+            ImageBuild.id == stale.id,
+            ImageBuild.status == "running",
+        )
+        .filter(db.or_(ImageBuild.heartbeat_at.is_(None), ImageBuild.heartbeat_at < threshold))
+        .update({"status": "failed", "finished_at": datetime.utcnow()}, synchronize_session=False)
+    )
+    if rowcount == 0:
+        db.session.rollback()
+        return
+
+    db.session.commit()
+
+    build = ImageBuild.query.get(stale.id)
+    build.build_log = (build.build_log or "") + (
+        f"\n\n[reaper] No heartbeat for over {HEARTBEAT_STALE_SECONDS}s — assuming the "
+        "worker process that claimed this build crashed. Marking failed.\n"
+    )
+    db.session.commit()
+    log_error(
+        source="worker.reap_stale_job",
+        description=f"Reaped stale running build {build.id} (batch {build.batch_id}): no heartbeat.",
+    )
+    _update_batch_status(build.batch_id)
 
 
 def _generate_ai_description(batch):
@@ -374,13 +474,21 @@ def _run_build(app, build_id):
 
 
 def _poll_loop(app):
+    global _current_build_id
     while True:
         with app.app_context():
+            _reap_stale_running_job()
             build_id = _claim_next_job()
             db.session.remove()
 
         if build_id is not None:
-            _run_build(app, build_id)
+            with _current_build_lock:
+                _current_build_id = build_id
+            try:
+                _run_build(app, build_id)
+            finally:
+                with _current_build_lock:
+                    _current_build_id = None
         else:
             time.sleep(POLL_INTERVAL_SECONDS)
 
@@ -408,3 +516,8 @@ def start_worker(app):
 
     thread = threading.Thread(target=_poll_loop, args=(app,), daemon=True, name="image-builder-worker")
     thread.start()
+
+    heartbeat_thread = threading.Thread(
+        target=_heartbeat_loop, args=(app,), daemon=True, name="image-builder-heartbeat"
+    )
+    heartbeat_thread.start()

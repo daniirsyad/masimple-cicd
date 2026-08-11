@@ -1,5 +1,5 @@
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.extensions import db
 from app.models import (
@@ -15,9 +15,13 @@ from app.models import (
     VersionDocumentation,
     VersionType,
 )
+from app.services.build import worker as build_worker
 from app.services.build.worker import (
+    HEARTBEAT_STALE_SECONDS,
     _claim_next_job,
     _derive_image_name,
+    _heartbeat_tick,
+    _reap_stale_running_job,
     _run_build,
     _update_batch_status,
     enqueue_build_batch,
@@ -576,6 +580,116 @@ class TestClaimNextJob:
             db.session.commit()
 
             assert _claim_next_job() == second_id
+
+
+class TestReapStaleRunningJob:
+    def test_recent_heartbeat_is_not_reaped(self, app):
+        entities = _make_entities(app)
+        build_id = _make_queued_build(app, entities)
+        with app.app_context():
+            build = _claim(build_id)
+            build.heartbeat_at = datetime.utcnow()
+            db.session.commit()
+
+            _reap_stale_running_job()
+            assert ImageBuild.query.get(build_id).status == "running"
+
+    def test_stale_heartbeat_is_reaped_and_batch_status_updates(self, app):
+        entities = _make_entities(app)
+        build_id = _make_queued_build(app, entities)
+        with app.app_context():
+            build = _claim(build_id)
+            batch_id = build.batch_id
+            build.heartbeat_at = datetime.utcnow() - timedelta(seconds=HEARTBEAT_STALE_SECONDS + 1)
+            db.session.commit()
+
+            _reap_stale_running_job()
+
+            build = ImageBuild.query.get(build_id)
+            assert build.status == "failed"
+            assert build.finished_at is not None
+            assert "[reaper]" in build.build_log
+            assert BuildBatch.query.get(batch_id).status == "failed"
+
+    def test_null_heartbeat_is_treated_as_stale(self, app):
+        """A legacy pre-migration ghost row: heartbeat_at was never set."""
+        entities = _make_entities(app)
+        build_id = _make_queued_build(app, entities)
+        with app.app_context():
+            build = _claim(build_id)
+            build.heartbeat_at = None
+            db.session.commit()
+
+            _reap_stale_running_job()
+            assert ImageBuild.query.get(build_id).status == "failed"
+
+    def test_no_running_job_is_a_noop(self, app):
+        with app.app_context():
+            _reap_stale_running_job()  # must not raise
+
+    def test_reaping_frees_the_slot_for_the_next_queued_build(self, app):
+        entities = _make_entities(app)
+        first_id = _make_queued_build(app, entities)
+        second_id = _make_queued_build(app, entities)
+        with app.app_context():
+            build = _claim(first_id)
+            build.heartbeat_at = datetime.utcnow() - timedelta(seconds=HEARTBEAT_STALE_SECONDS + 1)
+            db.session.commit()
+
+            _reap_stale_running_job()
+            assert _claim_next_job() == second_id
+
+    def test_concurrent_reap_attempts_only_apply_once(self, app):
+        """Mirrors test_concurrent_claims_only_one_thread_wins_the_race — two
+        processes' reap checks racing on the same stale row must not both
+        apply the transition (which would double-append the reaper log line
+        and double-run the downstream batch-status update).
+        """
+        entities = _make_entities(app)
+        build_id = _make_queued_build(app, entities)
+        with app.app_context():
+            build = _claim(build_id)
+            build.heartbeat_at = datetime.utcnow() - timedelta(seconds=HEARTBEAT_STALE_SECONDS + 1)
+            db.session.commit()
+
+        def attempt_reap():
+            with app.app_context():
+                _reap_stale_running_job()
+                db.session.remove()
+
+        threads = [threading.Thread(target=attempt_reap) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        with app.app_context():
+            build = ImageBuild.query.get(build_id)
+            assert build.status == "failed"
+            assert build.build_log.count("[reaper]") == 1
+
+
+class TestHeartbeatTick:
+    def test_ticks_heartbeat_for_the_currently_owned_build(self, app):
+        entities = _make_entities(app)
+        build_id = _make_queued_build(app, entities)
+        with app.app_context():
+            build = _claim(build_id)
+            old_heartbeat = build.heartbeat_at
+            db.session.commit()
+
+        build_worker._current_build_id = build_id
+        try:
+            _heartbeat_tick(app)
+        finally:
+            build_worker._current_build_id = None
+
+        with app.app_context():
+            assert ImageBuild.query.get(build_id).heartbeat_at > old_heartbeat
+
+    def test_noop_when_no_build_is_currently_owned(self, app):
+        build_worker._current_build_id = None
+        _heartbeat_tick(app)  # must not raise
 
 
 class _FakeGitProvider:

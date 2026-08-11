@@ -63,6 +63,7 @@ class DeploymentExecution(db.Model):
     live_checked_at = db.Column(db.DateTime, nullable=True)
     started_at = db.Column(db.DateTime, nullable=True)
     finished_at = db.Column(db.DateTime, nullable=True)
+    heartbeat_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     run = db.relationship("DeploymentRun", backref=db.backref("executions", lazy="dynamic"))

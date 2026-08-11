@@ -9,7 +9,7 @@ worker's ImageBuild one.
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy.exc import IntegrityError
 
@@ -26,10 +26,24 @@ POLL_INTERVAL_SECONDS = 2
 # runaway tight loop if someone sets it to 0 or a negative value.
 STATUS_POLL_MIN_INTERVAL_SECONDS = 5
 
+# Heartbeat cadence for detecting a worker process that died mid-deploy —
+# mirrors app/services/build/worker.py's own heartbeat constants/reasoning
+# exactly (kept independent, not shared, same as the rest of this module's
+# duplication of the build worker's queue pattern).
+HEARTBEAT_INTERVAL_SECONDS = 15
+HEARTBEAT_STALE_SECONDS = HEARTBEAT_INTERVAL_SECONDS * 4
+
 _worker_started = False
 _worker_lock = threading.Lock()
 _poller_started = False
 _poller_lock = threading.Lock()
+
+# Which DeploymentExecution id (if any) *this process* currently owns — at
+# most one of the fleet's processes will ever have this set, since only one
+# DeploymentExecution can be 'running' system-wide
+# (ix_deployment_executions_single_running).
+_current_execution_id = None
+_current_execution_lock = threading.Lock()
 
 
 def get_current_deployment(manifest_id, server_id):
@@ -182,6 +196,7 @@ def _claim_next_job():
 
     execution.status = "running"
     execution.started_at = datetime.utcnow()
+    execution.heartbeat_at = execution.started_at
 
     try:
         db.session.commit()
@@ -227,6 +242,83 @@ def _update_run_status(run_id):
         run.status = "queued"
 
     db.session.commit()
+
+
+def _heartbeat_tick(app):
+    """Bump heartbeat_at on the DeploymentExecution this process currently
+    owns, if any — mirrors build.worker._heartbeat_tick exactly.
+    """
+    with _current_execution_lock:
+        execution_id = _current_execution_id
+    if execution_id is None:
+        return
+
+    with app.app_context():
+        DeploymentExecution.query.filter_by(id=execution_id, status="running").update(
+            {"heartbeat_at": datetime.utcnow()}, synchronize_session=False
+        )
+        db.session.commit()
+        db.session.remove()
+
+
+def _heartbeat_loop(app):
+    while True:
+        try:
+            _heartbeat_tick(app)
+        except Exception as exc:  # a bad tick must not kill the heartbeat thread
+            with app.app_context():
+                log_error(
+                    source="deployment.worker.heartbeat",
+                    exc=exc,
+                    description=f"Deploy worker heartbeat tick failed: {exc}",
+                )
+        time.sleep(HEARTBEAT_INTERVAL_SECONDS)
+
+
+def _reap_stale_running_job():
+    """If the single 'running' DeploymentExecution's heartbeat has gone
+    stale (or was never set — a pre-migration ghost row), the process that
+    claimed it is assumed to have died mid-deploy. Fails it out so the
+    single-flight slot (ix_deployment_executions_single_running) frees up
+    for the next queued execution — see build.worker._reap_stale_running_job
+    for the full reasoning behind the WHERE-guarded-UPDATE-plus-rowcount
+    idiom used here, identical to that one.
+    """
+    stale = DeploymentExecution.query.filter_by(status="running").first()
+    if stale is None:
+        db.session.rollback()
+        return
+
+    threshold = datetime.utcnow() - timedelta(seconds=HEARTBEAT_STALE_SECONDS)
+    if stale.heartbeat_at is not None and stale.heartbeat_at >= threshold:
+        db.session.rollback()
+        return
+
+    rowcount = (
+        DeploymentExecution.query.filter(
+            DeploymentExecution.id == stale.id,
+            DeploymentExecution.status == "running",
+        )
+        .filter(db.or_(DeploymentExecution.heartbeat_at.is_(None), DeploymentExecution.heartbeat_at < threshold))
+        .update({"status": "failed", "finished_at": datetime.utcnow()}, synchronize_session=False)
+    )
+    if rowcount == 0:
+        db.session.rollback()
+        return
+
+    db.session.commit()
+
+    execution = DeploymentExecution.query.get(stale.id)
+    execution.log = (execution.log or "") + (
+        f"\n\n[reaper] No heartbeat for over {HEARTBEAT_STALE_SECONDS}s — assuming the "
+        "worker process that claimed this execution crashed. Marking failed.\n"
+    )
+    db.session.commit()
+    log_error(
+        source="deployment.worker.reap_stale_job",
+        description=f"Reaped stale running execution {execution.id} (run {execution.run_id}): no heartbeat.",
+    )
+    _update_run_status(execution.run_id)
 
 
 def _run_deployment(app, execution_id):
@@ -329,13 +421,21 @@ def _run_deployment(app, execution_id):
 
 
 def _poll_loop(app):
+    global _current_execution_id
     while True:
         with app.app_context():
+            _reap_stale_running_job()
             execution_id = _claim_next_job()
             db.session.remove()
 
         if execution_id is not None:
-            _run_deployment(app, execution_id)
+            with _current_execution_lock:
+                _current_execution_id = execution_id
+            try:
+                _run_deployment(app, execution_id)
+            finally:
+                with _current_execution_lock:
+                    _current_execution_id = None
         else:
             time.sleep(POLL_INTERVAL_SECONDS)
 
@@ -422,6 +522,11 @@ def start_worker(app):
 
     thread = threading.Thread(target=_poll_loop, args=(app,), daemon=True, name="deployment-worker")
     thread.start()
+
+    heartbeat_thread = threading.Thread(
+        target=_heartbeat_loop, args=(app,), daemon=True, name="deployment-worker-heartbeat"
+    )
+    heartbeat_thread.start()
 
 
 def start_status_poller(app):
