@@ -1,4 +1,5 @@
 from app.services.registry.dockerhub import DockerHubProvider
+from app.services.registry.ecr import ECRProvider
 from app.services.registry.ghcr import GHCRProvider
 from app.services.registry.harbor import HarborProvider
 
@@ -6,6 +7,7 @@ _PROVIDERS = {
     "dockerhub": DockerHubProvider,
     "ghcr": GHCRProvider,
     "harbor": HarborProvider,
+    "ecr": ECRProvider,
 }
 
 

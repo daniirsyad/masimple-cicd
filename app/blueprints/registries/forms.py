@@ -6,7 +6,7 @@ PROVIDER_TYPE_CHOICES = [
     ("dockerhub", "Docker Hub"),
     ("ghcr", "GHCR"),
     ("harbor", "Harbor"),
-    ("ecr", "ECR (not yet implemented)"),
+    ("ecr", "ECR (AWS access key ID as Username, secret access key as Token)"),
     ("custom", "Custom (not yet implemented)"),
 ]
 

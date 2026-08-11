@@ -14,14 +14,15 @@ CREATE_PREFIX = "create-registry-"
 DOCKERHUB = "dockerhub"
 GHCR = "ghcr"
 HARBOR = "harbor"
+ECR = "ecr"
 
-# Docker Hub, GHCR, and Harbor have real provider classes; the dropdown
-# lists the rest (per spec) so adding them later is just a new class, no
-# schema change. Saving a not-yet-implemented provider type is allowed
-# (mirrors how AIProviderConfig lets Claude/Gemini/Custom be configured
-# ahead of their implementation) — it's just skipped during
+# Docker Hub, GHCR, Harbor, and ECR have real provider classes; the
+# dropdown lists the rest (per spec) so adding them later is just a new
+# class, no schema change. Saving a not-yet-implemented provider type is
+# allowed (mirrors how AIProviderConfig lets Claude/Gemini/Custom be
+# configured ahead of their implementation) — it's just skipped during
 # validate_credentials().
-IMPLEMENTED_PROVIDER_TYPES = {DOCKERHUB, GHCR, HARBOR}
+IMPLEMENTED_PROVIDER_TYPES = {DOCKERHUB, GHCR, HARBOR, ECR}
 
 # Provider types with a fixed, hardcoded registry host (Docker Hub, GHCR) —
 # unlike a self-hosted target (Harbor) or one needing a derived host (ECR),
