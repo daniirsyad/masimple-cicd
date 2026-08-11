@@ -14,6 +14,7 @@ from app.models import (
     DeploymentServer,
     ImageBuild,
     User,
+    WorkflowStep,
 )
 from app.services.deployment.resolver import UnresolvedPlaceholderError, find_placeholder_keys, resolve_manifest
 from app.services.deployment.worker import (
@@ -434,6 +435,19 @@ def delete_manifest(manifest_id):
     if live_servers:
         names = ", ".join(server.name for server in live_servers)
         flash(f"Cannot delete '{manifest.name}' — still deployed on: {names}. Stop it first.", "error")
+        return redirect(url_for("deployment_manifests.index"))
+
+    # Blocks on a WorkflowStep's individual selection (a real FK, via
+    # workflow_step_manifests) — not on merely sharing a group_name with a
+    # WorkflowStepGroup, which is a live/dynamic reference with no FK to
+    # violate (see WorkflowStepGroup's docstring).
+    referencing_steps = WorkflowStep.query.filter(WorkflowStep.selected_manifests.any(id=manifest.id)).count()
+    if referencing_steps:
+        flash(
+            f"Cannot delete '{manifest.name}' — it's individually selected in {referencing_steps} "
+            "workflow step(s). Remove it from those steps first.",
+            "error",
+        )
         return redirect(url_for("deployment_manifests.index"))
 
     # Detach rather than cascade or block: version bindings have no

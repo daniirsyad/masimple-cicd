@@ -1,0 +1,110 @@
+{% extends "base.html" %} {% block title %}Workflows -
+MASIMPLE CICD{% endblock %} {% block content %}
+
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold">Workflows</h1>
+  <button
+    type="button"
+    class="btn btn-primary btn-sm"
+    onclick="document.getElementById('create-workflow-modal').showModal()"
+  >
+    + New Workflow
+  </button>
+</div>
+<p class="mt-1 text-sm text-base-content/60">
+  An ordered sequence of existing Builders/Manifests, run one step at a time — build a batch, then deploy it, then
+  deploy again elsewhere, in whatever order you define.
+</p>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    {% if workflows %}
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Description</th>
+            <th>Status</th>
+            <th>Steps</th>
+            <th>Access</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for workflow in workflows %}
+          <tr>
+            <td>
+              <a class="link link-primary" href="{{ url_for('workflows.view_workflow', workflow_id=workflow.id) }}"
+                >{{ workflow.name }}</a
+              >
+            </td>
+            <td class="max-w-xs truncate text-xs text-base-content/70">{{ workflow.description or "—" }}</td>
+            <td>
+              {% if workflow.is_active %}
+              <span class="badge badge-success badge-sm">Active</span>
+              {% else %}
+              <span class="badge badge-ghost badge-sm">Inactive</span>
+              {% endif %}
+            </td>
+            <td>{{ workflow.steps.count() }}</td>
+            <td>
+              {% if workflow.allowed_roles %} {% for role in workflow.allowed_roles %}
+              <span class="badge badge-ghost badge-sm">{{ role.name }}</span>
+              {% endfor %} {% else %}
+              <span class="text-xs text-base-content/60">workflow.manage users only</span>
+              {% endif %}
+            </td>
+            <td>
+              <a class="btn btn-sm" href="{{ url_for('workflows.view_workflow', workflow_id=workflow.id) }}">Open</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-sm text-base-content/60">No workflows yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<dialog id="create-workflow-modal" class="modal">
+  <div class="modal-box">
+    <h3 class="text-lg font-bold">New Workflow</h3>
+    <form method="POST" action="{{ url_for('workflows.create_workflow') }}" class="mt-4 flex flex-col gap-3">
+      {{ create_form.hidden_tag() }}
+      <div>
+        {{ create_form.name.label(class="label text-sm") }} {{ create_form.name(class="input input-bordered
+        input-sm w-full") }} {% for error in create_form.name.errors %}
+        <p class="mt-1 text-xs text-error">{{ error }}</p>
+        {% endfor %}
+      </div>
+      <div>
+        {{ create_form.description.label(class="label text-sm") }} {{ create_form.description(class="textarea
+        textarea-bordered textarea-sm w-full", rows=2) }}
+      </div>
+      <label class="label cursor-pointer justify-start gap-2">
+        {{ create_form.is_active(class="checkbox checkbox-sm") }}
+        <span class="label-text">{{ create_form.is_active.label.text }}</span>
+      </label>
+      <div>
+        <span class="label text-sm">{{ create_form.allowed_role_ids.label.text }}</span>
+        <div class="max-h-32 overflow-y-auto rounded border border-base-300 p-2">
+          {% for subfield in create_form.allowed_role_ids %}
+          <label class="flex items-center gap-2 py-0.5 text-sm">
+            {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        {{ create_form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+{% endblock %}

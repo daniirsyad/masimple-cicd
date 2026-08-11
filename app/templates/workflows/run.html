@@ -1,0 +1,70 @@
+{% extends "base.html" %} {% block title %}Run - {{ run.workflow.name }} -
+MASIMPLE CICD{% endblock %} {% block content %}
+
+<div class="flex items-center justify-between">
+  <div>
+    <h1 class="text-2xl font-bold">
+      <a class="link" href="{{ url_for('workflows.view_workflow', workflow_id=run.workflow_id) }}"
+        >{{ run.workflow.name }}</a
+      >
+      — Run
+    </h1>
+    <p class="mt-1 text-sm text-base-content/60">
+      Triggered by {{ run.triggerer.username if run.triggerer else "—" }}
+      {% if run.started_at %}at {{ run.started_at|localtime }}{% endif %}
+    </p>
+  </div>
+  <span
+    id="run-status-badge"
+    class="badge {{ 'badge-success' if run.status == 'success' else 'badge-error' if run.status in ('failed', 'completed_with_failures') else 'badge-info' }}"
+    >{{ run.status }}</span
+  >
+</div>
+
+<div id="workflow-run-page" data-status-url="{{ url_for('workflows.run_status', run_id=run.id) }}" class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">Steps</h2>
+    <div class="mt-2 overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody id="workflow-run-steps-body">
+          {% for step_run in step_runs %}
+          <tr class="workflow-step-run-row" data-step-run-id="{{ step_run.id }}">
+            <td>{{ step_run.step_order + 1 }}</td>
+            <td>
+              {% if step_run.step_type == "build" %}
+              <span class="badge badge-primary badge-sm">Build</span>
+              {% else %}
+              <span class="badge badge-info badge-sm">Deploy</span>
+              {% endif %}
+            </td>
+            <td>
+              <span
+                class="step-run-status badge badge-sm {{ 'badge-success' if step_run.status == 'success' else 'badge-error' if step_run.status == 'failed' else 'badge-info' }}"
+                >{{ step_run.status }}</span
+              >
+            </td>
+            <td class="step-run-details text-xs">
+              {% if step_run.error %}
+              <span class="text-error">{{ step_run.error }}</span>
+              {% endif %} {% set link = step_links.get(step_run.id) %} {% if link %}
+              <a class="link link-primary" href="{{ link.url }}">{{ link.label }}</a>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/workflows.js') }}"></script>
+{% endblock %}

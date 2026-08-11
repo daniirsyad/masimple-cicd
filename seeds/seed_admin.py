@@ -58,6 +58,9 @@ BASE_PERMISSIONS = [
     ("deployment_secret.manage", "Create, edit, and delete Kubernetes secrets"),
     ("deployment_configmap.manage", "Create, edit, and delete Kubernetes ConfigMaps"),
     ("deployment_workload.restart", "Trigger a rolling restart of a Kubernetes Deployment's pods"),
+    ("workflow.view", "View workflows and their run history"),
+    ("workflow.manage", "Create, edit, and delete workflows"),
+    ("workflow.run", "Trigger a workflow run"),
 ]
 
 # Retired in favor of the four granular deployment.* permissions above (one

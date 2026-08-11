@@ -1567,3 +1567,189 @@ without addressing that first (e.g. matching by `url` instead of `label`).
 This feature's new/changed tests are folded into the same overall count as
 Part 6's items 9–12 — 503 total by the end of this session, not tracked
 separately. No new migration.
+
+---
+
+# Part 8: Real-Time Pod Log Streaming via SSE (2026-08-10)
+
+A later session, opened with an explicit planning-only discussion ("give me
+plan, pros and cons, don't execute it") comparing this app's existing
+interval-polling pattern (see Part 6 item 12) against real streaming for
+status/notifications/logs — the survey found **no streaming infrastructure
+anywhere in the app** and a sync-worker gunicorn setup that couldn't safely
+hold a long-lived connection open at all. Narrowed, through a few rounds of
+"which specific feature is actually worth it," to just pod logs: `kubectl
+logs -f` exists natively for exactly this, and the current design re-spawns
+a `kubectl` subprocess *and* a fresh kubeconfig auth handshake every 3
+seconds per open modal — unlike Describe (no follow/watch mode to stream
+from at all, so "streaming" it would just relocate the same per-poll
+subprocess cost, not remove it) or the build/deploy status widgets (cheap DB
+reads, nothing expensive to fix).
+
+**What shipped:**
+- `KubernetesProvider.stream_pod_logs()` — a generator around `kubectl logs
+  -f` via `Popen` (not the module's usual `_run_kubectl`/`subprocess.run`,
+  since the process must stay alive for the generator's lifetime rather than
+  being waited on immediately). One subprocess per open connection instead
+  of one per poll; a `finally` block tears it down whichever way the
+  generator ends — client disconnect (`GeneratorExit`) or the process
+  exiting on its own.
+- New SSE route `GET /deployment-pods/<server_id>/pods/<ns>/<pod>/logs/stream`.
+  A genuine kubectl failure is sent as a named `log-error` event, distinct
+  from an ordinary connection drop (which `EventSource`'s own built-in
+  auto-reconnect already handles) — so a permanently broken pod doesn't get
+  silently retried in a loop every few seconds, defeating the point.
+- The Logs modal's JS switched from `setInterval` polling to `EventSource`,
+  appending lines instead of replacing the whole `<pre>` block each time.
+  The Describe modal was deliberately left untouched.
+- **The real prerequisite, not an afterthought**: gunicorn switched from
+  plain sync workers to `--worker-class gthread --threads 4 --timeout 120`
+  (`entrypoint.sh`). A sync worker blocks entirely on one request at a time;
+  an open SSE connection would otherwise pin an entire worker for as long as
+  a Logs modal stayed open — with only 3 workers, 3 people watching logs
+  simultaneously would have left nothing to serve anyone else. `gthread` was
+  chosen over `gevent`/`eventlet` specifically to avoid a new dependency and
+  the monkey-patching risk that comes with it — safe here because the
+  long-lived request is purely I/O-bound (reading a subprocess's stdout),
+  which releases the GIL while blocked, same as any other blocking read.
+
+New tests: `tests/test_kubernetes_provider_logs_stream.py` (generator
+behavior + cleanup-on-close, mocking `subprocess.Popen` the same way the
+other `test_kubernetes_provider_*.py` files mock `subprocess.run`) and 3 new
+route tests in `test_deployment_pods.py`. Test count: 503 → 510. No new
+migration. Committed and pushed (`f4b02d9`).
+
+---
+
+# Part 9: Workflow Feature — Chaining Existing Builds/Deploys (2026-08-10)
+
+Same session as Part 8, but a much larger, from-scratch feature — **planned
+conversationally, over several rounds, before any code was written**, no
+`EnterPlanMode` needed since the back-and-forth itself reached full
+alignment: "workflow can do build and deployment order without creating one
+by one, must using existing build and deployment," then "deployment can be
+multiple" clarified twice — first as "multiple deploy steps or servers, the
+user's choice," then refined further to "both group and item selection
+together, but an item that's part of a selected group must never also be
+independently selectable." That last refinement turned out to already be an
+existing rule discovered mid-discussion, not a new one: `deployment_manifests/index.html`
+already hides the per-row Deploy button for any manifest belonging to a
+group (`show_deploy_button=False`) — a workflow step's item picker was
+scoped to ungrouped Builders/Manifests only specifically to extend that
+same rule, not invent a separate one.
+
+**The core constraint the design had to work around**: build and deploy
+already run on independent async DB-queues, each with its own background
+poll worker and its own single-flight partial-unique-index lock (see Part
+6). A `Workflow` needed to sequence through *existing* `Builder`/
+`DeploymentManifest` configs without duplicating either queue's execution
+logic or competing with manual triggers for either one's single-flight slot.
+
+**Data model** — five new tables (`app/models/workflow*.py`):
+- `Workflow` (name, description, `is_active`, `allowed_roles` — same
+  access-gate shape as `Builder`/`DeploymentManifest`).
+- `WorkflowStep` (`workflow_id`, `order`, `step_type` build/deploy,
+  `on_failure` stop/continue). A build step also carries
+  `bump_type`/`change_type_id`/`object`/`additional_description` — required
+  at *build-trigger* time by the existing `/builders/build` route, so a
+  workflow's build step has to capture them once at authoring time instead
+  of needing them re-entered every run.
+- `WorkflowStepGroup` — one row per selected `group_name`, resolved **live**
+  against current `Builder.group_name`/`DeploymentManifest.group_name`
+  membership on every run, not a frozen snapshot — adding a manifest to an
+  already-referenced group later is picked up automatically next run. A step
+  can select several groups at once.
+- `WorkflowStep.selected_builders`/`selected_manifests` — plain m2m to
+  individually picked *ungrouped* Builders/Manifests (see the group/item
+  scoping rule above).
+- `WorkflowRun`/`WorkflowStepRun` — one run per "Run" click, one step-run
+  per step actually reached; `WorkflowStepRun.batch_id`/`deployment_run_id`
+  point at the real `BuildBatch`/`DeploymentRun` the orchestrator enqueued,
+  so the run page links straight into the app's existing build/deploy
+  detail pages rather than duplicating any log UI.
+
+**Resolver** (`app/services/workflow/resolver.py`) —
+`resolve_step_builders`/`resolve_step_manifests` union a step's selected
+groups (each group's members in `Builder.name`/`DeploymentManifest.order`
+order, matching how a manual "Build Group"/"Deploy Group" click already
+walks them) with its individually selected items, deduplicated. Pure,
+read-only, no side effects — used both by the orchestrator (deciding what to
+enqueue) and by the workflow detail page (a live "resolves to right now"
+preview per step).
+
+**Orchestrator** (`app/services/workflow/worker.py`) — a **third,
+independent** poll loop (same 2-second-tick shape as the build/deploy
+workers), deliberately *not* hooked into either existing worker's own
+finalization code. It never executes a build or deploy itself: `_start_step()`
+calls the exact same `enqueue_build_batch()`/`enqueue_deployment_run()` the
+manual trigger routes call, so a workflow step is subject to the same
+single-flight lock and queue ordering as any manually triggered batch/run.
+`_check_current_step()` polls `BuildBatch.status`/`DeploymentRun.status` for
+the current step and, once terminal, advances via `_finish_step()`: a failed
+step with `on_failure="stop"` halts the run; `on_failure="continue"`
+advances anyway but the run's final status becomes
+`"completed_with_failures"` (tracked via `WorkflowRun.has_failed_step`)
+rather than a clean `"success"`. A step whose group/item selection resolves
+to nothing — or a build step whose resolved builders don't share one
+Version, or are missing a default branch — fails immediately via
+`_fail_step()` with no `BuildBatch` ever created, recorded as a
+`WorkflowStepRun` with just an `error` string.
+
+**Deliberately deferred**, discussed and scoped out before implementation
+rather than silently skipped: deploy steps still resolve "latest successful
+build for the bound Builder," same as a manual deploy today, rather than
+"the exact `ImageBuild` this run's own preceding build step just produced."
+Solving that properly needs a new resolver mode scoped to a specific
+`BuildBatch`, not just latest, and was judged not worth touching
+`resolver.py`'s existing deploy-time resolution path (which every current
+manifest already depends on) for a v1. Revisit if workflows and other
+builds on the same Builder start racing each other in practice.
+
+**Referential-integrity guards added to existing code**:
+`builders.routes.delete_builder()` and
+`deployment_manifests.routes.delete_manifest()` now also block on a
+Builder/Manifest being individually selected by any `WorkflowStep` (a real
+FK via `workflow_step_builders`/`workflow_step_manifests`) — without this,
+deleting one would have raised a raw `IntegrityError` instead of the app's
+usual "cannot delete, here's why" flash message. Merely sharing a
+`group_name` with a `WorkflowStepGroup` selection needed no such guard —
+that's a live string reference, not an FK.
+
+**UI**: new blueprint `workflows` (`/workflows`), reusing established
+patterns rather than inventing new ones — the SortableJS drag-and-drop +
+`POST .../reorder` pattern already used for manifest groups/menus, for step
+reordering; the `open_modal` auto-reopen-on-validation-failure convention
+for every create/edit dialog; the "Deploy Group vs. per-manifest Deploy
+button" precedent for the group+item step picker. The run-detail page polls
+a small JSON status endpoint and **re-renders the whole step table client-side
+each tick** rather than patching individual rows — necessary because a
+step's `WorkflowStepRun` row only starts existing once the orchestrator
+actually reaches it, so later steps simply aren't in the DOM at page-load
+time.
+
+New permissions: `workflow.view`, `workflow.manage`, `workflow.run` — added
+to `seeds/seed_admin.py` (safe to re-run, matches by permission `code`) and
+re-run against the dev DB. One new `Menu` row ("Workflows") inserted
+**directly** via a one-off script rather than through `seeds/seed_menu.py`,
+per that script's still-unresolved label-matching drift against this dev DB
+(see Part 7's postscript) — `seed_menu.py`'s own source was still updated
+with the new entry, for whatever future install actually runs it safely.
+
+New migration: `1268e9419f60` (8 new tables: `workflows`, `workflow_roles`,
+`workflow_steps`, `workflow_runs`, `workflow_step_builders`,
+`workflow_step_groups`, `workflow_step_manifests`, `workflow_step_runs`).
+New tests: `test_workflow_resolver.py`, `test_workflow_worker.py`
+(white-box — calls the orchestrator's `_tick()` directly and manually flips
+`BuildBatch`/`DeploymentRun` status between ticks, standing in for the real
+workers that don't run under `TESTING`), `test_workflows_routes.py`. Test
+count: 510 → 542.
+
+Verified via the Flask test client end-to-end — every route and template
+renders, including the run page's populated/linked/errored states — but
+**not** verified in an actual browser. The SortableJS drag-and-drop step
+reorder and the run page's live JS polling remain unverified outside of
+what the server-rendered HTML/JSON responses prove.
+
+Left uncommitted at the end of this session, pending the user's own
+review/batching (see Part 6's closing note on this project's established
+commit pattern).

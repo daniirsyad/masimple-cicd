@@ -15,6 +15,7 @@ from app.models import (
     Role,
     Version,
     VersionDocumentation,
+    WorkflowStep,
 )
 from app.services.build.versioning import BUMP_TYPES
 from app.services.build.worker import enqueue_build_batch, get_batch_progress, get_engine_status
@@ -332,6 +333,19 @@ def delete_builder(builder_id):
     if build_count:
         flash(
             f"Cannot delete '{builder.name}' — it has {build_count} recorded build(s).", "error"
+        )
+        return redirect(url_for("builders.index"))
+
+    # Blocks on a WorkflowStep's individual selection (a real FK, via
+    # workflow_step_builders) — not on merely sharing a group_name with a
+    # WorkflowStepGroup, which is a live/dynamic reference with no FK to
+    # violate (see WorkflowStepGroup's docstring).
+    referencing_steps = WorkflowStep.query.filter(WorkflowStep.selected_builders.any(id=builder.id)).count()
+    if referencing_steps:
+        flash(
+            f"Cannot delete '{builder.name}' — it's individually selected in {referencing_steps} "
+            "workflow step(s). Remove it from those steps first.",
+            "error",
         )
         return redirect(url_for("builders.index"))
 

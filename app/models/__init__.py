@@ -23,6 +23,11 @@ from app.models.deployment_manifest import DeploymentManifest
 from app.models.deployment_manifest_version_binding import DeploymentManifestVersionBinding
 from app.models.deployment_run import DeploymentRun
 from app.models.deployment_execution import DeploymentExecution
+from app.models.workflow import Workflow
+from app.models.workflow_step import WorkflowStep
+from app.models.workflow_step_group import WorkflowStepGroup
+from app.models.workflow_run import WorkflowRun
+from app.models.workflow_step_run import WorkflowStepRun
 
 __all__ = [
     "User",
@@ -51,4 +56,9 @@ __all__ = [
     "DeploymentManifestVersionBinding",
     "DeploymentRun",
     "DeploymentExecution",
+    "Workflow",
+    "WorkflowStep",
+    "WorkflowStepGroup",
+    "WorkflowRun",
+    "WorkflowStepRun",
 ]

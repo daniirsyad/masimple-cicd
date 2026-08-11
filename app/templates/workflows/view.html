@@ -1,0 +1,354 @@
+{% extends "base.html" %} {% block title %}{{ workflow.name }} - Workflows -
+MASIMPLE CICD{% endblock %} {% block content %}
+
+<span id="workflow-view-page" data-csrf="{{ csrf_token() }}" class="hidden"></span>
+
+<div class="flex items-center justify-between">
+  <div>
+    <h1 class="text-2xl font-bold">{{ workflow.name }}</h1>
+    {% if workflow.description %}
+    <p class="mt-1 text-sm text-base-content/60">{{ workflow.description }}</p>
+    {% endif %}
+  </div>
+  <div class="flex flex-wrap gap-2">
+    <form method="POST" action="{{ url_for('workflows.run_workflow', workflow_id=workflow.id) }}">
+      <button
+        type="submit"
+        class="btn btn-primary btn-sm"
+        {{ 'disabled' if (not workflow.is_active or steps|length == 0) else '' }}
+      >
+        Run
+      </button>
+    </form>
+    <button type="button" class="btn btn-sm" onclick="document.getElementById('edit-workflow-modal').showModal()">
+      Edit
+    </button>
+    <button
+      type="button"
+      class="btn btn-sm btn-error"
+      onclick="document.getElementById('delete-workflow-modal').showModal()"
+    >
+      Delete
+    </button>
+  </div>
+</div>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <div class="flex items-center justify-between">
+      <h2 class="card-title text-base">Steps</h2>
+      <div class="flex flex-wrap gap-2">
+        <button
+          type="button"
+          class="btn btn-sm btn-primary"
+          onclick="document.getElementById('add-build-step-modal').showModal()"
+        >
+          + Add Build Step
+        </button>
+        <button
+          type="button"
+          class="btn btn-sm btn-info"
+          onclick="document.getElementById('add-deploy-step-modal').showModal()"
+        >
+          + Add Deploy Step
+        </button>
+      </div>
+    </div>
+    <p class="mt-1 text-xs text-base-content/60">
+      Drag <span class="drag-handle">⠿</span> to reorder — a run walks these top-to-bottom, one at a time.
+    </p>
+
+    {% if steps %}
+    <div class="mt-2 overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th></th>
+            <th>#</th>
+            <th>Type</th>
+            <th>Targets (resolved now)</th>
+            <th>If it fails</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="workflow-steps-body" data-reorder-url="{{ url_for('workflows.reorder_steps', workflow_id=workflow.id) }}">
+          {% for step in steps %}
+          <tr class="workflow-step-row" data-step-id="{{ step.id }}">
+            <td class="w-6"><span class="drag-handle cursor-move text-base-content/40" title="Drag to reorder">⠿</span></td>
+            <td>{{ loop.index }}</td>
+            <td>
+              {% if step.step_type == "build" %}
+              <span class="badge badge-primary badge-sm">Build</span>
+              {% else %}
+              <span class="badge badge-info badge-sm">Deploy</span>
+              {% endif %}
+            </td>
+            <td>
+              {% set targets = step_summaries.get(step.id, []) %} {% if targets %} {% for name in targets %}
+              <span class="badge badge-ghost badge-sm">{{ name }}</span>
+              {% endfor %} {% else %}
+              <span class="text-xs text-error">Resolves to nothing right now</span>
+              {% endif %} {% if step.step_type == "build" %}
+              <div class="mt-1 text-xs text-base-content/60">
+                {{ step.bump_type }} bump · {{ step.change_type.name if step.change_type else "—" }} · "{{
+                step.object }}"
+              </div>
+              {% endif %}
+            </td>
+            <td>
+              <span class="badge badge-ghost badge-sm">{{ "Stop run" if step.on_failure == "stop" else "Continue" }}</span>
+            </td>
+            <td>
+              <button
+                type="button"
+                class="btn btn-sm btn-error"
+                onclick="document.getElementById('delete-step-modal-{{ step.id }}').showModal()"
+              >
+                Delete
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="mt-2 text-sm text-base-content/60">No steps yet — add a build or deploy step above.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">Recent Runs</h2>
+    {% if runs %}
+    <div class="mt-2 overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Triggered By</th>
+            <th>Started</th>
+            <th>Finished</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in runs %}
+          <tr>
+            <td>
+              <span
+                class="badge badge-sm {{ 'badge-success' if run.status == 'success' else 'badge-error' if run.status in ('failed', 'completed_with_failures') else 'badge-info' }}"
+                >{{ run.status }}</span
+              >
+            </td>
+            <td>{{ run.triggerer.username if run.triggerer else "—" }}</td>
+            <td>{{ run.started_at|localtime if run.started_at else "—" }}</td>
+            <td>{{ run.finished_at|localtime if run.finished_at else "—" }}</td>
+            <td><a class="link link-primary" href="{{ url_for('workflows.view_run', run_id=run.id) }}">View</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="mt-2 text-sm text-base-content/60">This workflow hasn't been run yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<dialog id="edit-workflow-modal" class="modal">
+  <div class="modal-box">
+    <h3 class="text-lg font-bold">Edit Workflow</h3>
+    <form method="POST" action="{{ url_for('workflows.edit_workflow', workflow_id=workflow.id) }}" class="mt-4 flex flex-col gap-3">
+      {{ edit_form.hidden_tag() }}
+      <div>
+        {{ edit_form.name.label(class="label text-sm") }} {{ edit_form.name(class="input input-bordered input-sm
+        w-full") }} {% for error in edit_form.name.errors %}
+        <p class="mt-1 text-xs text-error">{{ error }}</p>
+        {% endfor %}
+      </div>
+      <div>
+        {{ edit_form.description.label(class="label text-sm") }} {{ edit_form.description(class="textarea
+        textarea-bordered textarea-sm w-full", rows=2) }}
+      </div>
+      <label class="label cursor-pointer justify-start gap-2">
+        {{ edit_form.is_active(class="checkbox checkbox-sm") }}
+        <span class="label-text">{{ edit_form.is_active.label.text }}</span>
+      </label>
+      <div>
+        <span class="label text-sm">{{ edit_form.allowed_role_ids.label.text }}</span>
+        <div class="max-h-32 overflow-y-auto rounded border border-base-300 p-2">
+          {% for subfield in edit_form.allowed_role_ids %}
+          <label class="flex items-center gap-2 py-0.5 text-sm">
+            {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        {{ edit_form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<dialog id="delete-workflow-modal" class="modal">
+  <div class="modal-box">
+    <h3 class="text-lg font-bold">Delete Workflow</h3>
+    <p class="py-2 text-sm">
+      Delete "{{ workflow.name }}"? This only works if it has never been run — blocked otherwise so run history is
+      never orphaned.
+    </p>
+    <form method="POST" action="{{ url_for('workflows.delete_workflow', workflow_id=workflow.id) }}">
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        <button type="submit" class="btn btn-sm btn-error">Delete</button>
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+{% for step in steps %}
+<dialog id="delete-step-modal-{{ step.id }}" class="modal">
+  <div class="modal-box">
+    <h3 class="text-lg font-bold">Delete Step</h3>
+    <p class="py-2 text-sm">
+      Delete this {{ step.step_type }} step? This only works if it has never been run.
+    </p>
+    <form method="POST" action="{{ url_for('workflows.delete_step', workflow_id=workflow.id, step_id=step.id) }}">
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        <button type="submit" class="btn btn-sm btn-error">Delete</button>
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{% endfor %}
+
+<dialog id="add-build-step-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-2xl">
+    <h3 class="text-lg font-bold">Add Build Step</h3>
+    <form
+      method="POST"
+      action="{{ url_for('workflows.add_build_step', workflow_id=workflow.id) }}"
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ build_form.hidden_tag() }}
+      <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div>
+          <span class="label text-sm">{{ build_form.group_names.label.text }}</span>
+          <div class="max-h-40 overflow-y-auto rounded border border-base-300 p-2">
+            {% for subfield in build_form.group_names %}
+            <label class="flex items-center gap-2 py-0.5 text-sm">
+              {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+            </label>
+            {% else %}
+            <p class="text-xs text-base-content/60">No Builder groups exist yet.</p>
+            {% endfor %}
+          </div>
+        </div>
+        <div>
+          <span class="label text-sm">{{ build_form.builder_ids.label.text }}</span>
+          <div class="max-h-40 overflow-y-auto rounded border border-base-300 p-2">
+            {% for subfield in build_form.builder_ids %}
+            <label class="flex items-center gap-2 py-0.5 text-sm">
+              {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+            </label>
+            {% else %}
+            <p class="text-xs text-base-content/60">No ungrouped Builders exist.</p>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div>
+          {{ build_form.bump_type.label(class="label text-sm") }} {{ build_form.bump_type(class="select
+          select-bordered select-sm w-full") }}
+        </div>
+        <div>
+          {{ build_form.change_type_id.label(class="label text-sm") }} {{ build_form.change_type_id(class="select
+          select-bordered select-sm w-full") }}
+        </div>
+      </div>
+      <div>
+        {{ build_form.object.label(class="label text-sm") }} {{ build_form.object(class="input input-bordered
+        input-sm w-full") }} {% for error in build_form.object.errors %}
+        <p class="mt-1 text-xs text-error">{{ error }}</p>
+        {% endfor %}
+      </div>
+      <div>
+        {{ build_form.additional_description.label(class="label text-sm") }} {{
+        build_form.additional_description(class="textarea textarea-bordered textarea-sm w-full", rows=2) }}
+      </div>
+      <div>
+        {{ build_form.on_failure.label(class="label text-sm") }} {{ build_form.on_failure(class="select
+        select-bordered select-sm w-full") }}
+      </div>
+
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        {{ build_form.submit(class="btn btn-primary btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<dialog id="add-deploy-step-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-2xl">
+    <h3 class="text-lg font-bold">Add Deploy Step</h3>
+    <form
+      method="POST"
+      action="{{ url_for('workflows.add_deploy_step', workflow_id=workflow.id) }}"
+      class="mt-4 flex flex-col gap-3"
+    >
+      {{ deploy_form.hidden_tag() }}
+      <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div>
+          <span class="label text-sm">{{ deploy_form.group_names.label.text }}</span>
+          <div class="max-h-40 overflow-y-auto rounded border border-base-300 p-2">
+            {% for subfield in deploy_form.group_names %}
+            <label class="flex items-center gap-2 py-0.5 text-sm">
+              {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+            </label>
+            {% else %}
+            <p class="text-xs text-base-content/60">No Manifest groups exist yet.</p>
+            {% endfor %}
+          </div>
+        </div>
+        <div>
+          <span class="label text-sm">{{ deploy_form.manifest_ids.label.text }}</span>
+          <div class="max-h-40 overflow-y-auto rounded border border-base-300 p-2">
+            {% for subfield in deploy_form.manifest_ids %}
+            <label class="flex items-center gap-2 py-0.5 text-sm">
+              {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+            </label>
+            {% else %}
+            <p class="text-xs text-base-content/60">No ungrouped Manifests exist.</p>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      <div>
+        {{ deploy_form.on_failure.label(class="label text-sm") }} {{ deploy_form.on_failure(class="select
+        select-bordered select-sm w-full") }}
+      </div>
+
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        {{ deploy_form.submit(class="btn btn-info btn-sm") }}
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<script src="{{ url_for('static', filename='vendor/sortablejs/Sortable.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/workflows.js') }}"></script>
+{% endblock %}

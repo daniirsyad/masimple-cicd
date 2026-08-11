@@ -8,7 +8,7 @@ in this repo's own `AI_CONTEXT.md`/`SESSION_START.md`, not needed here.
 
 ## What it is
 
-MASIMPLE CICD is an internal Flask web app with three halves:
+MASIMPLE CICD is an internal Flask web app with four halves:
 
 1. A general-purpose **admin/RBAC foundation** — users, roles, granular
    permissions, a database-driven sidebar/navbar menu, activity logging, and
@@ -24,7 +24,16 @@ MASIMPLE CICD is an internal Flask web app with three halves:
    deploy/update/stop/restart them (individually or as an ordered group),
    view deploy history, and browse live cluster state (pods + logs/describe,
    namespaces, nodes, services, ingresses, PVs/PVCs) for any registered
-   Kubernetes server.
+   Kubernetes server. Pod logs stream live over Server-Sent Events
+   (`kubectl logs -f` under the hood); everything else "live" in this app is
+   still plain interval polling.
+4. A **Workflow module** on top of both of the above — chain existing
+   Builders and DeploymentManifests into an ordered, reusable sequence (e.g.
+   build → deploy to staging → deploy to prod) without re-entering any
+   config, run it with one click, and watch it advance step by step. Never
+   duplicates the Image Builder/Deployment modules' own execution — a
+   workflow step just enqueues into their existing queues and watches for
+   completion.
 
 It's a single-tenant internal tool (one deployment, multiple named users with
 different roles) — not a SaaS product with per-customer isolation.
@@ -38,15 +47,15 @@ different roles) — not a SaaS product with per-customer isolation.
 | Database | PostgreSQL, UUID primary keys everywhere |
 | Auth | Flask-Login (session-based) + Flask-WTF (CSRF) + Werkzeug password hashing |
 | Frontend | Jinja2 + Tailwind CSS 3 + daisyUI 4 — **no JS framework/SPA**; vanilla JS per page, vendored SortableJS for drag-and-drop |
-| Background work | Python `threading`/`queue` — independent in-process worker threads (one for builds, one for deploys, plus a separate deploy live-status poller thread), no Celery/Redis |
-| Deployment (of MASIMPLE CICD itself) | Docker (multi-stage: Node build for CSS, then Python/gunicorn), Docker Compose (`web` + `db`) |
+| Background work | Python `threading`/`queue` — independent in-process worker threads (one for builds, one for deploys, one deploy live-status poller, one workflow orchestrator), no Celery/Redis |
+| Deployment (of MASIMPLE CICD itself) | Docker (multi-stage: Node build for CSS, then Python/gunicorn `--worker-class gthread --threads 4`), Docker Compose (`web` + `db`) |
 | Git integration | GitPython, provider-abstracted (`GitProvider` → `GitHubProvider`) |
 | Registry integration | docker-py against Docker Hub, provider-abstracted (`RegistryProvider` → `DockerHubProvider`) |
 | Image builds | shells out to `docker buildx build` or a `kaniko-executor` binary, provider-abstracted (`BuildEngine`) |
-| Kubernetes integration | shells out to the `kubectl` CLI (no `kubernetes` client library), provider-abstracted (`DeploymentProvider` → `KubernetesProvider`/`CustomAPIProvider`) — `kubectl` must be installed wherever MASIMPLE CICD itself runs |
+| Kubernetes integration | shells out to the `kubectl` CLI (no `kubernetes` client library), provider-abstracted (`DeploymentProvider` → `KubernetesProvider`/`CustomAPIProvider`) — `kubectl` must be installed wherever MASIMPLE CICD itself runs; pod logs stream via `kubectl logs -f` over Server-Sent Events |
 | AI description generation | provider-abstracted (`AIProvider`); Qwen implemented, Claude/Gemini/Custom API are stubs |
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
-| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), ~503 tests |
+| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 542 tests |
 
 ## Architecture conventions
 
@@ -59,7 +68,9 @@ different roles) — not a SaaS product with per-customer isolation.
   `deployment_servers`, `deployment_manifests`, `deployment_runs`,
   `deployment_pods` (this last one now has a `forms.py` too — Namespace/
   Secret/ConfigMap create-edit-delete forms, on top of its original
-  read-only Pods/Nodes/Services/Ingress/PVs/PVCs/Workloads browsing).
+  read-only Pods/Nodes/Services/Ingress/PVs/PVCs/Workloads browsing),
+  `workflows` (chains existing Builders/DeploymentManifests into an ordered,
+  reusable sequence — see the Workflow module below).
 - **One model file per table** under `app/models/`.
 - All model PKs are `UUID` (`sqlalchemy.dialects.postgresql.UUID`,
   `default=uuid.uuid4`) — never integer autoincrement.
@@ -86,7 +97,13 @@ different roles) — not a SaaS product with per-customer isolation.
   background thread (`start_status_poller`) periodically re-checks whether
   each deployed manifest is still actually live on its target server(s), at
   an admin-configurable interval (`SystemConfig.
-  deployment_status_check_interval_seconds`).
+  deployment_status_check_interval_seconds`). A **fourth** background thread
+  (`app/services/workflow/worker.py`) orchestrates Workflow runs — it never
+  executes a build or deploy itself, it only enqueues into the two queues
+  above (via the exact same `enqueue_build_batch()`/`enqueue_deployment_run()`
+  the manual trigger routes call) and watches for terminal status before
+  advancing to the next step, so a workflow step is subject to the same
+  single-flight locks as any manually triggered batch/run.
 - Templates: Tailwind/daisyUI utility classes; a handful of pages have their
   own small vanilla-JS file (`app/static/js/<page>.js`) for
   cascading dropdowns, searchable-history comboboxes, live-status polling,
@@ -175,6 +192,41 @@ in exception-swallowing code paths).
   nulls it out on historical executions rather than blocking the delete or
   cascading, so `/deployment-runs` history survives.
 
+**Workflow module:**
+- `Workflow` — name, description, `is_active`, `allowed_roles` (same
+  access-gate shape as `Builder`/`DeploymentManifest`: empty means locked to
+  `workflow.manage` users only).
+- `WorkflowStep` — one ordered step (`order`, `step_type` `build`/`deploy`,
+  `on_failure` `stop`/`continue`). A `build` step also carries
+  `bump_type`/`change_type_id`/`object`/`additional_description`, captured
+  once at authoring time since `/builders/build` requires them at every
+  trigger. What a step actually targets is **resolved live at run time**,
+  never stored as a frozen list:
+  - `WorkflowStepGroup` — one row per selected `group_name`, resolved
+    against whichever Builders/Manifests currently share that name (so
+    adding a member to an already-referenced group later is picked up
+    automatically next run).
+  - `WorkflowStep.selected_builders`/`selected_manifests` — individually
+    picked *ungrouped* Builders/Manifests only (an item belonging to a
+    group is only reachable by selecting that group — same rule as the
+    "Deploy Group vs. per-manifest Deploy button" split on
+    `/deployment-manifests`).
+  - A step can combine several selected groups **and** individual items at
+    once.
+- `WorkflowRun` — one "Run" click; `status`
+  (`queued`/`running`/`success`/`failed`/`completed_with_failures`),
+  `current_step_id`, `has_failed_step` (set on any failure regardless of
+  that step's `on_failure`, distinguishing a clean success from a
+  continued-through failure).
+- `WorkflowStepRun` — one step's execution within one run;
+  `batch_id`/`deployment_run_id` point at the real `BuildBatch`/
+  `DeploymentRun` the orchestrator enqueued for it (exactly one is set), so
+  the run page links straight into the existing build/deploy detail pages
+  rather than duplicating any log UI. A step that couldn't even be started
+  (nothing resolved, or a build step's builders don't share one Version/are
+  missing a default branch) gets a `WorkflowStepRun` with just an `error`
+  string and no batch/run at all.
+
 ## Feature list (by page)
 
 - **`/` Dashboard** — active users/roles counts; permission-gated Image
@@ -257,6 +309,9 @@ in exception-swallowing code paths).
   own former server-picker index page was retired as duplication — the URL
   itself now just redirects to `/deployment-servers`). Tabs:
   - **Pods** — list + Logs/Describe as modals, auto-scrolled to the bottom.
+    Logs stream live over Server-Sent Events (`kubectl logs -f`, one
+    subprocess per open modal); Describe still polls on an interval (no
+    follow/watch mode to stream from).
   - **Namespaces** — full CRUD (create/edit labels/delete,
     `deployment_namespace.manage`); delete warns it cascades every
     resource inside.
@@ -282,6 +337,26 @@ in exception-swallowing code paths).
 
   `"api"`-type servers aren't supported anywhere in this whole section (no
   pod/namespace/etc. concept for a generic agent endpoint) and 404 if tried.
+
+- **`/workflows`** — list/create/edit Workflows (`workflow.view`/`manage`),
+  `allowed_roles` picker. Detail page (`/workflows/<id>`) is the step
+  builder: "+ Add Build Step"/"+ Add Deploy Step" open a modal combining a
+  multi-select of existing `group_name`s with a multi-select of individual
+  *ungrouped* Builders/Manifests (an item already in a group is never
+  independently selectable — only reachable via its group), plus (build
+  steps only) Bump Type/Change Type/Object/Additional Description and a
+  per-step "if this step fails: stop the run / continue anyway" choice.
+  Steps are drag-reordered (SortableJS, same pattern as manifest groups).
+  Each step's card shows a **live** preview of what it currently resolves to
+  (re-computed on every page load, not frozen at step-creation time). "Run"
+  (`workflow.run`) queues a `WorkflowRun`; its detail page
+  (`/workflows/runs/<id>`) polls run status and renders a step tracker that
+  links each finished step straight into the real `/images` or
+  `/deployment-runs/<id>` page for its actual build/deploy log — no
+  duplicate log UI. Deleting a Workflow or an individual step is blocked
+  once either has any run history, mirroring the delete-guard pattern
+  elsewhere in the app (`builder.manage`'s "N recorded build(s)" block,
+  etc.) rather than nulling out foreign keys.
 
 ## Conventions a new feature should follow
 
@@ -319,6 +394,20 @@ in exception-swallowing code paths).
 
 ## Known gaps / things a new feature might need to account for
 
+- A Workflow's deploy step still resolves "latest successful build for the
+  bound Builder" — same as a manual deploy — not "the exact build this
+  run's own preceding build step just produced." Fine when a workflow is
+  the only thing building against a given Builder; could resolve to the
+  wrong image if a manual build or another workflow finishes against the
+  same Builder in between the two steps. Would need a new resolver mode
+  scoped to a specific `BuildBatch`, not just latest.
+- No Workflow step *editing* — only add/delete. Changing a step means
+  deleting it and adding a new one (blocked entirely if the step has any
+  run history — see `WorkflowStepRun`).
+- The Workflow feature's UI (drag-and-drop step reorder, the run page's live
+  JS polling) has been verified via Flask's test client (every route and
+  template renders correctly, including populated/linked/errored run
+  states) but not yet in an actual browser.
 - `REPO_CLONE_ROOT` (`<app>/data/repos`) has no persistent volume mounted in
   the current Docker Compose setup — registered repos' local clones are lost
   on container restart. The build worker and manual Re-sync self-heal
@@ -328,9 +417,10 @@ in exception-swallowing code paths).
   GHCR/Harbor/ECR `RegistryProvider` implementations are unimplemented stubs
   — only Qwen and Docker Hub actually work today.
 - Everything runs through a single in-process worker thread per queue (one
-  each for builds and deploys) — there is no distributed/multi-instance
-  deployment story; a feature that needs horizontal scaling would need to
-  introduce a real broker first.
+  each for builds and deploys, plus the workflow orchestrator, which only
+  ever enqueues into those same two queues) — there is no distributed/
+  multi-instance deployment story; a feature that needs horizontal scaling
+  would need to introduce a real broker first.
 - `kubectl` must be installed on whatever host/container MASIMPLE CICD itself
   runs on (not the end user's machine) — deploys/updates/stops/restarts/pod
   browsing all shell out to it. No `kubernetes` client library is used.

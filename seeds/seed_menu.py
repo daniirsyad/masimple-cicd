@@ -224,6 +224,15 @@ def run():
         # per-row links on Deployment Servers, see
         # migrate_remove_deployment_pods_menu below.
 
+        get_or_create(
+            "Workflows",
+            url="/workflows",
+            permission_code="workflow.view",
+            order=6,
+            show_in_navbar=False,
+            show_in_sidebar=True,
+        )
+
         system_group = get_or_create(
             "System", url=None, order=4, show_in_navbar=False, show_in_sidebar=True
         )
