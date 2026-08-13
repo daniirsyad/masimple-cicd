@@ -10,6 +10,7 @@ from app.models import (
     Builder,
     ChangeType,
     DeploymentManifest,
+    ImageBuild,
     Role,
     Workflow,
     WorkflowRun,
@@ -17,8 +18,13 @@ from app.models import (
     WorkflowStepGroup,
     WorkflowStepRun,
 )
+from app.services.build.prefill import compute_build_prefill
 from app.services.build.versioning import BUMP_TYPES
-from app.services.workflow.resolver import resolve_step_builders, resolve_step_manifests
+from app.services.workflow.resolver import (
+    resolve_builders_from_selection,
+    resolve_step_builders,
+    resolve_step_manifests,
+)
 from app.services.workflow.worker import enqueue_workflow_run
 from app.utils.decorators import permission_required
 from app.utils.logger import log_activity
@@ -307,6 +313,60 @@ def add_build_step(workflow_id):
         return redirect(url_for("workflows.view_workflow", workflow_id=workflow.id))
 
     return _render_view(workflow, build_form=form, open_modal="add-build-step-modal")
+
+
+@workflows_bp.route("/<uuid:workflow_id>/steps/build/preview", methods=["POST"])
+@permission_required("workflow.manage")
+def build_step_preview(workflow_id):
+    """AJAX-only, fired automatically whenever the Add Build Step modal's
+    group/builder checkboxes change — no separate "Preview" button, unlike
+    the Image Builder trigger modal's own click-to-preview (see
+    builders.routes.build_preview) — since a step's target selection is
+    itself made inside this modal via checkboxes, not chosen beforehand.
+
+    Resolves the currently-checked selection the same way the orchestrator
+    itself would (resolve_builders_from_selection) and returns the same
+    heuristic Bump Type guess plus AI-assisted Object/Change Type/
+    Description draft (compute_build_prefill) to pre-fill the rest of the
+    form. Every field stays editable; nothing is submitted until "Add Build
+    Step" is actually clicked — and note this only pre-fills the step's
+    *authoring-time* values, which then replay unchanged on every future run
+    of this step (same as every other WorkflowStep field today); it does not
+    change WorkflowStep's existing "captured once, not re-resolved per run"
+    design.
+    """
+    _workflow_or_404(workflow_id)
+
+    group_names = request.form.getlist("group_names")
+    builder_ids = [bid for bid in (_parse_uuid(raw) for raw in request.form.getlist("builder_ids")) if bid is not None]
+
+    builders = resolve_builders_from_selection(group_names, builder_ids)
+    if not builders:
+        return jsonify({"error": "Select at least one Builder group or individual Builder first."}), 400
+
+    if len({builder.version_id for builder in builders}) > 1:
+        return jsonify({"error": "The selected Builders don't all share the same Version."}), 400
+
+    if ImageBuild.query.filter_by(status="running").first() is not None:
+        return jsonify({"error": "A build is currently running — try again once it finishes."}), 409
+
+    additional_description = (request.form.get("additional_description") or "").strip()
+    prefill = compute_build_prefill(
+        [(builder, builder.default_branch) for builder in builders],
+        additional_description=additional_description,
+    )
+
+    object_names = [obj.name for obj in prefill["matched_objects"]] + prefill["new_object_names"]
+
+    return jsonify(
+        {
+            "bump_type": prefill["bump_type"],
+            "object": ", ".join(object_names),
+            "change_type_id": str(prefill["change_type_id"]) if prefill["change_type_id"] else None,
+            "description": prefill["description"],
+            "commit_count": prefill["commit_count"],
+        }
+    )
 
 
 @workflows_bp.route("/<uuid:workflow_id>/steps/deploy", methods=["POST"])

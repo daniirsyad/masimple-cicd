@@ -26,6 +26,84 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // --- Add Build Step modal (workflows/view.html): auto-preview from git —
+  // unlike the Image Builder trigger modal's explicit "Preview from Git"
+  // button (builders.js), a step's target selection is made *inside* this
+  // modal via checkboxes, so there's nothing to preview until at least one
+  // is checked — fires automatically on every group/builder checkbox
+  // change instead of behind a button. Pre-fills Bump Type/Object/Change
+  // Type/Additional Description; every field stays editable, and this only
+  // ever affects the step's authoring-time values, not how it resolves at
+  // run time (see workflows.routes.build_step_preview's docstring). ---
+  const buildStepModal = document.getElementById("add-build-step-modal");
+  if (buildStepModal) {
+    const previewUrl = buildStepModal.dataset.previewUrl;
+    const previewStatus = document.getElementById("build-step-preview-status");
+    let debounceTimer = null;
+
+    function checkedValues(containerId) {
+      return Array.from(
+        document.querySelectorAll(`#${containerId} input[type="checkbox"]:checked`)
+      ).map((input) => input.value);
+    }
+
+    function runPreview() {
+      const groupNames = checkedValues("build-step-group-names");
+      const builderIds = checkedValues("build-step-builder-ids");
+      if (groupNames.length === 0 && builderIds.length === 0) {
+        previewStatus.textContent = "";
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("csrf_token", csrfToken);
+      groupNames.forEach((name) => formData.append("group_names", name));
+      builderIds.forEach((id) => formData.append("builder_ids", id));
+      const notesField = document.getElementById("build-step-additional-description");
+      if (notesField && notesField.value.trim()) {
+        formData.append("additional_description", notesField.value.trim());
+      }
+
+      previewStatus.textContent = "Reading commits since the last build...";
+
+      fetch(previewUrl, { method: "POST", body: formData })
+        .then((response) => response.json().then((data) => ({ ok: response.ok, data })))
+        .then(({ ok, data }) => {
+          if (!ok) {
+            previewStatus.textContent = data.error || "Preview failed.";
+            return;
+          }
+
+          const bumpSelect = document.getElementById("build-step-bump-type");
+          if (bumpSelect && data.bump_type) bumpSelect.value = data.bump_type;
+
+          const objectInput = document.getElementById("build-step-object");
+          if (objectInput && data.object) objectInput.value = data.object;
+
+          const changeTypeSelect = document.getElementById("build-step-change-type");
+          if (changeTypeSelect && data.change_type_id) changeTypeSelect.value = data.change_type_id;
+
+          const descriptionField = document.getElementById("build-step-additional-description");
+          if (descriptionField && data.description) descriptionField.value = data.description;
+
+          previewStatus.textContent =
+            data.commit_count > 0
+              ? `Pre-filled from ${data.commit_count} commit(s) since the last build — review before adding.`
+              : "No new commits found since the last build — fields left as-is.";
+        })
+        .catch(() => {
+          previewStatus.textContent = "Preview failed — check the server logs.";
+        });
+    }
+
+    buildStepModal.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
+      checkbox.addEventListener("change", () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(runPreview, 300);
+      });
+    });
+  }
+
   // --- Run detail page (workflows/run.html) — polls run_status() and
   // re-renders the whole step table each tick, since steps' WorkflowStepRun
   // rows only start existing once the orchestrator actually reaches them

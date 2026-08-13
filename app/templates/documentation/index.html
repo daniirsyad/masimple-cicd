@@ -49,7 +49,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
     />
     <datalist id="documentation-object-suggestions">
       {% for suggestion in object_suggestions %}
-      <option value="{{ suggestion }}"></option>
+      <option value="{{ suggestion.name }}"></option>
       {% endfor %}
     </datalist>
   </div>
@@ -110,7 +110,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
               <span class="badge badge-ghost badge-sm">{{ doc.change_type.name }}</span>
               {% else %}—{% endif %}
             </td>
-            <td>{{ doc.object or "—" }}</td>
+            <td>{{ doc.objects | map(attribute="name") | join(", ") or "—" }}</td>
             <td>{{ doc.built_by_user.username if doc.built_by_user else "—" }}</td>
             <td class="text-xs text-base-content/60">{{ batch.created_at | localtime("%Y-%m-%d %H:%M") }}</td>
             <td>

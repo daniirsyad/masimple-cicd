@@ -1,3 +1,4 @@
+from app.services.build.history import get_last_built_commit
 from app.services.git.helpers import provider_for_git_source
 
 
@@ -6,11 +7,14 @@ def gather_ai_context(builder_branches):
     branch) tuples, for substitution into the AI description prompt template.
 
     Reads straight from each Builder's already-synced local clone via
-    `get_commit_messages(local_path, since_ref=None)` — the bounded-recent-log
-    fallback, since ImageBuild has no per-build commit-SHA to diff from (a
-    deliberate simplification vs. the old spec's since-last-build diffing).
-    A Builder whose repo can't be read (never synced, clone removed, etc.)
-    is skipped rather than failing the whole batch's context gathering.
+    `get_commit_messages(local_path, since_ref=<last successful build's
+    commit_sha>)` — a true since-last-build diff whenever this Builder+branch
+    has one recorded (see `ImageBuild.commit_sha` / `_record_commit_history`
+    in the build worker); falls back to the bounded-recent-log behavior
+    otherwise (first build on this branch, or a build that predates commit
+    tracking). A Builder whose repo can't be read (never synced, clone
+    removed, etc.) is skipped rather than failing the whole batch's context
+    gathering.
 
     Shared by both AI-assist call sites: the build-trigger form (no
     `BuildBatch` exists yet — just the selected Builders and their chosen
@@ -26,7 +30,8 @@ def gather_ai_context(builder_branches):
 
         try:
             provider = provider_for_git_source(builder.repository.git_source)
-            messages = provider.get_commit_messages(builder.repository.local_path, since_ref=None)
+            since_ref = get_last_built_commit(builder.id, branch)
+            messages = provider.get_commit_messages(builder.repository.local_path, since_ref=since_ref)
         except Exception:
             messages = []
 

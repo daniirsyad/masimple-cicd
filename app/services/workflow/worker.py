@@ -14,7 +14,7 @@ import time
 from datetime import datetime
 
 from app.extensions import db
-from app.models import BuildBatch, DeploymentRun, Version, WorkflowRun, WorkflowStep, WorkflowStepRun
+from app.models import BuildBatch, DeploymentRun, Object, Version, WorkflowRun, WorkflowStep, WorkflowStepRun
 from app.services.build.worker import enqueue_build_batch
 from app.services.deployment.worker import enqueue_deployment_run
 from app.services.workflow.resolver import resolve_step_builders, resolve_step_manifests
@@ -123,11 +123,17 @@ def _start_step(run, step):
             return
 
         version = Version.query.get(version_ids.pop())
+        # WorkflowStep.object is still a single free-typed string captured at
+        # authoring time (see WorkflowStep's own docstring) — resolved as a
+        # "new" name on every run rather than multi-object yet, same
+        # get-or-create as any other Object.resolve() call site, so it
+        # collapses onto the same real Object row a manual trigger using the
+        # same text would.
         batch = enqueue_build_batch(
             version=version,
             bump_type=step.bump_type,
             builder_branches=[(builder, builder.default_branch) for builder in builders],
-            object_=step.object,
+            objects=Object.resolve([], [step.object]),
             additional_description=step.additional_description,
             requested_by=run.triggered_by,
             change_type_id=step.change_type_id,

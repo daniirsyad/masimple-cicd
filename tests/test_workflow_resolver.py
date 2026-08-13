@@ -18,7 +18,11 @@ from app.models import (
     WorkflowStep,
     WorkflowStepGroup,
 )
-from app.services.workflow.resolver import resolve_step_builders, resolve_step_manifests
+from app.services.workflow.resolver import (
+    resolve_builders_from_selection,
+    resolve_step_builders,
+    resolve_step_manifests,
+)
 
 
 @pytest.fixture
@@ -134,6 +138,42 @@ class TestResolveStepBuilders:
             step = _make_workflow_step("build")
             db.session.commit()
             assert resolve_step_builders(step) == []
+
+
+class TestResolveBuildersFromSelection:
+    """Direct tests of the raw (group_names, builder_ids) resolver — the
+    core resolve_step_builders() now delegates to, and the one the Add
+    Build Step modal's auto-preview uses before any WorkflowStep exists to
+    resolve from (see workflows.routes.build_step_preview)."""
+
+    def test_resolves_group_members(self, app, base_entities):
+        with app.app_context():
+            _make_builder(base_entities, "a", group_name="prod")
+            _make_builder(base_entities, "b", group_name="prod")
+
+            resolved = resolve_builders_from_selection(["prod"], [])
+            assert [b.name for b in resolved] == ["a", "b"]
+
+    def test_resolves_individual_ids(self, app, base_entities):
+        with app.app_context():
+            solo = _make_builder(base_entities, "solo")
+            db.session.commit()
+
+            resolved = resolve_builders_from_selection([], [solo.id])
+            assert [b.name for b in resolved] == ["solo"]
+
+    def test_combines_groups_and_ids_without_duplicates(self, app, base_entities):
+        with app.app_context():
+            _make_builder(base_entities, "a", group_name="prod")
+            solo = _make_builder(base_entities, "solo")
+            db.session.commit()
+
+            resolved = resolve_builders_from_selection(["prod"], [solo.id])
+            assert sorted(b.name for b in resolved) == ["a", "solo"]
+
+    def test_no_selection_resolves_to_empty(self, app, base_entities):
+        with app.app_context():
+            assert resolve_builders_from_selection([], []) == []
 
 
 class TestResolveStepManifests:

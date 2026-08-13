@@ -117,6 +117,36 @@ class TestGetCommitMessages:
             provider.get_commit_messages(str(empty_dir))
 
 
+class TestGetCommits:
+    def test_returns_structured_commits_oldest_first(self, local_repo):
+        local_path, commits = local_repo
+        provider = GitHubProvider()
+
+        result = provider.get_commits(local_path, since_ref=None, until_ref="HEAD")
+
+        assert [c["message"] for c in result] == [f"commit message {i}" for i in range(5)]
+        assert [c["sha"] for c in result] == [c.hexsha for c in commits]
+        assert all(c["author_name"] == "Test" and c["author_email"] == "test@example.com" for c in result)
+        assert all(c["committed_at"] is not None for c in result)
+
+    def test_returns_only_commits_after_since_ref(self, local_repo):
+        local_path, commits = local_repo
+        provider = GitHubProvider()
+
+        since = commits[1].hexsha
+        result = provider.get_commits(local_path, since_ref=since, until_ref="HEAD")
+
+        assert [c["message"] for c in result] == ["commit message 2", "commit message 3", "commit message 4"]
+
+    def test_get_commit_messages_delegates_to_get_commits(self, local_repo):
+        local_path, commits = local_repo
+        provider = GitHubProvider()
+
+        assert provider.get_commit_messages(local_path, since_ref=None, until_ref="HEAD") == [
+            c["message"] for c in provider.get_commits(local_path, since_ref=None, until_ref="HEAD")
+        ]
+
+
 class TestListBranches:
     def test_lists_remote_branches_sorted(self, cloned_repo):
         local_path, default_branch, commits, other_commit = cloned_repo

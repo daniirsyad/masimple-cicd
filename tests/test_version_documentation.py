@@ -120,6 +120,21 @@ def _make_batch(base_entities, full_version_string="DEV.0.0.1.010101010101", req
 
 
 def _make_doc(batch, **overrides):
+    # Friendly single-name override kept for test readability/minimal churn —
+    # VersionDocumentation.object is gone (now a many-to-many via `objects`),
+    # so this translates a plain `object="name"` kwarg into a resolved Object
+    # row the same way Object.resolve() would.
+    object_name = overrides.pop("object", None)
+    if object_name is not None:
+        from app.models import Object
+
+        obj = Object.query.filter_by(name=object_name).first()
+        if obj is None:
+            obj = Object(name=object_name)
+            db.session.add(obj)
+            db.session.flush()
+        overrides["objects"] = [obj]
+
     doc = VersionDocumentation(batch_id=batch.id, **overrides)
     db.session.add(doc)
     db.session.flush()
@@ -355,7 +370,7 @@ class TestDocumentationPageDisplays:
 
         response = doc_client.get(f"/documentation/{batch_id}")
         assert b"checkout-flow" in response.data
-        assert b"datalist" in response.data
+        assert b"doc-object-suggestions-data" in response.data
 
     def test_linked_batches_exclude_the_batch_being_documented(self, doc_client, app, base_entities):
         with app.app_context():
@@ -381,6 +396,60 @@ class TestDocumentationPageDisplays:
         assert b"DEV.0.0.3.030303030303" not in response.data
 
 
+class TestCommitRangeDisplay:
+    def test_shows_not_tracked_for_a_build_without_a_recorded_commit(self, doc_client, app, base_entities):
+        with app.app_context():
+            batch, _ = _make_documented_batch(base_entities)
+            db.session.commit()
+            batch_id = batch.id
+
+        response = doc_client.get(f"/documentation/{batch_id}")
+        assert b"not tracked" in response.data
+
+    def test_shows_commit_range_and_list_for_a_tracked_build(self, doc_client, app, base_entities):
+        with app.app_context():
+            from app.models import ImageBuildCommit
+
+            batch, _ = _make_documented_batch(base_entities)
+            image = batch.image_builds[0]
+            image.commit_sha = "abcdef1234567890"
+            db.session.add(
+                ImageBuildCommit(
+                    image_build_id=image.id,
+                    sha="abcdef1234567890",
+                    author_name="Ann",
+                    message="fix: something",
+                )
+            )
+            db.session.commit()
+            batch_id = batch.id
+
+        response = doc_client.get(f"/documentation/{batch_id}")
+        assert response.status_code == 200
+        assert b"abcdef1" in response.data
+        assert b"fix: something" in response.data
+        assert b"Ann" in response.data
+
+    def test_shows_the_from_sha_of_the_previous_successful_build(self, doc_client, app, base_entities):
+        with app.app_context():
+            first_batch = _make_batch(base_entities, full_version_string="DEV.0.0.1.010101010101")
+            first_image = first_batch.image_builds[0]
+            first_image.commit_sha = "aaaaaaa1111111"
+            db.session.commit()
+
+            second_batch, _ = _make_documented_batch(
+                base_entities, full_version_string="DEV.0.0.2.020202020202"
+            )
+            second_image = second_batch.image_builds[0]
+            second_image.commit_sha = "bbbbbbb2222222"
+            db.session.commit()
+            batch_id = second_batch.id
+
+        response = doc_client.get(f"/documentation/{batch_id}")
+        assert b"aaaaaaa" in response.data
+        assert b"bbbbbbb" in response.data
+
+
 class TestSavingDocumentation:
     def test_saves_object_description_and_change_type(self, doc_client, app, base_entities):
         with app.app_context():
@@ -393,7 +462,7 @@ class TestSavingDocumentation:
             f"/documentation/{batch_id}",
             data={
                 "change_type_id": str(change_type_id),
-                "object": "checkout-flow",
+                "new_object_names": "checkout-flow",
                 "description": "Fixed the checkout button.",
             },
             follow_redirects=True,
@@ -403,10 +472,35 @@ class TestSavingDocumentation:
 
         with app.app_context():
             doc = VersionDocumentation.query.filter_by(batch_id=batch_id).first()
-            assert doc.object == "checkout-flow"
+            assert [o.name for o in doc.objects] == ["checkout-flow"]
             assert doc.description == "Fixed the checkout button."
             assert doc.change_type_id == change_type_id
             assert doc.change_type.name == "Cherry Pick"
+
+    def test_saves_multiple_objects_mixing_existing_and_new(self, doc_client, app, base_entities):
+        with app.app_context():
+            from app.models import Object
+
+            existing = Object(name="checkout-flow")
+            db.session.add(existing)
+            batch, _ = _make_documented_batch(base_entities)
+            db.session.commit()
+            batch_id, existing_id = batch.id, existing.id
+
+        doc_client.post(
+            f"/documentation/{batch_id}",
+            data={
+                "change_type_id": "",
+                "object_ids": [str(existing_id)],
+                "new_object_names": ["payments"],
+                "description": "multi-object save",
+            },
+            follow_redirects=True,
+        )
+
+        with app.app_context():
+            doc = VersionDocumentation.query.filter_by(batch_id=batch_id).first()
+            assert {o.name for o in doc.objects} == {"checkout-flow", "payments"}
 
     def test_built_by_reflects_the_original_batch_requester(self, doc_client, app, base_entities):
         with app.app_context():
@@ -430,7 +524,7 @@ class TestSavingDocumentation:
 
         doc_client.post(
             f"/documentation/{batch_id}",
-            data={"change_type_id": "", "object": "thing", "description": "did the thing"},
+            data={"change_type_id": "", "new_object_names": "thing", "description": "did the thing"},
         )
         with app.app_context():
             doc = VersionDocumentation.query.filter_by(batch_id=batch_id).first()
@@ -438,7 +532,7 @@ class TestSavingDocumentation:
 
         response = doc_client.post(
             f"/documentation/{batch_id}",
-            data={"change_type_id": str(change_type_id), "object": "thing", "description": "did the thing"},
+            data={"change_type_id": str(change_type_id), "new_object_names": "thing", "description": "did the thing"},
             follow_redirects=True,
         )
         with app.app_context():
@@ -605,7 +699,7 @@ class TestSavingAIDescription:
             f"/documentation/{batch_id}",
             data={
                 "change_type_id": "",
-                "object": "",
+                "new_object_names": "",
                 "description": "final description",
                 "ai_description": "raw ai draft text",
                 "ai_provider_used": "qwen",
@@ -628,7 +722,7 @@ class TestSavingAIDescription:
             f"/documentation/{batch_id}",
             data={
                 "change_type_id": "",
-                "object": "",
+                "new_object_names": "",
                 "description": "first save",
                 "ai_description": "original ai draft",
                 "ai_provider_used": "qwen",
@@ -636,7 +730,7 @@ class TestSavingAIDescription:
         )
         doc_client.post(
             f"/documentation/{batch_id}",
-            data={"change_type_id": "", "object": "", "description": "first save, but edited by hand"},
+            data={"change_type_id": "", "new_object_names": "", "description": "first save, but edited by hand"},
         )
 
         with app.app_context():
@@ -653,7 +747,7 @@ class TestSavingAIDescription:
 
         doc_client.post(
             f"/documentation/{batch_id}",
-            data={"change_type_id": "", "object": "", "description": "hand-written, no AI involved"},
+            data={"change_type_id": "", "new_object_names": "", "description": "hand-written, no AI involved"},
         )
 
         with app.app_context():
@@ -675,7 +769,7 @@ class TestLinkedBatches:
             f"/documentation/{batch_id}",
             data={
                 "change_type_id": "",
-                "object": "",
+                "new_object_names": "",
                 "description": "",
                 "linked_batch_ids": [str(linked_id_1), str(linked_id_2)],
             },
@@ -698,7 +792,7 @@ class TestLinkedBatches:
             f"/documentation/{batch_id}",
             data={
                 "change_type_id": "",
-                "object": "",
+                "new_object_names": "",
                 "description": "",
                 "linked_batch_ids": [str(linked_id_1), str(linked_id_2)],
             },
@@ -707,7 +801,7 @@ class TestLinkedBatches:
             f"/documentation/{batch_id}",
             data={
                 "change_type_id": "",
-                "object": "",
+                "new_object_names": "",
                 "description": "",
                 "linked_batch_ids": [str(linked_id_1)],
             },

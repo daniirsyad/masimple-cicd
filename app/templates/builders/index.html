@@ -465,9 +465,16 @@ MASIMPLE CICD{% endblock %} {% block content %}
         <div id="build-trigger-builders" class="flex flex-col gap-2"></div>
       </div>
 
+      <div class="flex items-center gap-2">
+        <button type="button" id="build-trigger-preview-btn" class="btn btn-sm btn-outline">
+          Preview from Git
+        </button>
+        <span id="build-trigger-preview-status" class="text-xs text-base-content/60"></span>
+      </div>
+
       <div>
         <label class="label text-sm">Bump Type</label>
-        <select name="bump_type" class="select select-bordered select-sm" required>
+        <select id="build-trigger-bump-type" name="bump_type" class="select select-bordered select-sm" required>
           <option value="" selected disabled>— Select —</option>
           {% for bump_type in bump_types %}
           <option value="{{ bump_type }}">{{ bump_type }}</option>
@@ -476,19 +483,20 @@ MASIMPLE CICD{% endblock %} {% block content %}
       </div>
 
       <div class="relative">
-        <label class="label text-sm">Object</label>
+        <label class="label text-sm">Object(s)</label>
+        <div id="build-trigger-object-pills" class="mb-1 flex flex-wrap gap-1"></div>
         <input
           type="text"
           id="build-trigger-object-input"
-          name="object"
           class="input input-bordered input-sm w-full"
           autocomplete="off"
-          required
+          placeholder="Search existing Objects, or type a new one and press Enter"
         />
         <ul
           id="build-trigger-object-dropdown"
           class="menu absolute z-20 mt-1 hidden max-h-48 w-full flex-nowrap overflow-y-auto rounded-box bg-base-100 p-1 shadow-lg"
         ></ul>
+        <div id="build-trigger-object-hidden"></div>
         {# json, not an HTML attribute — tojson's escaping targets <script> content (</, &, unicode), not
            quote-delimited attributes, so embedding it in data-* would break on any suggestion containing a
            literal double quote. #}
@@ -496,13 +504,13 @@ MASIMPLE CICD{% endblock %} {% block content %}
           {{ object_suggestions | tojson }}
         </script>
         <p class="mt-1 text-xs text-base-content/60">
-          Pick a previously used Object below, or type a new one.
+          Pick one or more existing Objects, or type a new one and press Enter to add it.
         </p>
       </div>
 
       <div>
         <label class="label text-sm">Change Type</label>
-        <select name="change_type_id" class="select select-bordered select-sm w-full" required>
+        <select id="build-trigger-change-type" name="change_type_id" class="select select-bordered select-sm w-full" required>
           <option value="" selected disabled>— Select —</option>
           {% for value, label in change_type_choices %}
           <option value="{{ value }}">{{ label }}</option>
@@ -512,7 +520,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 
       <div>
         <label class="label text-sm">Additional Description</label>
-        <textarea name="additional_description" class="textarea textarea-bordered textarea-sm w-full" rows="4"></textarea>
+        <textarea id="build-trigger-additional-description" name="additional_description" class="textarea textarea-bordered textarea-sm w-full" rows="4"></textarea>
         <p class="mt-1 text-xs text-base-content/60">
           Combined automatically with an AI-generated summary once the build succeeds — you can edit the result afterward on the Documentation page.
         </p>

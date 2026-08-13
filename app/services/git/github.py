@@ -1,5 +1,6 @@
 import os
 import shutil
+from datetime import datetime
 
 import git
 import requests
@@ -97,7 +98,7 @@ class GitHubProvider(GitProvider):
             commit = repo.commit(f"origin/{branch}")
         return commit.hexsha
 
-    def get_commit_messages(self, local_path, since_ref=None, until_ref=None):
+    def get_commits(self, local_path, since_ref=None, until_ref=None):
         repo = self._open_repo(local_path)
         until_ref = until_ref or "HEAD"
         try:
@@ -109,7 +110,16 @@ class GitHubProvider(GitProvider):
             # since_ref may no longer be reachable (force-push, rebase, etc.) —
             # fall back to a bounded recent log rather than failing the build.
             commits = list(repo.iter_commits(until_ref, max_count=DEFAULT_LOG_LIMIT))
-        return [commit.message.strip() for commit in reversed(commits)]
+        return [
+            {
+                "sha": commit.hexsha,
+                "author_name": commit.author.name,
+                "author_email": commit.author.email,
+                "message": commit.message.strip(),
+                "committed_at": datetime.utcfromtimestamp(commit.committed_date),
+            }
+            for commit in reversed(commits)
+        ]
 
     @staticmethod
     def _open_repo(local_path):

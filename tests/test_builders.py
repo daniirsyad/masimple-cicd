@@ -8,6 +8,7 @@ from app.models import (
     ChangeType,
     GitSource,
     ImageBuild,
+    Object,
     Permission,
     RegistryTarget,
     Repository,
@@ -588,6 +589,38 @@ class TestDeleteBuilder:
 
 
 class TestBuildTrigger:
+    def test_multiple_objects_mix_existing_and_new(self, builder_client, app, base_entities):
+        """object_ids (existing Object rows) and new_object_names (free-typed,
+        get-or-created) can both be submitted at once and both end up linked
+        to the batch — the trigger modal's multi-picker sends both.
+        """
+        with app.app_context():
+            from app.models import Object
+
+            existing = Object(name="checkout-flow")
+            db.session.add(existing)
+            builder = _make_builder(base_entities)
+            change_type = _make_change_type()
+            db.session.commit()
+            builder_id, change_type_id, existing_id = builder.id, change_type.id, existing.id
+
+        builder_client.post(
+            "/builders/build",
+            data={
+                "builder_ids": [str(builder_id)],
+                "bump_type": "patch",
+                "object_ids": [str(existing_id)],
+                "new_object_names": ["payments"],
+                "change_type_id": str(change_type_id),
+            },
+        )
+
+        with app.app_context():
+            batch = BuildBatch.query.first()
+            assert {o.name for o in batch.objects} == {"checkout-flow", "payments"}
+            # No duplicate Object row was created for the already-existing name.
+            assert Object.query.filter_by(name="checkout-flow").count() == 1
+
     def test_single_builder_creates_a_queued_batch_without_bumping_the_version_yet(
         self, builder_client, app, base_entities
     ):
@@ -609,7 +642,7 @@ class TestBuildTrigger:
             data={
                 "builder_ids": [str(builder_id)],
                 "bump_type": "patch",
-                "object": "backend",
+                "new_object_names": "backend",
                 "change_type_id": str(change_type_id),
                 "additional_description": "routine update",
             },
@@ -628,7 +661,7 @@ class TestBuildTrigger:
             assert batch.status == "queued"
             # Staged on the batch, not yet a VersionDocumentation — that's
             # only created once the batch fully succeeds.
-            assert batch.object == "backend"
+            assert [o.name for o in batch.objects] == ["backend"]
             assert batch.additional_description == "routine update"
 
             image_build = ImageBuild.query.filter_by(batch_id=batch.id).first()
@@ -650,7 +683,7 @@ class TestBuildTrigger:
             data={
                 "builder_ids": [str(builder_id)],
                 "bump_type": "patch",
-                "object": "backend",
+                "new_object_names": "backend",
                 "change_type_id": str(change_type_id),
             },
         )
@@ -670,7 +703,7 @@ class TestBuildTrigger:
             data={
                 "builder_ids": [str(builder_id)],
                 "bump_type": "patch",
-                "object": "backend",
+                "new_object_names": "backend",
                 "change_type_id": "00000000-0000-0000-0000-000000000000",
             },
             follow_redirects=True,
@@ -689,7 +722,7 @@ class TestBuildTrigger:
 
         response = builder_client.post(
             "/builders/build",
-            data={"builder_ids": [str(builder_id)], "object": "backend", "change_type_id": str(change_type_id)},
+            data={"builder_ids": [str(builder_id)], "new_object_names": "backend", "change_type_id": str(change_type_id)},
             follow_redirects=True,
         )
         assert response.status_code == 200
@@ -722,7 +755,7 @@ class TestBuildTrigger:
 
         response = builder_client.post(
             "/builders/build",
-            data={"builder_ids": [str(builder_id)], "bump_type": "patch", "object": "backend"},
+            data={"builder_ids": [str(builder_id)], "bump_type": "patch", "new_object_names": "backend"},
             follow_redirects=True,
         )
         assert response.status_code == 200
@@ -749,7 +782,7 @@ class TestBuildTrigger:
                 "builder_ids": [str(builder_id)],
                 f"branch_override_{builder_id}": "feature-x",
                 "bump_type": "patch",
-                "object": "backend",
+                "new_object_names": "backend",
                 "change_type_id": str(change_type_id),
             },
         )
@@ -775,7 +808,7 @@ class TestBuildTrigger:
             data={
                 "builder_ids": [str(builder1_id), str(builder2_id)],
                 "bump_type": "minor",
-                "object": "backend",
+                "new_object_names": "backend",
                 "change_type_id": str(change_type_id),
             },
         )
@@ -837,6 +870,151 @@ class TestBuildTrigger:
         )
         with app.app_context():
             assert BuildBatch.query.count() == 0
+
+
+class _FakePreviewGitProvider:
+    def __init__(self, messages=None):
+        self.messages = messages or []
+        self.synced = None
+
+    def sync_repo(self, local_path, branch, repo_name=None):
+        self.synced = (local_path, branch)
+
+    def get_commits(self, local_path, since_ref=None, until_ref=None):
+        return [{"sha": f"sha-{i}", "message": m} for i, m in enumerate(self.messages)]
+
+
+class TestBuildPreview:
+    def test_requires_at_least_one_builder(self, builder_client):
+        response = builder_client.post("/builders/build/preview", data={})
+        assert response.status_code == 400
+        assert response.get_json()["error"]
+
+    def test_rejects_builders_spanning_different_versions(self, builder_client, app, base_entities):
+        with app.app_context():
+            builder1 = _make_builder(base_entities, name="b1")
+            other_version_type = VersionType(name="STAGING")
+            db.session.add(other_version_type)
+            db.session.flush()
+            other_version = Version(name="other", version_type_id=other_version_type.id)
+            db.session.add(other_version)
+            db.session.flush()
+            builder2 = Builder(
+                name="b2",
+                version_id=other_version.id,
+                repository_id=base_entities["repository_id"],
+                default_branch="main",
+                dockerfile_path="Dockerfile",
+                registry_target_id=base_entities["registry_target_id"],
+            )
+            db.session.add(builder2)
+            db.session.commit()
+            builder1_id, builder2_id = builder1.id, builder2.id
+
+        response = builder_client.post(
+            "/builders/build/preview",
+            data={"builder_ids": [str(builder1_id), str(builder2_id)]},
+        )
+        assert response.status_code == 400
+
+    def test_returns_409_while_a_build_is_running(self, builder_client, app, base_entities):
+        with app.app_context():
+            builder = _make_builder(base_entities)
+            db.session.commit()
+            batch = BuildBatch(version_id=base_entities["version_id"], bump_type="patch", status="running")
+            db.session.add(batch)
+            db.session.flush()
+            db.session.add(
+                ImageBuild(batch_id=batch.id, builder_id=builder.id, branch_used="main", status="running")
+            )
+            db.session.commit()
+            builder_id = builder.id
+
+        response = builder_client.post("/builders/build/preview", data={"builder_ids": [str(builder_id)]})
+        assert response.status_code == 409
+
+    def test_returns_heuristic_bump_type_and_ai_metadata(self, builder_client, app, base_entities, monkeypatch):
+        with app.app_context():
+            builder = _make_builder(base_entities)
+            existing = Object(name="checkout-flow")
+            db.session.add(existing)
+            db.session.commit()
+            builder_id, existing_object_id = builder.id, existing.id
+
+        fake_git = _FakePreviewGitProvider(messages=["feat: add new payment method", "fix: checkout bug"])
+        monkeypatch.setattr(
+            "app.services.build.prefill.provider_for_git_source", lambda source: fake_git
+        )
+        monkeypatch.setattr(
+            "app.services.build.prefill.suggest_metadata",
+            lambda messages, additional_description=None: {
+                "matched_object_names": ["checkout-flow"],
+                "new_object_names": ["payments"],
+                "change_type_name": None,
+                "description": "Added a new payment method and fixed a checkout bug.",
+            },
+        )
+
+        response = builder_client.post("/builders/build/preview", data={"builder_ids": [str(builder_id)]})
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["bump_type"] == "minor"  # feat: beats fix:
+        assert data["matched_objects"] == [{"id": str(existing_object_id), "name": "checkout-flow"}]
+        assert data["new_object_names"] == ["payments"]
+        assert data["description"] == "Added a new payment method and fixed a checkout bug."
+        assert data["commit_count"] == 2
+
+    def test_syncs_the_repo_before_reading_commits(self, builder_client, app, base_entities, monkeypatch):
+        with app.app_context():
+            builder = _make_builder(base_entities)
+            db.session.commit()
+            builder_id = builder.id
+
+        fake_git = _FakePreviewGitProvider(messages=[])
+        monkeypatch.setattr(
+            "app.services.build.prefill.provider_for_git_source", lambda source: fake_git
+        )
+        monkeypatch.setattr(
+            "app.services.build.prefill.suggest_metadata",
+            lambda messages, additional_description=None: {
+                "matched_object_names": [],
+                "new_object_names": [],
+                "change_type_name": None,
+                "description": "",
+            },
+        )
+
+        builder_client.post("/builders/build/preview", data={"builder_ids": [str(builder_id)]})
+        assert fake_git.synced == ("/tmp/repo", "main")
+
+    def test_a_git_failure_for_one_builder_does_not_block_the_response(
+        self, builder_client, app, base_entities, monkeypatch
+    ):
+        with app.app_context():
+            builder = _make_builder(base_entities)
+            db.session.commit()
+            builder_id = builder.id
+
+        class _RaisingGitProvider:
+            def sync_repo(self, local_path, branch, repo_name=None):
+                raise RuntimeError("network unreachable")
+
+        monkeypatch.setattr(
+            "app.services.build.prefill.provider_for_git_source", lambda source: _RaisingGitProvider()
+        )
+        monkeypatch.setattr(
+            "app.services.build.prefill.suggest_metadata",
+            lambda messages, additional_description=None: {
+                "matched_object_names": [],
+                "new_object_names": [],
+                "change_type_name": None,
+                "description": "",
+            },
+        )
+
+        response = builder_client.post("/builders/build/preview", data={"builder_ids": [str(builder_id)]})
+        assert response.status_code == 200
+        assert response.get_json()["commit_count"] == 0
 
 
 class TestStatusEndpoint:
@@ -935,7 +1113,7 @@ class TestPerBuilderRoleAccess:
             data={
                 "builder_ids": [str(builder_id)],
                 "bump_type": "patch",
-                "object": "backend",
+                "new_object_names": "backend",
                 "change_type_id": str(change_type_id),
             },
             follow_redirects=True,

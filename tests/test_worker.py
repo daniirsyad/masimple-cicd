@@ -8,6 +8,7 @@ from app.models import (
     ErrorLog,
     GitSource,
     ImageBuild,
+    ImageBuildCommit,
     PromptTemplate,
     RegistryTarget,
     Repository,
@@ -77,7 +78,7 @@ def _make_queued_build(app, entities, branch="main", bump_type="patch"):
             version=version,
             bump_type=bump_type,
             builder_branches=[(builder, branch)],
-            object_=None,
+            objects=[],
             additional_description=None,
             requested_by=None,
         )
@@ -106,7 +107,7 @@ class TestEnqueueBuildBatch:
                 version=version,
                 bump_type="patch",
                 builder_branches=[(builder, "main")],
-                object_=None,
+                objects=[],
                 additional_description=None,
                 requested_by=None,
             )
@@ -123,7 +124,7 @@ class TestEnqueueBuildBatch:
                 version=version,
                 bump_type="patch",
                 builder_branches=[(builder, "main")],
-                object_=None,
+                objects=[],
                 additional_description=None,
                 requested_by=None,
             )
@@ -132,10 +133,12 @@ class TestEnqueueBuildBatch:
     def test_stages_object_change_type_and_additional_description_on_the_batch(self, app):
         entities = _make_entities(app)
         with app.app_context():
-            from app.models import ChangeType
+            from app.models import ChangeType, Object
 
             change_type = ChangeType(name="Bug Fix")
             db.session.add(change_type)
+            obj = Object(name="checkout-flow")
+            db.session.add(obj)
             db.session.flush()
 
             version = Version.query.get(entities["version_id"])
@@ -144,12 +147,12 @@ class TestEnqueueBuildBatch:
                 version=version,
                 bump_type="patch",
                 builder_branches=[(builder, "main")],
-                object_="checkout-flow",
+                objects=[obj],
                 additional_description="manual notes",
                 requested_by=None,
                 change_type_id=change_type.id,
             )
-            assert batch.object == "checkout-flow"
+            assert [o.name for o in batch.objects] == ["checkout-flow"]
             assert batch.additional_description == "manual notes"
             assert batch.change_type_id == change_type.id
 
@@ -209,7 +212,7 @@ class TestBatchProgress:
                 version=version,
                 bump_type="patch",
                 builder_branches=[(builder, "main"), (builder, "develop")],
-                object_=None,
+                objects=[],
                 additional_description=None,
                 requested_by=None,
             )
@@ -236,13 +239,19 @@ class TestUpdateBatchStatus:
     def test_success_auto_creates_documentation_from_staged_fields(self, app):
         entities = _make_entities(app)
         with app.app_context():
+            from app.models import Object
+
+            obj = Object(name="checkout-flow")
+            db.session.add(obj)
+            db.session.flush()
+
             version = Version.query.get(entities["version_id"])
             builder = Builder.query.get(entities["builder_id"])
             batch = enqueue_build_batch(
                 version=version,
                 bump_type="patch",
                 builder_branches=[(builder, "main")],
-                object_="checkout-flow",
+                objects=[obj],
                 additional_description="manual notes",
                 requested_by=None,
             )
@@ -256,7 +265,7 @@ class TestUpdateBatchStatus:
 
             doc = VersionDocumentation.query.filter_by(batch_id=batch.id).first()
             assert doc is not None
-            assert doc.object == "checkout-flow"
+            assert [o.name for o in doc.objects] == ["checkout-flow"]
             # No PromptTemplate is seeded in the test DB, so no AI text is
             # generated — the combined description falls back to just the
             # additional description typed in at trigger time.
@@ -295,7 +304,7 @@ class TestUpdateBatchStatus:
                 version=version,
                 bump_type="patch",
                 builder_branches=[(builder, "main")],
-                object_=None,
+                objects=[],
                 additional_description="please mention the hotfix",
                 requested_by=None,
             )
@@ -337,7 +346,7 @@ class TestUpdateBatchStatus:
                 version=version,
                 bump_type="patch",
                 builder_branches=[(builder, "main"), (builder, "develop")],
-                object_=None,
+                objects=[],
                 additional_description=None,
                 requested_by=None,
             )
@@ -358,7 +367,7 @@ class TestUpdateBatchStatus:
                 version=version,
                 bump_type="patch",
                 builder_branches=[(builder, "main"), (builder, "develop")],
-                object_=None,
+                objects=[],
                 additional_description=None,
                 requested_by=None,
             )
@@ -379,7 +388,7 @@ class TestUpdateBatchStatus:
                 version=version,
                 bump_type="patch",
                 builder_branches=[(builder, "main"), (builder, "develop")],
-                object_=None,
+                objects=[],
                 additional_description=None,
                 requested_by=None,
             )
@@ -427,7 +436,7 @@ class TestUpdateBatchStatus:
                 version=version,
                 bump_type="patch",
                 builder_branches=[(builder, "main"), (builder, "develop")],
-                object_=None,
+                objects=[],
                 additional_description=None,
                 requested_by=None,
             )
@@ -496,7 +505,7 @@ class TestClaimNextJob:
                 version=version,
                 bump_type="patch",
                 builder_branches=[(builder, "main"), (builder, "develop")],
-                object_=None,
+                objects=[],
                 additional_description=None,
                 requested_by=None,
             )
@@ -693,13 +702,23 @@ class TestHeartbeatTick:
 
 
 class _FakeGitProvider:
-    def __init__(self):
+    def __init__(self, latest_commit="deadbeef", commits=None):
         self.synced = None
         self.synced_repo_name = None
+        self.latest_commit = latest_commit
+        self.commits = commits if commits is not None else []
+        self.get_commits_calls = []
 
     def sync_repo(self, local_path, branch, repo_name=None):
         self.synced = (local_path, branch)
         self.synced_repo_name = repo_name
+
+    def get_latest_commit(self, local_path, branch):
+        return self.latest_commit
+
+    def get_commits(self, local_path, since_ref=None, until_ref=None):
+        self.get_commits_calls.append((local_path, since_ref, until_ref))
+        return self.commits
 
 
 class _FakeBuildResult:
@@ -899,6 +918,97 @@ class TestRunBuild:
             assert build.image_tag == expected_tag
 
         assert fake_registry.pushed is None  # never called — the engine already pushed
+
+
+class TestRecordCommitHistory:
+    def _run_with_fake_git(self, app, build_id, monkeypatch, fake_git):
+        monkeypatch.setattr("app.services.build.worker.provider_for_git_source", lambda source: fake_git)
+        monkeypatch.setattr(
+            "app.services.build.worker.get_build_engine",
+            lambda: _FakeBuildEngine(_FakeBuildResult(success=True)),
+        )
+        monkeypatch.setattr(
+            "app.services.build.worker.get_registry_provider",
+            lambda provider_type, username, password, registry_url=None: _FakeRegistryProvider(),
+        )
+        _run_build(app, build_id)
+
+    def test_records_commit_sha_and_commit_rows_on_first_build(self, app, monkeypatch):
+        entities = _make_entities(app)
+        build_id = _make_queued_build(app, entities)
+        with app.app_context():
+            _claim(build_id)
+
+        fake_git = _FakeGitProvider(
+            latest_commit="sha-2",
+            commits=[
+                {
+                    "sha": "sha-1",
+                    "author_name": "Ann",
+                    "author_email": "ann@example.com",
+                    "message": "first commit",
+                    "committed_at": datetime.utcnow(),
+                },
+                {
+                    "sha": "sha-2",
+                    "author_name": "Ann",
+                    "author_email": "ann@example.com",
+                    "message": "second commit",
+                    "committed_at": datetime.utcnow(),
+                },
+            ],
+        )
+        self._run_with_fake_git(app, build_id, monkeypatch, fake_git)
+
+        # First build on this (builder, branch) — nothing to diff since, so
+        # since_ref must be None.
+        assert fake_git.get_commits_calls == [("/tmp/myapp", None, "main")]
+
+        with app.app_context():
+            build = ImageBuild.query.get(build_id)
+            assert build.commit_sha == "sha-2"
+            recorded = ImageBuildCommit.query.filter_by(image_build_id=build.id).all()
+            assert {c.sha for c in recorded} == {"sha-1", "sha-2"}
+            assert {c.message for c in recorded} == {"first commit", "second commit"}
+
+    def test_second_build_diffs_since_the_first_builds_commit(self, app, monkeypatch):
+        entities = _make_entities(app)
+
+        first_id = _make_queued_build(app, entities)
+        with app.app_context():
+            _claim(first_id)
+        self._run_with_fake_git(
+            app, first_id, monkeypatch, _FakeGitProvider(latest_commit="sha-1", commits=[])
+        )
+
+        second_id = _make_queued_build(app, entities)
+        with app.app_context():
+            _claim(second_id)
+        fake_git = _FakeGitProvider(latest_commit="sha-2", commits=[])
+        self._run_with_fake_git(app, second_id, monkeypatch, fake_git)
+
+        assert fake_git.get_commits_calls == [("/tmp/myapp", "sha-1", "main")]
+
+    def test_a_failed_git_read_does_not_fail_the_build(self, app, monkeypatch):
+        entities = _make_entities(app)
+        build_id = _make_queued_build(app, entities)
+        with app.app_context():
+            _claim(build_id)
+
+        fake_git = _FakeGitProvider()
+
+        def _raise_get_commits(local_path, since_ref=None, until_ref=None):
+            raise RuntimeError("shallow clone, no history")
+
+        fake_git.get_commits = _raise_get_commits
+        self._run_with_fake_git(app, build_id, monkeypatch, fake_git)
+
+        with app.app_context():
+            build = ImageBuild.query.get(build_id)
+            assert build.status == "success"
+            assert build.commit_sha is None
+            error_log = ErrorLog.query.filter_by(source="worker.record_commit_history").first()
+            assert error_log is not None
 
 
 class TestRunBuildFailureModes:

@@ -266,6 +266,87 @@ class TestAddBuildStep:
             assert WorkflowStep.query.filter_by(workflow_id=workflow_id).count() == 0
 
 
+class _FakePreviewGitProvider:
+    def __init__(self, messages=None):
+        self.messages = messages or []
+
+    def sync_repo(self, local_path, branch, repo_name=None):
+        pass
+
+    def get_commits(self, local_path, since_ref=None, until_ref=None):
+        return [{"sha": f"sha-{i}", "message": m} for i, m in enumerate(self.messages)]
+
+
+class TestBuildStepPreview:
+    def test_requires_at_least_one_selection(self, workflow_client, app, base_entities):
+        with app.app_context():
+            workflow = _make_workflow()
+            workflow_id = workflow.id
+
+        response = workflow_client.post(f"/workflows/{workflow_id}/steps/build/preview", data={})
+        assert response.status_code == 400
+
+    def test_rejects_a_selection_spanning_multiple_versions(self, workflow_client, app, base_entities):
+        with app.app_context():
+            builder1 = _make_builder(base_entities, "a")
+            other_version_type = VersionType(name="STAGING")
+            db.session.add(other_version_type)
+            db.session.flush()
+            other_version = Version(name="other", version_type_id=other_version_type.id)
+            db.session.add(other_version)
+            db.session.flush()
+            builder2 = Builder(
+                name="b",
+                version_id=other_version.id,
+                repository_id=base_entities["repository_id"],
+                default_branch="main",
+                registry_target_id=base_entities["registry_target_id"],
+            )
+            db.session.add(builder2)
+            workflow = _make_workflow()
+            db.session.commit()
+            workflow_id, builder1_id, builder2_id = workflow.id, builder1.id, builder2.id
+
+        response = workflow_client.post(
+            f"/workflows/{workflow_id}/steps/build/preview",
+            data={"builder_ids": [str(builder1_id), str(builder2_id)]},
+        )
+        assert response.status_code == 400
+
+    def test_resolves_group_and_individual_selection_and_returns_prefill(
+        self, workflow_client, app, base_entities, monkeypatch
+    ):
+        with app.app_context():
+            _make_builder(base_entities, "a", group_name="prod")
+            solo = _make_builder(base_entities, "solo")
+            workflow = _make_workflow()
+            db.session.commit()
+            workflow_id, solo_id = workflow.id, solo.id
+
+        fake_git = _FakePreviewGitProvider(messages=["feat: add thing", "fix: bug"])
+        monkeypatch.setattr("app.services.build.prefill.provider_for_git_source", lambda source: fake_git)
+        monkeypatch.setattr(
+            "app.services.build.prefill.suggest_metadata",
+            lambda messages, additional_description=None: {
+                "matched_object_names": [],
+                "new_object_names": ["backend"],
+                "change_type_name": None,
+                "description": "Added a thing and fixed a bug.",
+            },
+        )
+
+        response = workflow_client.post(
+            f"/workflows/{workflow_id}/steps/build/preview",
+            data={"group_names": ["prod"], "builder_ids": [str(solo_id)]},
+        )
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["bump_type"] == "minor"
+        assert data["object"] == "backend"
+        assert data["description"] == "Added a thing and fixed a bug."
+        assert data["commit_count"] == 4  # 2 commits x 2 resolved builders
+
+
 class TestAddDeployStep:
     def test_item_selection_succeeds(self, workflow_client, app):
         with app.app_context():

@@ -5,6 +5,12 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from app.extensions import db
 
+build_batch_objects = db.Table(
+    "build_batch_objects",
+    db.Column("batch_id", UUID(as_uuid=True), db.ForeignKey("build_batches.id"), primary_key=True),
+    db.Column("object_id", UUID(as_uuid=True), db.ForeignKey("objects.id"), primary_key=True),
+)
+
 
 class BuildBatch(db.Model):
     __tablename__ = "build_batches"
@@ -25,11 +31,6 @@ class BuildBatch(db.Model):
     bumped_from_patch = db.Column(db.Integer, nullable=True)
     requested_by = db.Column(UUID(as_uuid=True), db.ForeignKey("users.id"), nullable=True)
     status = db.Column(db.String, default="queued", nullable=False)
-    # Staged at trigger time (see builders.routes.build()); only copied into a
-    # real VersionDocumentation row if/when this batch fully succeeds — a
-    # batch that fails is never documented, so these otherwise just sit here
-    # unused for its lifetime.
-    object = db.Column(db.String, nullable=True)
     change_type_id = db.Column(UUID(as_uuid=True), db.ForeignKey("change_types.id"), nullable=True)
     additional_description = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -38,3 +39,8 @@ class BuildBatch(db.Model):
     version = db.relationship("Version", backref=db.backref("batches", lazy="dynamic"))
     requester = db.relationship("User")
     change_type = db.relationship("ChangeType")
+    # Staged at trigger time (see builders.routes.build()); only copied into a
+    # real VersionDocumentation row if/when this batch fully succeeds — a
+    # batch that fails is never documented, so these otherwise just sit here
+    # unused for its lifetime.
+    objects = db.relationship("Object", secondary=build_batch_objects, backref=db.backref("batches", lazy="dynamic"))

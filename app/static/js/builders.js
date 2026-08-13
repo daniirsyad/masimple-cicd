@@ -117,11 +117,208 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  setupSearchDropdown(
+  // --- Multi-select "Object" picker: same search-dropdown UX as above, but
+  // accumulates several picks as removable pills instead of overwriting a
+  // single value, and lets an unmatched typed value be added as a new
+  // Object (get-or-created server-side in Object.resolve()) rather than
+  // only ever picking from the existing list. ---
+  function setupMultiObjectPicker(input, dropdown, pillsContainer, hiddenContainer, suggestions) {
+    if (!input || !dropdown || !pillsContainer || !hiddenContainer) return;
+
+    const selected = []; // {kind: "existing"|"new", id, name}
+
+    function isSelected(name) {
+      return selected.some((item) => item.name.toLowerCase() === name.toLowerCase());
+    }
+
+    function renderPills() {
+      pillsContainer.innerHTML = "";
+      hiddenContainer.innerHTML = "";
+      selected.forEach((item, index) => {
+        const pill = document.createElement("span");
+        pill.className = `badge badge-sm gap-1 ${item.kind === "new" ? "badge-secondary" : "badge-primary"}`;
+        pill.append(document.createTextNode(item.name + (item.kind === "new" ? " (new)" : "")));
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.textContent = "×";
+        remove.className = "ml-1";
+        remove.addEventListener("click", () => {
+          selected.splice(index, 1);
+          renderPills();
+        });
+        pill.appendChild(remove);
+        pillsContainer.appendChild(pill);
+
+        const hidden = document.createElement("input");
+        hidden.type = "hidden";
+        hidden.name = item.kind === "existing" ? "object_ids" : "new_object_names";
+        hidden.value = item.kind === "existing" ? item.id : item.name;
+        hiddenContainer.appendChild(hidden);
+      });
+    }
+
+    function addExisting(obj) {
+      if (isSelected(obj.name)) return;
+      selected.push({ kind: "existing", id: obj.id, name: obj.name });
+      renderPills();
+    }
+
+    function addNew(name) {
+      name = name.trim();
+      if (!name || isSelected(name)) return;
+      // Case-insensitive exact match to an existing suggestion is treated as
+      // that existing Object, not a new near-duplicate.
+      const match = suggestions.find((s) => s.name.toLowerCase() === name.toLowerCase());
+      if (match) {
+        addExisting(match);
+        return;
+      }
+      selected.push({ kind: "new", id: null, name });
+      renderPills();
+    }
+
+    function renderOptions() {
+      const query = input.value.trim().toLowerCase();
+      const matches = suggestions.filter(
+        (s) => !isSelected(s.name) && (!query || s.name.toLowerCase().includes(query))
+      );
+
+      dropdown.innerHTML = "";
+      matches.forEach((s) => {
+        const li = document.createElement("li");
+        const a = document.createElement("a");
+        a.textContent = s.name;
+        a.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          addExisting(s);
+          input.value = "";
+          renderOptions();
+        });
+        li.appendChild(a);
+        dropdown.appendChild(li);
+      });
+
+      const trimmed = input.value.trim();
+      const exactMatch = suggestions.some((s) => s.name.toLowerCase() === trimmed.toLowerCase());
+      if (trimmed && !exactMatch && !isSelected(trimmed)) {
+        const li = document.createElement("li");
+        const a = document.createElement("a");
+        a.textContent = `+ Add "${trimmed}" as new`;
+        a.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          addNew(trimmed);
+          input.value = "";
+          renderOptions();
+        });
+        li.appendChild(a);
+        dropdown.appendChild(li);
+      }
+
+      dropdown.classList.toggle("hidden", dropdown.children.length === 0);
+    }
+
+    input.addEventListener("focus", renderOptions);
+    input.addEventListener("input", renderOptions);
+    input.addEventListener("blur", () => dropdown.classList.add("hidden"));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        dropdown.classList.add("hidden");
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        const trimmed = input.value.trim();
+        if (!trimmed) return;
+        const match = suggestions.find((s) => s.name.toLowerCase() === trimmed.toLowerCase());
+        if (match) addExisting(match);
+        else addNew(trimmed);
+        input.value = "";
+        dropdown.classList.add("hidden");
+      }
+    });
+
+    renderPills();
+
+    return {
+      addExisting,
+      addNew,
+      clear: () => {
+        selected.length = 0;
+        renderPills();
+      },
+    };
+  }
+
+  const objectPicker = setupMultiObjectPicker(
     document.getElementById("build-trigger-object-input"),
     document.getElementById("build-trigger-object-dropdown"),
+    document.getElementById("build-trigger-object-pills"),
+    document.getElementById("build-trigger-object-hidden"),
     parseSuggestionsData("build-trigger-object-suggestions-data")
   );
+
+  // --- "Preview from Git": reads every commit since each selected
+  // Builder's last successful build and pre-fills Bump Type/Object(s)/
+  // Change Type/Additional Description from them — a heuristic Bump Type
+  // guess plus an AI-assisted draft for the rest (see builders.routes.
+  // build_preview()). Every field stays editable; nothing is submitted
+  // until "Build" is actually clicked. ---
+  const previewBtn = document.getElementById("build-trigger-preview-btn");
+  const previewStatus = document.getElementById("build-trigger-preview-status");
+  if (previewBtn) {
+    previewBtn.addEventListener("click", () => {
+      const builderIds = Array.from(
+        document.querySelectorAll('#build-trigger-builders input[name="builder_ids"]')
+      ).map((input) => input.value);
+      if (builderIds.length === 0) {
+        previewStatus.textContent = "Select Builder(s) first.";
+        return;
+      }
+
+      const csrfToken = previewBtn.closest("form").querySelector('input[name="csrf_token"]').value;
+      const formData = new FormData();
+      formData.append("csrf_token", csrfToken);
+      builderIds.forEach((id) => formData.append("builder_ids", id));
+      const existingNotes = document.getElementById("build-trigger-additional-description");
+      if (existingNotes && existingNotes.value.trim()) {
+        formData.append("additional_description", existingNotes.value.trim());
+      }
+
+      previewBtn.disabled = true;
+      previewStatus.textContent = "Reading commits since the last build...";
+
+      fetch("/builders/build/preview", { method: "POST", body: formData })
+        .then((response) => response.json().then((data) => ({ ok: response.ok, data })))
+        .then(({ ok, data }) => {
+          if (!ok) {
+            previewStatus.textContent = data.error || "Preview failed.";
+            return;
+          }
+
+          const bumpSelect = document.getElementById("build-trigger-bump-type");
+          if (bumpSelect && data.bump_type) bumpSelect.value = data.bump_type;
+
+          objectPicker.clear();
+          (data.matched_objects || []).forEach((obj) => objectPicker.addExisting(obj));
+          (data.new_object_names || []).forEach((name) => objectPicker.addNew(name));
+
+          const changeTypeSelect = document.getElementById("build-trigger-change-type");
+          if (changeTypeSelect && data.change_type_id) changeTypeSelect.value = data.change_type_id;
+
+          const descriptionField = document.getElementById("build-trigger-additional-description");
+          if (descriptionField && data.description) descriptionField.value = data.description;
+
+          previewStatus.textContent =
+            data.commit_count > 0
+              ? `Pre-filled from ${data.commit_count} commit(s) since the last build — review before building.`
+              : "No new commits found since the last build — fields left as-is.";
+        })
+        .catch(() => {
+          previewStatus.textContent = "Preview failed — check the server logs.";
+        })
+        .finally(() => {
+          previewBtn.disabled = false;
+        });
+    });
+  }
 
   const groupNameSuggestions = parseSuggestionsData("group-name-suggestions-data");
   document.querySelectorAll(".group-name-input").forEach((input) => {
@@ -132,6 +329,29 @@ document.addEventListener("DOMContentLoaded", () => {
   // (single builder) or a group's "Build Group" button (every builder in
   // that Version's group, in one batch) — groups are already constrained to
   // one Version server-side, so no same-Version check is needed here. ---
+  // Clears every field a previous open of this modal (for a *different*
+  // builder/group) could have left behind — the Builders list itself is
+  // always rebuilt fresh by openBuildModal below, but Bump Type/Object(s)/
+  // Change Type/Additional Description/the preview status line are plain
+  // form state that otherwise survives a close+reopen untouched, showing
+  // stale data (most visibly whatever "Preview from Git" last filled in)
+  // for a build it was never actually generated for.
+  function resetBuildForm() {
+    const bumpSelect = document.getElementById("build-trigger-bump-type");
+    if (bumpSelect) bumpSelect.value = "";
+
+    objectPicker.clear();
+
+    const changeTypeSelect = document.getElementById("build-trigger-change-type");
+    if (changeTypeSelect) changeTypeSelect.value = "";
+
+    const descriptionField = document.getElementById("build-trigger-additional-description");
+    if (descriptionField) descriptionField.value = "";
+
+    const previewStatusEl = document.getElementById("build-trigger-preview-status");
+    if (previewStatusEl) previewStatusEl.textContent = "";
+  }
+
   function openBuildModal(builders) {
     const container = document.getElementById("build-trigger-builders");
     container.innerHTML = "";
@@ -154,6 +374,7 @@ document.addEventListener("DOMContentLoaded", () => {
       row.append(nameSpan, hiddenInput, branchSpan);
       container.appendChild(row);
     });
+    resetBuildForm();
     document.getElementById("build-trigger-modal").showModal();
   }
 

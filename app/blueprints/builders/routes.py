@@ -10,13 +10,14 @@ from app.models import (
     Builder,
     ChangeType,
     ImageBuild,
+    Object,
     RegistryTarget,
     Repository,
     Role,
     Version,
-    VersionDocumentation,
     WorkflowStep,
 )
+from app.services.build.prefill import compute_build_prefill
 from app.services.build.versioning import BUMP_TYPES
 from app.services.build.worker import enqueue_build_batch, get_batch_progress, get_engine_status
 from app.services.git.helpers import provider_for_git_source
@@ -161,11 +162,8 @@ def _change_type_choices():
 
 def _object_suggestions():
     return [
-        row[0]
-        for row in VersionDocumentation.query.with_entities(VersionDocumentation.object)
-        .filter(VersionDocumentation.object.isnot(None))
-        .distinct()
-        .order_by(VersionDocumentation.object)
+        {"id": str(obj.id), "name": obj.name}
+        for obj in Object.query.filter_by(is_active=True).order_by(Object.name).all()
     ]
 
 
@@ -404,9 +402,10 @@ def build():
         flash("Bump type is required.", "error")
         return redirect(url_for("builders.index"))
 
-    object_ = (request.form.get("object") or "").strip()
-    if not object_:
-        flash("Object is required.", "error")
+    object_ids = request.form.getlist("object_ids")
+    new_object_names = request.form.getlist("new_object_names")
+    if not object_ids and not any((raw or "").strip() for raw in new_object_names):
+        flash("At least one Object is required.", "error")
         return redirect(url_for("builders.index"))
 
     change_type_raw = (request.form.get("change_type_id") or "").strip()
@@ -425,6 +424,13 @@ def build():
             return redirect(url_for("builders.index"))
         builder_branches.append((builder, builder.default_branch))
 
+    # Resolved last, right before the batch is actually created — get-or-
+    # create writes new Object rows into the session, so every other
+    # validation check runs first and can still bail out with a plain
+    # redirect (an unflushed session is safely discarded on request
+    # teardown either way, but this keeps intent explicit).
+    objects = Object.resolve(object_ids, new_object_names)
+
     version = Version.query.get(version_ids.pop())
     additional_description = (request.form.get("additional_description") or "").strip()
 
@@ -432,7 +438,7 @@ def build():
         version=version,
         bump_type=bump_type,
         builder_branches=builder_branches,
-        object_=object_,
+        objects=objects,
         additional_description=additional_description,
         requested_by=current_user.id,
         change_type_id=change_type_id,
@@ -451,6 +457,57 @@ def build():
         "success",
     )
     return redirect(url_for("images.list_images"))
+
+
+@builders_bp.route("/build/preview", methods=["POST"])
+@permission_required("builder.build")
+def build_preview():
+    """AJAX-only: syncs the selected Builders' repos and reads every commit
+    since each one's last successful build, then returns a heuristic Bump
+    Type guess (Conventional Commits) plus an AI-assisted Object/Change
+    Type/Description draft (see build_prefill.suggest_metadata) for the
+    trigger modal to pre-fill — never applied automatically, the user still
+    reviews/edits every field before the real "Build" submit.
+
+    Shares the single-build-at-a-time guard with the manual git Re-sync
+    endpoint (git_sources.resync) so this preview's own sync_repo() calls
+    never race the build worker syncing the same repo mid-build. Doesn't
+    guard against two concurrent preview requests for the *same* builder
+    racing each other, though — a narrow, rare edge case not worth a new
+    locking mechanism for a best-effort preview.
+    """
+    builder_ids = [_parse_uuid(raw) for raw in request.form.getlist("builder_ids")]
+    builders = [Builder.query.get(bid) for bid in builder_ids if bid is not None]
+    builders = [b for b in builders if b is not None]
+
+    if not builders:
+        return jsonify({"error": "Select at least one Builder first."}), 400
+
+    if any(not builder.is_accessible_to(current_user) for builder in builders):
+        abort(403)
+
+    if len({builder.version_id for builder in builders}) > 1:
+        return jsonify({"error": "All selected Builders must share the same Version."}), 400
+
+    if ImageBuild.query.filter_by(status="running").first() is not None:
+        return jsonify({"error": "A build is currently running — try Preview again once it finishes."}), 409
+
+    additional_description = (request.form.get("additional_description") or "").strip()
+    prefill = compute_build_prefill(
+        [(builder, builder.default_branch) for builder in builders],
+        additional_description=additional_description,
+    )
+
+    return jsonify(
+        {
+            "bump_type": prefill["bump_type"],
+            "matched_objects": [{"id": str(obj.id), "name": obj.name} for obj in prefill["matched_objects"]],
+            "new_object_names": prefill["new_object_names"],
+            "change_type_id": str(prefill["change_type_id"]) if prefill["change_type_id"] else None,
+            "description": prefill["description"],
+            "commit_count": prefill["commit_count"],
+        }
+    )
 
 
 @builders_bp.route("/status")

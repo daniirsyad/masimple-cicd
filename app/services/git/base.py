@@ -52,13 +52,21 @@ class GitProvider(ABC):
         """Return the full commit SHA for `branch` in the repo at `local_path`."""
 
     @abstractmethod
-    def get_commit_messages(self, local_path, since_ref=None, until_ref=None):
-        """Return commit messages between `since_ref` (exclusive) and `until_ref`
-        (inclusive, defaults to HEAD) in the repo at `local_path`, oldest first.
-        If `since_ref` is None (e.g. the first build on a branch, with no prior
-        build to diff against), returns a bounded recent history instead of the
-        entire repo log.
+    def get_commits(self, local_path, since_ref=None, until_ref=None):
+        """Return commits between `since_ref` (exclusive) and `until_ref`
+        (inclusive, defaults to HEAD) in the repo at `local_path`, oldest first,
+        as a list of dicts: {"sha", "author_name", "author_email", "message",
+        "committed_at"}. If `since_ref` is None (e.g. the first build on a
+        branch, with no prior build to diff against), returns a bounded recent
+        history instead of the entire repo log.
         """
+
+    def get_commit_messages(self, local_path, since_ref=None, until_ref=None):
+        """Same range/fallback semantics as `get_commits`, but just the message
+        text — identical for every provider, so it's implemented once here
+        (like `list_files`) rather than duplicated per-subclass.
+        """
+        return [commit["message"] for commit in self.get_commits(local_path, since_ref, until_ref)]
 
     def list_files(self, local_path):
         """Walk the repo at `local_path` and return relative paths of every

@@ -6,11 +6,12 @@ from datetime import datetime, timedelta
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
-from app.models import BuildBatch, ImageBuild, VersionDocumentation
+from app.models import BuildBatch, ImageBuild, ImageBuildCommit, VersionDocumentation
 from app.services.ai.context import gather_batch_ai_context
 from app.services.ai.factory import default_provider_type, get_ai_provider
 from app.services.ai.prompt import render_default_prompt
 from app.services.build.factory import get_build_engine
+from app.services.build.history import get_last_built_commit
 from app.services.build.versioning import bump_version
 from app.services.git.helpers import provider_for_git_source
 from app.services.registry.factory import get_registry_provider
@@ -43,7 +44,7 @@ def enqueue_build_batch(
     version,
     bump_type,
     builder_branches,
-    object_,
+    objects,
     additional_description,
     requested_by,
     change_type_id=None,
@@ -53,14 +54,17 @@ def enqueue_build_batch(
     `builder_branches` is a list of (Builder, branch_used) tuples; every
     Builder in it must already share `version` (the caller validates this,
     since the constraint is UI/business logic, not something this function
-    can enforce from the tuples alone).
+    can enforce from the tuples alone). `objects` is a list of already-
+    resolved `Object` rows (existing ones picked, new ones get-or-created) —
+    the caller (builders.routes.build()) owns turning submitted ids/names
+    into real rows, since that's request-parsing, not batch-creation, logic.
 
     Deliberately does NOT bump `version` or create a VersionDocumentation row
     here — a batch that's still queued (or that ends up failing outright)
     must never leave the Version's numbers bumped, and only a fully
     successful batch ever gets documented. Both happen later, in the worker
     (see `_claim_next_job` and `_update_batch_status`), once there's an
-    actual outcome to act on. `object_`/`change_type_id`/
+    actual outcome to act on. `objects`/`change_type_id`/
     `additional_description` are just staged on the batch for now — they get
     copied into the real VersionDocumentation if/when it's created.
     """
@@ -70,7 +74,7 @@ def enqueue_build_batch(
         bump_type=bump_type,
         requested_by=requested_by,
         status="queued",
-        object=object_ or None,
+        objects=list(objects),
         change_type_id=change_type_id,
         additional_description=additional_description or None,
     )
@@ -269,9 +273,8 @@ def _generate_ai_description(batch):
     """
     try:
         provider_type = default_provider_type()
-        prompt = render_default_prompt(
-            gather_batch_ai_context(batch), batch.object, batch.additional_description
-        )
+        object_names = ", ".join(obj.name for obj in batch.objects)
+        prompt = render_default_prompt(gather_batch_ai_context(batch), object_names, batch.additional_description)
         if not prompt:
             return None, None
         description = get_ai_provider(provider_type).generate_description(prompt)
@@ -313,7 +316,7 @@ def _create_documentation_for_successful_batch(batch):
             batch_id=batch.id,
             built_by=batch.requested_by,
             change_type_id=batch.change_type_id,
-            object=batch.object,
+            objects=list(batch.objects),
             ai_description=ai_description,
             ai_provider_used=ai_provider_used,
             description=combined or None,
@@ -350,6 +353,31 @@ def _update_batch_status(batch_id):
     else:
         batch.status = "partial_failure"
     db.session.commit()
+
+
+def _record_commit_history(git_provider, repository, build):
+    """Best-effort: records the commit this build ran against (`commit_sha`)
+    and every commit since this Builder+branch's last successful build
+    (`ImageBuildCommit` rows), for the AI-description diff and the
+    documentation page's commit-range display. Never raises — a git-log
+    read failing (e.g. an unreadable/shallow history) must not fail the
+    build itself, only leave this supplementary data missing.
+    """
+    try:
+        build.commit_sha = git_provider.get_latest_commit(repository.local_path, build.branch_used)
+        since_ref = get_last_built_commit(build.builder_id, build.branch_used)
+        for commit in git_provider.get_commits(
+            repository.local_path, since_ref=since_ref, until_ref=build.branch_used
+        ):
+            db.session.add(ImageBuildCommit(image_build_id=build.id, **commit))
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        log_error(
+            source="worker.record_commit_history",
+            exc=exc,
+            description=f"Failed to record commit history for build {build.id}: {exc}",
+        )
 
 
 def _derive_image_name(full_name):
@@ -396,6 +424,8 @@ def _run_build(app, build_id):
             repository.status = "ready"
             repository.last_synced_at = datetime.utcnow()
             db.session.commit()
+
+            _record_commit_history(git_provider, repository, build)
 
             log_buffer.append("Sync complete. Starting build...\n")
             flush_log()

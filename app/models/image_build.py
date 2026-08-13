@@ -21,6 +21,7 @@ class ImageBuild(db.Model):
     batch_id = db.Column(UUID(as_uuid=True), db.ForeignKey("build_batches.id"), nullable=False)
     builder_id = db.Column(UUID(as_uuid=True), db.ForeignKey("builders.id"), nullable=False)
     branch_used = db.Column(db.String, nullable=False)
+    commit_sha = db.Column(db.String, nullable=True)
     status = db.Column(db.String, default="queued", nullable=False)
     registry_name = db.Column(db.String, nullable=True)
     image_tag = db.Column(db.String, nullable=True)

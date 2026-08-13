@@ -12,7 +12,9 @@ from app.models.version import Version
 from app.models.builder import Builder
 from app.models.build_batch import BuildBatch
 from app.models.image_build import ImageBuild
+from app.models.image_build_commit import ImageBuildCommit
 from app.models.change_type import ChangeType
+from app.models.object import Object
 from app.models.version_documentation import VersionDocumentation
 from app.models.version_link import VersionLink
 from app.models.ai_provider_config import AIProviderConfig
@@ -45,7 +47,9 @@ __all__ = [
     "Builder",
     "BuildBatch",
     "ImageBuild",
+    "ImageBuildCommit",
     "ChangeType",
+    "Object",
     "VersionDocumentation",
     "VersionLink",
     "AIProviderConfig",

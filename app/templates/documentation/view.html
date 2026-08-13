@@ -18,10 +18,12 @@ MASIMPLE CICD{% endblock %} {% block content %}
             <th>Builder</th>
             <th>Branch</th>
             <th>Status</th>
+            <th>Commits</th>
           </tr>
         </thead>
         <tbody>
           {% for image in batch.image_builds %}
+          {% set range = commit_ranges[image.id | string] %}
           <tr>
             <td>{{ image.builder.name }}</td>
             <td>{{ image.branch_used }}</td>
@@ -37,6 +39,22 @@ MASIMPLE CICD{% endblock %} {% block content %}
                 {{ image.status }}
               </span>
             </td>
+            <td>
+              {% if range.to_sha %}
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs font-mono"
+                onclick="document.getElementById('commits-modal-{{ image.id }}').showModal()"
+              >
+                {{ range.from_sha[:7] if range.from_sha else 'start' }} &rarr; {{ range.to_sha[:7] }}
+                {% if range.commits %}
+                <span class="badge badge-ghost badge-xs ml-1">{{ range.commits | length }}</span>
+                {% endif %}
+              </button>
+              {% else %}
+              <span class="text-xs text-base-content/60">not tracked</span>
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -44,6 +62,54 @@ MASIMPLE CICD{% endblock %} {% block content %}
     </div>
   </div>
 </div>
+
+{% for image in batch.image_builds %}
+{% set range = commit_ranges[image.id | string] %}
+{% if range.to_sha %}
+<dialog id="commits-modal-{{ image.id }}" class="modal">
+  <div class="modal-box w-11/12 max-w-2xl">
+    <h3 class="text-lg font-bold">Commits — {{ image.builder.name }} ({{ image.branch_used }})</h3>
+    <p class="mt-1 text-xs text-base-content/60">
+      <code>{{ range.from_sha[:7] if range.from_sha else 'initial build' }}</code>
+      &rarr;
+      <code>{{ range.to_sha[:7] }}</code>
+    </p>
+    <div class="mt-3 max-h-96 overflow-y-auto">
+      {% if range.commits %}
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>SHA</th>
+            <th>Author</th>
+            <th>Message</th>
+            <th>Date</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for commit in range.commits %}
+          <tr>
+            <td><code class="text-xs">{{ commit.sha[:7] }}</code></td>
+            <td class="text-xs">{{ commit.author_name or "—" }}</td>
+            <td class="text-xs whitespace-pre-wrap">{{ commit.message }}</td>
+            <td class="text-xs text-base-content/60">
+              {{ commit.committed_at | localtime("%Y-%m-%d %H:%M") if commit.committed_at else "—" }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-xs text-base-content/60">No new commits since the previous build.</p>
+      {% endif %}
+    </div>
+    <div class="modal-action">
+      <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Close</button>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{% endif %}
+{% endfor %}
 
 <div class="card mt-4 bg-base-100 shadow-sm">
   <div class="card-body p-4">
@@ -67,14 +133,27 @@ MASIMPLE CICD{% endblock %} {% block content %}
         </div>
       </div>
 
-      <div>
-        {{ form.object.label(class="label text-sm") }} {{
-        form.object(class="input input-bordered input-sm w-full", list="object-suggestions") }}
-        <datalist id="object-suggestions">
-          {% for suggestion in object_suggestions %}
-          <option value="{{ suggestion }}"></option>
-          {% endfor %}
-        </datalist>
+      <div class="relative">
+        <label class="label text-sm">Object(s)</label>
+        <div id="doc-object-pills" class="mb-1 flex flex-wrap gap-1"></div>
+        <input
+          type="text"
+          id="doc-object-input"
+          class="input input-bordered input-sm w-full"
+          autocomplete="off"
+          placeholder="Search existing Objects, or type a new one and press Enter"
+        />
+        <ul
+          id="doc-object-dropdown"
+          class="menu absolute z-20 mt-1 hidden max-h-48 w-full flex-nowrap overflow-y-auto rounded-box bg-base-100 p-1 shadow-lg"
+        ></ul>
+        <div id="doc-object-hidden"></div>
+        <script type="application/json" id="doc-object-suggestions-data">
+          {{ object_suggestions | tojson }}
+        </script>
+        <script type="application/json" id="doc-object-selected-data">
+          {{ doc_objects | tojson }}
+        </script>
       </div>
 
       <div>
@@ -146,4 +225,5 @@ MASIMPLE CICD{% endblock %} {% block content %}
 </div>
 
 <script src="{{ url_for('static', filename='js/ai-generate.js') }}"></script>
+<script src="{{ url_for('static', filename='js/documentation.js') }}"></script>
 {% endblock %}

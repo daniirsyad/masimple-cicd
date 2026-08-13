@@ -230,7 +230,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 </dialog>
 {% endfor %}
 
-<dialog id="add-build-step-modal" class="modal">
+<dialog id="add-build-step-modal" class="modal" data-preview-url="{{ url_for('workflows.build_step_preview', workflow_id=workflow.id) }}">
   <div class="modal-box w-11/12 max-w-2xl">
     <h3 class="text-lg font-bold">Add Build Step</h3>
     <form
@@ -242,7 +242,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
       <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
         <div>
           <span class="label text-sm">{{ build_form.group_names.label.text }}</span>
-          <div class="max-h-40 overflow-y-auto rounded border border-base-300 p-2">
+          <div id="build-step-group-names" class="max-h-40 overflow-y-auto rounded border border-base-300 p-2">
             {% for subfield in build_form.group_names %}
             <label class="flex items-center gap-2 py-0.5 text-sm">
               {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
@@ -254,7 +254,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
         </div>
         <div>
           <span class="label text-sm">{{ build_form.builder_ids.label.text }}</span>
-          <div class="max-h-40 overflow-y-auto rounded border border-base-300 p-2">
+          <div id="build-step-builder-ids" class="max-h-40 overflow-y-auto rounded border border-base-300 p-2">
             {% for subfield in build_form.builder_ids %}
             <label class="flex items-center gap-2 py-0.5 text-sm">
               {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
@@ -266,25 +266,28 @@ MASIMPLE CICD{% endblock %} {% block content %}
         </div>
       </div>
 
+      <p id="build-step-preview-status" class="text-xs text-base-content/60"></p>
+
       <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
         <div>
-          {{ build_form.bump_type.label(class="label text-sm") }} {{ build_form.bump_type(class="select
-          select-bordered select-sm w-full") }}
+          {{ build_form.bump_type.label(class="label text-sm") }} {{ build_form.bump_type(id="build-step-bump-type",
+          class="select select-bordered select-sm w-full") }}
         </div>
         <div>
-          {{ build_form.change_type_id.label(class="label text-sm") }} {{ build_form.change_type_id(class="select
-          select-bordered select-sm w-full") }}
+          {{ build_form.change_type_id.label(class="label text-sm") }} {{
+          build_form.change_type_id(id="build-step-change-type", class="select select-bordered select-sm w-full") }}
         </div>
       </div>
       <div>
-        {{ build_form.object.label(class="label text-sm") }} {{ build_form.object(class="input input-bordered
-        input-sm w-full") }} {% for error in build_form.object.errors %}
+        {{ build_form.object.label(class="label text-sm") }} {{ build_form.object(id="build-step-object",
+        class="input input-bordered input-sm w-full") }} {% for error in build_form.object.errors %}
         <p class="mt-1 text-xs text-error">{{ error }}</p>
         {% endfor %}
       </div>
       <div>
         {{ build_form.additional_description.label(class="label text-sm") }} {{
-        build_form.additional_description(class="textarea textarea-bordered textarea-sm w-full", rows=2) }}
+        build_form.additional_description(id="build-step-additional-description", class="textarea
+        textarea-bordered textarea-sm w-full", rows=2) }}
       </div>
       <div>
         {{ build_form.on_failure.label(class="label text-sm") }} {{ build_form.on_failure(class="select

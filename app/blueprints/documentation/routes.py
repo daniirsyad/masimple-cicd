@@ -6,7 +6,17 @@ from flask import flash, jsonify, redirect, render_template, request, url_for
 from app.blueprints.documentation import documentation_bp
 from app.blueprints.documentation.forms import DocumentationForm
 from app.extensions import db
-from app.models import AIProviderConfig, BuildBatch, ChangeType, User, Version, VersionDocumentation, VersionLink
+from app.models import (
+    AIProviderConfig,
+    BuildBatch,
+    ChangeType,
+    ImageBuild,
+    Object,
+    User,
+    Version,
+    VersionDocumentation,
+    VersionLink,
+)
 from app.services.ai.context import gather_batch_ai_context
 from app.services.ai.factory import default_provider_type, get_ai_provider
 from app.services.ai.prompt import render_default_prompt
@@ -43,11 +53,8 @@ def _linked_batch_choices(batch_id):
 
 def _object_suggestions():
     return [
-        row[0]
-        for row in VersionDocumentation.query.with_entities(VersionDocumentation.object)
-        .filter(VersionDocumentation.object.isnot(None))
-        .distinct()
-        .order_by(VersionDocumentation.object)
+        {"id": str(obj.id), "name": obj.name}
+        for obj in Object.query.filter_by(is_active=True).order_by(Object.name).all()
     ]
 
 
@@ -59,7 +66,42 @@ def _branches_used(batch):
     return ", ".join(seen)
 
 
-def _rendered_prompt(batch, object_value):
+def _commit_range_for_image(image_build):
+    """(from_sha, to_sha, commits) for one ImageBuild's row in "Images in
+    this Batch": `to_sha` is this build's own recorded commit
+    (ImageBuild.commit_sha), `from_sha` is the previous successful build's
+    commit for the same (builder, branch) pair as of when *this* build ran
+    (None if this was the first build on that pair), and `commits` is the
+    full ImageBuildCommit list captured at build time (see
+    worker._record_commit_history). All fields are None/empty for a build
+    that predates commit tracking — the template shows "not tracked", not
+    an error, for those.
+
+    Deliberately looks up the build that was previous *as of this one*
+    (created_at < image_build.created_at) rather than the pair's current
+    most-recent build (get_last_built_commit) — viewing documentation for
+    an older batch must show the range that was true then, not one that's
+    since moved on because of newer builds.
+    """
+    previous = (
+        ImageBuild.query.filter(
+            ImageBuild.builder_id == image_build.builder_id,
+            ImageBuild.branch_used == image_build.branch_used,
+            ImageBuild.status == "success",
+            ImageBuild.created_at < image_build.created_at,
+        )
+        .order_by(ImageBuild.created_at.desc())
+        .first()
+    )
+    return {
+        "from_sha": previous.commit_sha if previous else None,
+        "to_sha": image_build.commit_sha,
+        "commits": list(image_build.commits),
+    }
+
+
+def _rendered_prompt(batch, objects):
+    object_value = ", ".join(obj.name for obj in objects)
     return render_default_prompt(gather_batch_ai_context(batch), object_value, batch.additional_description)
 
 
@@ -122,7 +164,7 @@ def _documented_batches_query(filters):
         query = query.filter(VersionDocumentation.change_type_id.is_(None))
 
     if filters.get("object"):
-        query = query.filter(VersionDocumentation.object.ilike(f"%{filters['object']}%"))
+        query = query.filter(VersionDocumentation.objects.any(Object.name.ilike(f"%{filters['object']}%")))
 
     if filters.get("version_string"):
         query = query.filter(BuildBatch.full_version_string.ilike(f"%{filters['version_string']}%"))
@@ -155,9 +197,11 @@ def _render_view(batch, doc, form=None):
         form=form,
         branches_used=_branches_used(batch),
         object_suggestions=_object_suggestions(),
-        rendered_prompt=_rendered_prompt(batch, form.object.data or doc.object),
+        doc_objects=[{"id": str(obj.id), "name": obj.name} for obj in doc.objects],
+        rendered_prompt=_rendered_prompt(batch, doc.objects),
         provider_choices=_ai_provider_choices(),
         default_provider_type=default_provider_type(),
+        commit_ranges={str(image.id): _commit_range_for_image(image) for image in batch.image_builds},
     )
 
 
@@ -242,7 +286,9 @@ def view_documentation(batch_id):
 
         if form.validate_on_submit():
             doc.change_type_id = uuid.UUID(form.change_type_id.data) if form.change_type_id.data else None
-            doc.object = form.object.data.strip() if form.object.data else None
+            doc.objects = Object.resolve(
+                request.form.getlist("object_ids"), request.form.getlist("new_object_names")
+            )
             doc.description = form.description.data.strip() if form.description.data else None
             if form.ai_description.data:
                 doc.ai_description = form.ai_description.data
