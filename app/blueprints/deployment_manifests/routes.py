@@ -1,6 +1,6 @@
 import uuid
 
-from flask import abort, flash, jsonify, redirect, render_template, request, url_for
+from flask import abort, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user
 
 from app.blueprints.deployment_manifests import deployment_manifests_bp
@@ -290,7 +290,19 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
 @deployment_manifests_bp.route("/")
 @permission_required("deployment_manifest.view")
 def index():
-    return _render_index()
+    # One-shot hand-off from /yaml-generator's "Save as Manifest" action —
+    # session.pop() means a page reload afterward won't re-prefill, and it
+    # only ever activates when both the session key AND ?open=create are
+    # present, so a normal index() call is unaffected. Only name/
+    # yaml_content are prefilled; server_ids/allowed_user_ids are left for
+    # the user to fill in on this same, otherwise-unmodified create form.
+    prefill = session.pop("yaml_generator_prefill", None)
+    create_form = None
+    open_modal = None
+    if prefill and request.args.get("open") == "create":
+        create_form = DeploymentManifestForm(prefix=CREATE_PREFIX, data=prefill)
+        open_modal = "create-manifest-modal"
+    return _render_index(create_form=create_form, open_modal=open_modal)
 
 
 @deployment_manifests_bp.route("/api/placeholder-keys", methods=["POST"])

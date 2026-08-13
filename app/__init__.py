@@ -88,6 +88,7 @@ def create_app(config_name=None):
     from app.blueprints.deployment_runs import deployment_runs_bp
     from app.blueprints.deployment_pods import deployment_pods_bp
     from app.blueprints.workflows import workflows_bp
+    from app.blueprints.yaml_generator import yaml_generator_bp
     from app.services.build.worker import start_worker
     from app.services.deployment.worker import start_worker as start_deployment_worker
     from app.services.deployment.worker import start_status_poller as start_deployment_status_poller
@@ -113,6 +114,7 @@ def create_app(config_name=None):
     app.register_blueprint(deployment_runs_bp, url_prefix="/deployment-runs")
     app.register_blueprint(deployment_pods_bp, url_prefix="/deployment-pods")
     app.register_blueprint(workflows_bp, url_prefix="/workflows")
+    app.register_blueprint(yaml_generator_bp, url_prefix="/yaml-generator")
 
     start_worker(app)
     start_deployment_worker(app)

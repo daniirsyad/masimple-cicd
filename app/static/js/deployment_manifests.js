@@ -17,58 +17,13 @@ document.addEventListener("DOMContentLoaded", () => {
   // progressive enhancement over the plain <textarea> the server actually
   // reads on submit (WTForms/Flask never see CodeMirror itself, only the
   // textarea it wraps). Falls back to the plain textarea untouched if the
-  // vendored script failed to load. ---
+  // vendored script failed to load. Shared init lives in yaml_editor.js
+  // (used here, by deployment_servers.js, and by yaml_generator.js). ---
   const yamlEditors = {}; // textarea id -> CodeMirror instance
-
-  function currentCodeMirrorTheme() {
-    return document.documentElement.getAttribute("data-theme") === "dark" ? "material-darker" : "default";
-  }
-
-  if (typeof CodeMirror !== "undefined") {
-    document.querySelectorAll(".yaml-content-input").forEach((textarea) => {
-      const cm = CodeMirror.fromTextArea(textarea, {
-        mode: "yaml",
-        lineNumbers: true,
-        lineWrapping: true,
-        tabSize: 2,
-        // YAML indentation must be spaces — a literal tab character is a
-        // syntax error to any YAML parser ("found character that cannot
-        // start any token"). CodeMirror's default Tab-key behavior inserts
-        // a real tab, so it's rebound here to insert spaces instead.
-        indentWithTabs: false,
-        extraKeys: { Tab: (editor) => editor.execCommand("insertSoftTab") },
-        theme: currentCodeMirrorTheme(),
-      });
-      yamlEditors[textarea.id] = cm;
-
-      // CodeMirror only writes back into the underlying textarea when
-      // .save() is called — without this, the server would always see
-      // whatever the textarea had at page load, not the edited YAML.
-      const form = textarea.closest("form");
-      if (form) form.addEventListener("submit", () => cm.save());
-
-      // CodeMirror measures its container's layout at creation time; a
-      // <dialog> that hasn't been shown yet has zero size (every manifest
-      // modal starts closed), so the editor is born with a broken/zero-
-      // height layout until refreshed once actually visible.
-      const dialog = textarea.closest("dialog");
-      if (dialog) {
-        new MutationObserver(() => {
-          if (dialog.open) cm.refresh();
-        }).observe(dialog, { attributes: true, attributeFilter: ["open"] });
-      }
-    });
-
-    // theme.js only ever flips document.documentElement's data-theme
-    // attribute directly (no event dispatched), so mirror that instead of
-    // hooking a nonexistent theme-change event.
-    if (Object.keys(yamlEditors).length) {
-      new MutationObserver(() => {
-        const theme = currentCodeMirrorTheme();
-        Object.values(yamlEditors).forEach((cm) => cm.setOption("theme", theme));
-      }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-    }
-  }
+  document.querySelectorAll(".yaml-content-input").forEach((textarea) => {
+    const cm = window.YamlEditor.initYamlEditor(textarea);
+    if (cm) yamlEditors[textarea.id] = cm;
+  });
 
   // --- Searchable dropdown for the Group field — same pattern as builders.js. ---
   function setupSearchDropdown(input, dropdown, suggestions) {

@@ -225,6 +225,16 @@ def run():
         # migrate_remove_deployment_pods_menu below.
 
         get_or_create(
+            "YAML Generator",
+            parent_id=deployment.id,
+            url="/yaml-generator",
+            permission_code="yaml_generator.view",
+            order=3,
+            show_in_navbar=False,
+            show_in_sidebar=True,
+        )
+
+        get_or_create(
             "Workflows",
             url="/workflows",
             permission_code="workflow.view",

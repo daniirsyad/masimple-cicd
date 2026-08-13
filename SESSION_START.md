@@ -18,48 +18,93 @@ First, read these files in full before doing anything else:
    Parts 1–9, only if you need the *why* behind something (a past decision,
    a bug that was already found and fixed a certain way, a design tradeoff).
    Not required reading for routine work — `APP_SUMMARY.md` plus this file
-   should already be enough context to start.
+   should already be enough context to start. **Note: not yet updated past
+   Part 9** — everything in the "Current state" section below (the reliability
+   fixes, the six new providers, the YAML editor fix, and the YAML Generator
+   page) postdates it and has no narrative write-up there yet.
 
 Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **542 tests passing.** For the full story of how the Deployment module was
-  built and extended (Part 6), the direct Error Log links feature (Part 7),
-  real-time pod log streaming over SSE (Part 8), and the new Workflow
-  feature (Part 9), see `AI_CONTEXT.md` — this section only tracks what's
-  true *right now*, not how it got there.
-- **⚠️ Uncommitted work in the working tree**: the entire Workflow feature
-  (new `workflows` blueprint, 5 new models, `app/services/workflow/`
-  resolver+orchestrator, new migration `1268e9419f60`, new templates/JS,
-  referential-integrity guards added to `builders.routes.delete_builder()`
-  and `deployment_manifests.routes.delete_manifest()`, plus edits to
-  `seeds/seed_admin.py`/`seeds/seed_menu.py`) is implemented, migrated, and
-  tested against the dev DB but **not yet committed** — this project's
-  established pattern is the user batches and pushes on their own terms
-  (see AI_CONTEXT.md Part 6's closing note), so don't commit/push it
-  unprompted. Everything through the pod-logs-streaming work (Part 8) is
-  already committed and pushed (`f4b02d9`); local `main` matches
-  `origin/main` up to that point only.
-- **Migration head is `1268e9419f60`** (add workflow models) — already
-  applied to the dev DB via `flask db upgrade`, and the new
-  `workflow.view`/`workflow.manage`/`workflow.run` permissions are already
-  seeded (`seeds/seed_admin.py` was re-run — safe, matches by permission
-  `code`). One new `Menu` row ("Workflows") was inserted **directly** into
-  the dev DB (not via `seeds/seed_menu.py` — see the next bullet).
+- **656 tests passing** (as of the last full run — see the uncommitted-work
+  note below for what that count includes).
+- **Everything through "Implement Custom API AI provider" is committed and
+  pushed to `origin/main`** (`ae4c6fb`). That range covers, each as its own
+  commit: the Workflow module; heartbeat-based crash recovery for the
+  build/deploy workers; a persistent Docker volume for cloned repos plus a
+  Builder-edit-form fix; tests for the custom-agent (`api`-type)
+  `DeploymentServer` HTTP contract; and six previously-stubbed providers now
+  fully implemented (GHCR, Harbor, ECR registry providers; Claude, Gemini,
+  Custom API AI providers).
+- **⚠️ Uncommitted work in the working tree, and NOT YET VERIFIED as working
+  — do not consider this done**: a YAML-editor cursor-position bug fix
+  (shared `app/static/js/yaml_editor.js`, replacing two independently
+  duplicated CodeMirror-init blocks in `deployment_manifests.js`/
+  `deployment_servers.js`) plus a new `/yaml-generator` page/blueprint
+  (`app/blueprints/yaml_generator/`, `app/services/yaml_generator/`) that
+  builds Deployment/Service/ConfigMap/Secret/Ingress YAML from form fields
+  with a live preview, Copy/Download, and a "Save as Manifest" hand-off into
+  the existing Deployment Manifest creation flow. Automated tests
+  (`tests/test_yaml_generator.py`, 20 tests) all pass and are part of the
+  656 count above, but **the actual cursor-bug fix itself has been through
+  two live-browser round-trips with the user and is still mid-verification**:
+  1. First attempt (disable CodeMirror `lineWrapping`, defer `cm.refresh()`
+     via a double `requestAnimationFrame` after a `<dialog>` opens) — user
+     confirmed live the bug still reproduced, but found that scrolling the
+     editor down then back up fixed it immediately every time.
+  2. Second attempt automated that: switched the trigger to a
+     `ResizeObserver` on the editor's own wrapper element (fires once the
+     browser has actually committed a real layout size, not a guessed frame
+     count), and on trigger did `cm.refresh()` + a scroll-position nudge +
+     a **resize nudge** (`cm.setSize()`). This **broke the editor
+     entirely — it stopped rendering** — because the resize nudge mutated
+     the exact element the `ResizeObserver` was watching, creating a
+     feedback loop (each nudge re-triggered the observer, which nudged
+     again).
+  3. Third attempt (current state, just applied, **not yet confirmed
+     working**): removed the resize nudge, keeping only `cm.refresh()` +
+     the scroll-position nudge, triggered via the same `ResizeObserver`.
+     Should fix both the original bug and the regression from attempt 2,
+     but has not been re-tested in a browser yet.
+  - **The agent cannot verify any of this itself** — this sandbox has no
+    working headless Chromium (Playwright's own Chromium build is missing
+    `libasound2` system library with no sudo available to install it; the
+    system's snap-packaged Chromium is blocked by the container's
+    mount-namespace restrictions). All browser verification for this work
+    has been, and must continue to be, done by the user directly, reporting
+    back what they see (ideally with a screenshot).
+  - `requirements.txt` gained `boto3` (ECR) and `PyYAML` (YAML Generator, a
+    deliberate exception to this codebase's usual dict→`json.dumps()`
+    anti-PyYAML convention — see the code comment in
+    `app/services/yaml_generator/render.py` for why) — both already
+    `pip install`ed into the local `.venv`, but re-run `pip install -r
+    requirements.txt` in any other environment.
+  - The `yaml_generator.view` permission and a "YAML Generator" `Menu` row
+    (nested under the existing "Deployment" parent) have already been
+    applied directly to the dev DB (permission via re-running
+    `seeds/seed_admin.py`, which is safe/idempotent; the menu row via a
+    direct `Menu(...)` insert, **not** `seeds/seed_menu.py` — see the
+    warning below). `seeds/seed_menu.py` itself was also edited to add the
+    equivalent `get_or_create(...)` call for future fresh installs, but
+    that edit has not been (and must not be) run against this dev DB.
+- **Migration head is `01350ebce389`** (add `heartbeat_at` to
+  `image_builds`/`deployment_executions`, on top of `1268e9419f60`'s
+  workflow models) — already applied to the dev DB via `flask db upgrade`.
 - **⚠️ Do not run `python seeds/seed_menu.py` against the dev DB** until its
   `get_or_create()` matching (currently exact `label` + `parent_id`) is
   fixed to tolerate renames, e.g. matching by `url` instead — this DB's
   real menu labels have drifted from what the script expects (real
-  "Builder"/"Servers"/"Yaml/Manifests"/"Runs" vs. the script's "Image
-  Builder"/"Deployment Servers"/"Deployment Manifests"/"Deployment Runs"),
-  so re-running it silently creates duplicate sidebar rows. Caught and
-  cleaned up twice already (see Part 7 in `AI_CONTEXT.md`) — do not run it
-  again without fixing the matching logic first. `seeds/seed_admin.py`
-  doesn't have this problem (it matches by permission `code`, which hasn't
-  drifted) and is safe to re-run as usual. If a new feature needs exactly
-  one new sidebar entry, insert that single `Menu` row directly (see how
-  the Workflows entry was added) rather than running the whole script.
+  "Servers"/"Yaml/Manifests"/"Runs" vs. the script's "Deployment
+  Servers"/"Deployment Manifests"/"Deployment Runs"), so re-running it
+  silently creates duplicate sidebar rows. Caught and cleaned up twice
+  already (see Part 7 in `AI_CONTEXT.md`) — do not run it again without
+  fixing the matching logic first. `seeds/seed_admin.py` doesn't have this
+  problem (it matches by permission `code`, which hasn't drifted) and is
+  safe to re-run as usual. If a new feature needs exactly one new sidebar
+  entry, insert that single `Menu` row directly (matching by its **parent's**
+  label, which hasn't drifted, the way the YAML Generator row above was
+  added) rather than running the whole script.
 - Run tests via:
   ```bash
   source .venv/bin/activate && set -a && source .env && set +a
@@ -69,7 +114,8 @@ Then ask me what to work on next rather than assuming.
   gateway IP `172.29.16.1` directly, not the `db` Docker Compose hostname —
   no `sed` swap needed from inside the sandbox.)
 - CSS changes need a rebuild to actually show up: `npm run build:css`
-  (already run as of the Workflow feature's new templates).
+  (already run as of the YAML Generator page's new templates — new
+  daisyUI `-xs` size-variant classes weren't previously compiled).
 - **gunicorn now runs `--worker-class gthread --threads 4 --timeout 120`**
   (`entrypoint.sh`), not plain sync workers — changed to support the pod-logs
   SSE stream (Part 8), which needs a long-lived connection that a sync
@@ -90,19 +136,33 @@ Then ask me what to work on next rather than assuming.
     app use — `CREATE_PREFIX`, `_edit_prefix(id)`, etc.) prefixes **every**
     field including the hidden `csrf_token` itself, e.g.
     `manifest-<uuid>-csrf_token`, not a bare `csrf_token` — grep the actual
-    rendered `id="..."` first rather than assuming the field name.
+    rendered `id="..."` first rather than assuming the field name. An
+    AJAX-only endpoint not backed by a rendered form at all (e.g.
+    `/yaml-generator/generate/<kind>`) instead reads the CSRF token from a
+    `data-csrf` attribute on a hidden per-page `<span>` and sends it as the
+    `X-CSRFToken` header — Flask-WTF's global `CSRFProtect` checks that
+    header automatically, and the form itself is instantiated with
+    `meta={"csrf": False}` so its own embedded `csrf_token` field
+    (which the AJAX body never includes) doesn't also get checked and fail.
   - The "docker" build engine runs bare-metal on the host (shells out to the
     host's own `docker` CLI over the mounted socket); "kaniko" runs
     containerized/daemonless. `buildx` needed on the host for local
     "docker"-engine builds regardless of the Dockerfile's own copy.
-  - `REPO_CLONE_ROOT` (`<app>/data/repos`) has no persistent volume mounted —
-    registered repos' local clones are lost on container restart. Re-sync and
-    the build worker self-heal via `sync_repo(repo_name=...)`; the Builder
-    create/edit branch/Dockerfile pickers and `/github`'s unregistered-repo
-    listing do not.
+  - `REPO_CLONE_ROOT` (`<app>/data/repos`) **now has a persistent named
+    Docker volume** (`repo_clones`, `docker-compose.yml`) — registered
+    repos' local clones survive container restarts as of the "Persist repo
+    clones..." commit. (Previously did not; if working from a checkout
+    older than `81c1895`, this volume won't exist yet.)
   - The app now runs **four** independent background poll threads (build
-    worker, deploy worker, deploy live-status poller, and the new workflow
+    worker, deploy worker, deploy live-status poller, and the workflow
     orchestrator), each with its own DB-queue and its own concurrency
     story — none of them execute each other's work; the workflow
     orchestrator only ever enqueues into the build/deploy workers' existing
-    queues and watches for terminal status, see AI_CONTEXT.md Part 9.
+    queues and watches for terminal status, see AI_CONTEXT.md Part 9. Both
+    the build and deploy workers additionally now run a **heartbeat**
+    thread each (see `cac7252`): every claimed job's `heartbeat_at` is
+    ticked every 15s while it runs, and a stale/missing heartbeat (>60s) on
+    the single `status='running'` row is auto-reaped as a failure — this
+    closes what used to be a real gap where a process crash mid-build/
+    mid-deploy would leave that row wedged forever, silently blocking the
+    entire pipeline until someone fixed it by hand.

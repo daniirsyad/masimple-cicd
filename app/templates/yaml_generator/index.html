@@ -1,0 +1,198 @@
+{% extends "base.html" %} {% block title %}YAML Generator -
+MASIMPLE CICD{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/codemirror.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/material-darker.css') }}" />
+{% endblock %}
+{% block content %}
+<span id="yaml-generator-page" data-csrf="{{ csrf_token() }}" class="hidden"></span>
+
+{% macro key_value_rows(fieldlist, field_name, container_id) %}
+<div id="{{ container_id }}" class="key-value-rows flex flex-col gap-2" data-next-index="{{ fieldlist|length }}">
+  {% for subform in fieldlist %}
+  <div class="key-value-row flex gap-2 items-center">
+    {{ subform.key(class="input input-bordered input-xs w-1/2 font-mono", placeholder="key") }}
+    {{ subform.value(class="input input-bordered input-xs w-1/2 font-mono", placeholder="value") }}
+    <button type="button" class="remove-row-btn btn btn-xs btn-circle btn-ghost text-error">✕</button>
+  </div>
+  {% endfor %}
+</div>
+<button
+  type="button"
+  class="add-row-btn btn btn-xs btn-outline border-dashed mt-1"
+  data-container="{{ container_id }}"
+  data-template="{{ container_id }}-template"
+>
+  + Add Row
+</button>
+<template id="{{ container_id }}-template">
+  <div class="key-value-row flex gap-2 items-center">
+    <input type="text" name="{{ field_name }}-__INDEX__-key" placeholder="key" class="input input-bordered input-xs w-1/2 font-mono" />
+    <input type="text" name="{{ field_name }}-__INDEX__-value" placeholder="value" class="input input-bordered input-xs w-1/2 font-mono" />
+    <button type="button" class="remove-row-btn btn btn-xs btn-circle btn-ghost text-error">✕</button>
+  </div>
+</template>
+{% endmacro %}
+
+{% macro port_rows(fieldlist, field_name, container_id) %}
+<div id="{{ container_id }}" class="port-rows flex flex-col gap-2" data-next-index="{{ fieldlist|length }}">
+  {% for subform in fieldlist %}
+  <div class="port-row flex gap-2 items-center">
+    {{ subform.port(class="input input-bordered input-xs w-1/4", placeholder="port") }}
+    {{ subform.target_port(class="input input-bordered input-xs w-1/4", placeholder="target port") }}
+    {{ subform.protocol(class="select select-bordered select-xs w-1/4") }}
+    <button type="button" class="remove-row-btn btn btn-xs btn-circle btn-ghost text-error">✕</button>
+  </div>
+  {% endfor %}
+</div>
+<button
+  type="button"
+  class="add-row-btn btn btn-xs btn-outline border-dashed mt-1"
+  data-container="{{ container_id }}"
+  data-template="{{ container_id }}-template"
+>
+  + Add Port
+</button>
+<template id="{{ container_id }}-template">
+  <div class="port-row flex gap-2 items-center">
+    <input type="number" name="{{ field_name }}-__INDEX__-port" placeholder="port" class="input input-bordered input-xs w-1/4" />
+    <input type="number" name="{{ field_name }}-__INDEX__-target_port" placeholder="target port" class="input input-bordered input-xs w-1/4" />
+    <select name="{{ field_name }}-__INDEX__-protocol" class="select select-bordered select-xs w-1/4">
+      <option value="TCP">TCP</option>
+      <option value="UDP">UDP</option>
+    </select>
+    <button type="button" class="remove-row-btn btn btn-xs btn-circle btn-ghost text-error">✕</button>
+  </div>
+</template>
+{% endmacro %}
+
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold">YAML Generator</h1>
+</div>
+<p class="text-sm text-base-content/60 mt-1">
+  Build a Kubernetes resource from form fields, preview the generated YAML, then copy/download it or save it
+  straight into Deployment Manifests.
+</p>
+
+<div class="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
+  <div class="flex flex-col gap-4">
+    <div>
+      <label class="label text-sm">Resource Kind</label>
+      <select id="kind-select" class="select select-bordered select-sm w-full">
+        {% for kind, label in kinds %}
+        <option value="{{ kind }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <form id="generator-form-deployment" class="generator-form flex flex-col gap-3" data-kind="deployment">
+      <div>{{ forms.deployment.name.label(class="label text-sm") }} {{ forms.deployment.name(class="input input-bordered input-sm w-full") }}</div>
+      <div>{{ forms.deployment.namespace.label(class="label text-sm") }} {{ forms.deployment.namespace(class="input input-bordered input-sm w-full") }}</div>
+      <div>{{ forms.deployment.replicas.label(class="label text-sm") }} {{ forms.deployment.replicas(class="input input-bordered input-sm w-full") }}</div>
+      <div>
+        {{ forms.deployment.image.label(class="label text-sm") }}
+        {{ forms.deployment.image(class="input input-bordered input-sm w-full font-mono", placeholder="repo/image:tag or {{SYS:VERSION}}") }}
+      </div>
+      <div>{{ forms.deployment.container_port.label(class="label text-sm") }} {{ forms.deployment.container_port(class="input input-bordered input-sm w-full") }}</div>
+      <div>
+        <label class="label text-sm">Labels</label>
+        {{ key_value_rows(forms.deployment.labels, "labels", "deployment-labels") }}
+      </div>
+      <div>
+        <label class="label text-sm">Environment Variables</label>
+        {{ key_value_rows(forms.deployment.env_vars, "env_vars", "deployment-env-vars") }}
+      </div>
+    </form>
+
+    <form id="generator-form-service" class="generator-form hidden flex flex-col gap-3" data-kind="service">
+      <div>{{ forms.service.name.label(class="label text-sm") }} {{ forms.service.name(class="input input-bordered input-sm w-full") }}</div>
+      <div>{{ forms.service.namespace.label(class="label text-sm") }} {{ forms.service.namespace(class="input input-bordered input-sm w-full") }}</div>
+      <div>{{ forms.service.service_type.label(class="label text-sm") }} {{ forms.service.service_type(class="select select-bordered select-sm w-full") }}</div>
+      <div>
+        <label class="label text-sm">Selector</label>
+        {{ key_value_rows(forms.service.selector, "selector", "service-selector") }}
+      </div>
+      <div>
+        <label class="label text-sm">Ports</label>
+        {{ port_rows(forms.service.ports, "ports", "service-ports") }}
+      </div>
+    </form>
+
+    <form id="generator-form-configmap" class="generator-form hidden flex flex-col gap-3" data-kind="configmap">
+      <div>{{ forms.configmap.name.label(class="label text-sm") }} {{ forms.configmap.name(class="input input-bordered input-sm w-full") }}</div>
+      <div>{{ forms.configmap.namespace.label(class="label text-sm") }} {{ forms.configmap.namespace(class="input input-bordered input-sm w-full") }}</div>
+      <div>
+        <label class="label text-sm">Data</label>
+        {{ key_value_rows(forms.configmap.data, "data", "configmap-data") }}
+      </div>
+    </form>
+
+    <form id="generator-form-secret" class="generator-form hidden flex flex-col gap-3" data-kind="secret">
+      <div>{{ forms.secret.name.label(class="label text-sm") }} {{ forms.secret.name(class="input input-bordered input-sm w-full") }}</div>
+      <div>{{ forms.secret.namespace.label(class="label text-sm") }} {{ forms.secret.namespace(class="input input-bordered input-sm w-full") }}</div>
+      <div>{{ forms.secret.secret_type.label(class="label text-sm") }} {{ forms.secret.secret_type(class="select select-bordered select-sm w-full") }}</div>
+      <div>
+        <label class="label text-sm">Data (values are base64-encoded automatically)</label>
+        {{ key_value_rows(forms.secret.data, "data", "secret-data") }}
+      </div>
+    </form>
+
+    <form id="generator-form-ingress" class="generator-form hidden flex flex-col gap-3" data-kind="ingress">
+      <div>{{ forms.ingress.name.label(class="label text-sm") }} {{ forms.ingress.name(class="input input-bordered input-sm w-full") }}</div>
+      <div>{{ forms.ingress.namespace.label(class="label text-sm") }} {{ forms.ingress.namespace(class="input input-bordered input-sm w-full") }}</div>
+      <div>{{ forms.ingress.host.label(class="label text-sm") }} {{ forms.ingress.host(class="input input-bordered input-sm w-full") }}</div>
+      <div>{{ forms.ingress.path.label(class="label text-sm") }} {{ forms.ingress.path(class="input input-bordered input-sm w-full") }}</div>
+      <div>{{ forms.ingress.path_type.label(class="label text-sm") }} {{ forms.ingress.path_type(class="select select-bordered select-sm w-full") }}</div>
+      <div>{{ forms.ingress.backend_service_name.label(class="label text-sm") }} {{ forms.ingress.backend_service_name(class="input input-bordered input-sm w-full") }}</div>
+      <div>{{ forms.ingress.backend_service_port.label(class="label text-sm") }} {{ forms.ingress.backend_service_port(class="input input-bordered input-sm w-full") }}</div>
+      <div>{{ forms.ingress.tls_secret_name.label(class="label text-sm") }} {{ forms.ingress.tls_secret_name(class="input input-bordered input-sm w-full") }}</div>
+    </form>
+  </div>
+
+  <div class="flex flex-col gap-3">
+    <div class="flex items-center justify-between">
+      <label class="label text-sm">Preview</label>
+      <button type="button" id="generate-btn" class="btn btn-xs btn-primary">Generate</button>
+    </div>
+    <div class="yaml-editor-wrapper overflow-hidden rounded-lg border border-base-300">
+      <textarea
+        id="preview-yaml"
+        class="yaml-content-input textarea textarea-bordered textarea-sm w-full font-mono"
+        rows="20"
+        readonly
+      ></textarea>
+    </div>
+    <div id="generate-errors" class="text-error text-xs"></div>
+    <div class="flex flex-wrap gap-2">
+      <button type="button" id="copy-btn" class="btn btn-sm btn-outline" disabled>Copy to Clipboard</button>
+      <button type="button" id="download-btn" class="btn btn-sm btn-outline" disabled>Download .yaml</button>
+    </div>
+
+    <form
+      method="post"
+      action="{{ url_for('yaml_generator.save_as_manifest') }}"
+      id="save-as-manifest-form"
+      class="flex flex-col gap-2 border-t border-base-300 pt-3 mt-2"
+    >
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+      <input type="hidden" name="yaml_content" id="save-yaml-content" />
+      <label class="label text-sm">Manifest Name</label>
+      <input
+        type="text"
+        name="name"
+        id="save-manifest-name"
+        class="input input-bordered input-sm w-full"
+        placeholder="Defaults to the generated resource's own name"
+      />
+      <button type="submit" id="save-as-manifest-btn" class="btn btn-sm btn-secondary" disabled>
+        Save as Manifest
+      </button>
+    </form>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='vendor/codemirror/codemirror.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/yaml.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/yaml_editor.js') }}"></script>
+<script src="{{ url_for('static', filename='js/yaml_generator.js') }}"></script>
+{% endblock %}

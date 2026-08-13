@@ -11,4 +11,5 @@ docker
 boto3
 cryptography
 requests
+PyYAML
 tzdata

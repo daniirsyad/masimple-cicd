@@ -26,7 +26,11 @@ MASIMPLE CICD is an internal Flask web app with four halves:
    namespaces, nodes, services, ingresses, PVs/PVCs) for any registered
    Kubernetes server. Pod logs stream live over Server-Sent Events
    (`kubectl logs -f` under the hood); everything else "live" in this app is
-   still plain interval polling.
+   still plain interval polling. A standalone **YAML Generator**
+   (`/yaml-generator`) builds Deployment/Service/ConfigMap/Secret/Ingress
+   YAML from form fields with a live preview, independent of any manifest —
+   its "Save as Manifest" action hands the result into this module's own
+   manifest-creation flow rather than persisting anything itself.
 4. A **Workflow module** on top of both of the above — chain existing
    Builders and DeploymentManifests into an ordered, reusable sequence (e.g.
    build → deploy to staging → deploy to prod) without re-entering any
@@ -50,12 +54,14 @@ different roles) — not a SaaS product with per-customer isolation.
 | Background work | Python `threading`/`queue` — independent in-process worker threads (one for builds, one for deploys, one deploy live-status poller, one workflow orchestrator), no Celery/Redis |
 | Deployment (of MASIMPLE CICD itself) | Docker (multi-stage: Node build for CSS, then Python/gunicorn `--worker-class gthread --threads 4`), Docker Compose (`web` + `db`) |
 | Git integration | GitPython, provider-abstracted (`GitProvider` → `GitHubProvider`) |
-| Registry integration | docker-py against Docker Hub, provider-abstracted (`RegistryProvider` → `DockerHubProvider`) |
+| Registry integration | docker-py, provider-abstracted (`RegistryProvider` → `DockerHubProvider`/`GHCRProvider`/`HarborProvider`/`ECRProvider`, all implemented) |
 | Image builds | shells out to `docker buildx build` or a `kaniko-executor` binary, provider-abstracted (`BuildEngine`) |
 | Kubernetes integration | shells out to the `kubectl` CLI (no `kubernetes` client library), provider-abstracted (`DeploymentProvider` → `KubernetesProvider`/`CustomAPIProvider`) — `kubectl` must be installed wherever MASIMPLE CICD itself runs; pod logs stream via `kubectl logs -f` over Server-Sent Events |
-| AI description generation | provider-abstracted (`AIProvider`); Qwen implemented, Claude/Gemini/Custom API are stubs |
+| AI description generation | provider-abstracted (`AIProvider` → `QwenProvider`/`ClaudeProvider`/`GeminiProvider`/`CustomAPIProvider`, all implemented) |
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
-| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 542 tests |
+| AWS SDK | `boto3` — ECR `RegistryProvider` only (SigV4-signed calls, doesn't fit the generic Docker Registry v2 bearer-token flow the other registry providers share) |
+| YAML generation | `PyYAML` — YAML Generator page only; everywhere else in this app deliberately avoids it in favor of dict→`json.dumps()` (JSON is valid YAML) since that output only ever feeds `kubectl apply -f -`, never a human — see `app/services/yaml_generator/render.py` |
+| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 656 tests |
 
 ## Architecture conventions
 
@@ -70,7 +76,8 @@ different roles) — not a SaaS product with per-customer isolation.
   Secret/ConfigMap create-edit-delete forms, on top of its original
   read-only Pods/Nodes/Services/Ingress/PVs/PVCs/Workloads browsing),
   `workflows` (chains existing Builders/DeploymentManifests into an ordered,
-  reusable sequence — see the Workflow module below).
+  reusable sequence — see the Workflow module below), `yaml_generator`
+  (builds Kubernetes resource YAML from form fields — see below).
 - **One model file per table** under `app/models/`.
 - All model PKs are `UUID` (`sqlalchemy.dialects.postgresql.UUID`,
   `default=uuid.uuid4`) — never integer autoincrement.
@@ -103,11 +110,25 @@ different roles) — not a SaaS product with per-customer isolation.
   above (via the exact same `enqueue_build_batch()`/`enqueue_deployment_run()`
   the manual trigger routes call) and watches for terminal status before
   advancing to the next step, so a workflow step is subject to the same
-  single-flight locks as any manually triggered batch/run.
+  single-flight locks as any manually triggered batch/run. The build and
+  deploy workers each also run a **heartbeat** thread: the single
+  `status='running'` row's `heartbeat_at` is ticked every 15s while a job
+  runs, and a separate reap check (folded into each worker's existing 2s
+  poll loop) fails out a stale/missing heartbeat (>60s) as a crashed job,
+  freeing the single-flight slot automatically instead of leaving it wedged
+  forever after an ungraceful process death mid-build/mid-deploy — a
+  downstream `WorkflowRun` watching that batch/run resumes on its own once
+  it reaches that terminal status, no workflow-side handling needed.
 - Templates: Tailwind/daisyUI utility classes; a handful of pages have their
   own small vanilla-JS file (`app/static/js/<page>.js`) for
   cascading dropdowns, searchable-history comboboxes, live-status polling,
-  or client-built markup.
+  or client-built markup. One deliberate exception to "one JS file per
+  page": `app/static/js/yaml_editor.js` is a small shared module (exposed
+  as `window.YamlEditor`, no bundler) for the CodeMirror YAML-editor init
+  used by `deployment_manifests.js`, `deployment_servers.js`, and
+  `yaml_generator.js` — extracted specifically to fix a cursor-position bug
+  that existed in two independently duplicated copies, not a general
+  code-sharing precedent for future pages.
 
 ## Data model (by area)
 
@@ -298,6 +319,24 @@ in exception-swallowing code paths).
   Each action (Deploy/Update/Stop/Restart) has its own confirmation modal
   (fetched preview, no page navigation) and its own permission
   (`deployment.deploy`/`update`/`stop`/`restart`).
+- **`/yaml-generator`** (`yaml_generator.view`, nested under the Deployment
+  sidebar group) — a standalone Kubernetes YAML builder: pick a resource
+  kind (Deployment/Service/ConfigMap/Secret/Ingress), fill in form fields
+  (key/value rows for labels/env/data, port rows for Services), and get a
+  live-updating YAML preview (debounced, re-generated server-side on every
+  field change so the preview always matches what a save would actually
+  produce) in the same CodeMirror editor `/deployment-manifests` uses.
+  Copy-to-clipboard and Download-as-`.yaml` are pure client-side. "Save as
+  Manifest" hands the generated YAML off into `/deployment-manifests`'
+  own Create-Manifest flow via a one-shot session prefill (`name`/
+  `yaml_content` only) rather than persisting anything itself — nothing in
+  this blueprint ever touches `DeploymentManifest`/`db.session` directly,
+  so the actual save still goes through that flow's own validation/
+  permission checks (`deployment_manifest.manage`). Doesn't persist any
+  config of its own — no new DB tables. A generated `image` field accepts
+  a literal `{{SYS:VERSION}}`/`{{SYS:VERSION:key}}` token, since the
+  resolver that reads those (`app/services/deployment/resolver.py`) is a
+  plain regex over text, not YAML-structure-aware.
 - **`/deployment-runs`** — paginated run history (filter by status/
   manifest/server/date range), live "Deploy Status" widget (polls every
   3s) plus a user-configurable full-page auto-refresh (Off/5s/10s/30s/60s,
@@ -408,14 +447,11 @@ in exception-swallowing code paths).
   JS polling) has been verified via Flask's test client (every route and
   template renders correctly, including populated/linked/errored run
   states) but not yet in an actual browser.
-- `REPO_CLONE_ROOT` (`<app>/data/repos`) has no persistent volume mounted in
-  the current Docker Compose setup — registered repos' local clones are lost
-  on container restart. The build worker and manual Re-sync self-heal
-  (re-clone on demand); the Builder create/edit branch/Dockerfile pickers and
-  `/github`'s unregistered-repo listing do not.
-- Claude/Gemini/Custom-API `AIProvider` implementations and
-  GHCR/Harbor/ECR `RegistryProvider` implementations are unimplemented stubs
-  — only Qwen and Docker Hub actually work today.
+- **The YAML-editor cursor-position fix (see `app/static/js/yaml_editor.js`)
+  is unverified as of this writing** — see `SESSION_START.md`'s "Current
+  state" section for the exact live-debugging history (two prior attempts,
+  one of which briefly broke the editor entirely via a `ResizeObserver`
+  feedback loop). Confirm with the user before treating this as fixed.
 - Everything runs through a single in-process worker thread per queue (one
   each for builds and deploys, plus the workflow orchestrator, which only
   ever enqueues into those same two queues) — there is no distributed/
@@ -425,11 +461,14 @@ in exception-swallowing code paths).
   runs on (not the end user's machine) — deploys/updates/stops/restarts/pod
   browsing all shell out to it. No `kubernetes` client library is used.
 - The `"api"` `DeploymentServer` connection type (a custom agent instead of
-  raw Kubernetes) has an **assumed, unverified** HTTP contract (GET to
-  check reachability, POST/DELETE the raw YAML to apply/tear down) — never
-  matched against a real agent implementation. It also doesn't support
-  restart, live-status polling, or any of the `/deployment-pods` browsing
-  (all raise `NotImplementedError` / 404, by design, not by omission).
+  raw Kubernetes) has an **assumed** HTTP contract (GET to check
+  reachability, POST/DELETE the raw YAML to apply/tear down, a body on the
+  DELETE) — `tests/test_custom_api_provider.py` now pins down that the code
+  actually behaves exactly as documented (mocked HTTP calls, no real
+  agent), but the contract itself has still never been matched against a
+  real agent implementation. It also doesn't support restart, live-status
+  polling, or any of the `/deployment-pods` browsing (all raise
+  `NotImplementedError` / 404, by design, not by omission).
 - `DeploymentManifest`'s Restart action is `delete()` + `apply()` of the same
   rendered YAML, not `kubectl rollout restart` — so there's a real gap with
   nothing running between the two steps, not a zero-downtime rolling

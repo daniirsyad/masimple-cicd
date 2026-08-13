@@ -31,3 +31,8 @@ Thumbs.db
 # Logs
 *.log
 
+# Docker Compose's standard local-override mechanism — machine-specific,
+# never meant to be committed (e.g. pointing `web` at a different
+# DATABASE_URL than .env's, for a local Postgres instance outside compose).
+docker-compose.override.yml
+

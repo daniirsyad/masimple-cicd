@@ -61,6 +61,7 @@ BASE_PERMISSIONS = [
     ("workflow.view", "View workflows and their run history"),
     ("workflow.manage", "Create, edit, and delete workflows"),
     ("workflow.run", "Trigger a workflow run"),
+    ("yaml_generator.view", "View and use the Kubernetes YAML generator"),
 ]
 
 # Retired in favor of the four granular deployment.* permissions above (one
