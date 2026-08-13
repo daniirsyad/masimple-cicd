@@ -108,6 +108,22 @@ class TestGetCommitMessages:
         messages = provider.get_commit_messages(local_path, since_ref=None, until_ref="HEAD")
         assert messages == ["commit message 3", "commit message 4"]
 
+    def test_explicit_limit_overrides_the_default(self, local_repo, monkeypatch):
+        local_path, commits = local_repo
+        monkeypatch.setattr("app.services.git.github.DEFAULT_LOG_LIMIT", 20)
+        provider = GitHubProvider()
+
+        messages = provider.get_commit_messages(local_path, since_ref=None, until_ref="HEAD", limit=3)
+        assert messages == ["commit message 2", "commit message 3", "commit message 4"]
+
+    def test_explicit_limit_also_bounds_the_since_ref_unreachable_fallback(self, local_repo):
+        local_path, commits = local_repo
+        provider = GitHubProvider()
+
+        bogus_sha = "deadbeef" * 5
+        messages = provider.get_commit_messages(local_path, since_ref=bogus_sha, until_ref="HEAD", limit=2)
+        assert messages == ["commit message 3", "commit message 4"]
+
     def test_raises_for_a_path_that_is_not_a_git_repo(self, tmp_path):
         empty_dir = tmp_path / "not-a-repo"
         empty_dir.mkdir()

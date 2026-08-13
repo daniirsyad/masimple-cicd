@@ -17,7 +17,11 @@ MASIMPLE CICD is an internal Flask web app with four halves:
    and container registries, define reusable "Builder" configs, trigger
    versioned builds (single or batched), push images, and auto-generate
    changelog-style documentation for each successful build (with an AI
-   assist).
+   assist). The build-trigger form's Bump Type/Object(s)/Change Type/
+   Additional Description can be auto-filled from git commit history since
+   the last build ("Preview from Git") — a deterministic Conventional
+   Commits guess for Bump Type plus an AI-assisted draft for the rest,
+   always editable before the build actually runs.
 3. A **Deployment module** — register Kubernetes (or custom-agent) target
    servers, define YAML manifests with placeholders that resolve against an
    Image Builder Builder's latest (or a pinned) successful build, then
@@ -61,7 +65,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
 | AWS SDK | `boto3` — ECR `RegistryProvider` only (SigV4-signed calls, doesn't fit the generic Docker Registry v2 bearer-token flow the other registry providers share) |
 | YAML generation | `PyYAML` — YAML Generator page only; everywhere else in this app deliberately avoids it in favor of dict→`json.dumps()` (JSON is valid YAML) since that output only ever feeds `kubectl apply -f -`, never a human — see `app/services/yaml_generator/render.py` |
-| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 656 tests |
+| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 733 tests |
 
 ## Architecture conventions
 
@@ -70,7 +74,9 @@ different roles) — not a SaaS product with per-customer isolation.
 - **One blueprint per feature**, package name `<name>_bp`, each with its own
   `routes.py` + `forms.py` (Flask-WTF): `auth`, `main`, `users`, `roles`,
   `permissions`, `menus`, `logs`, `ai_settings`, `git_sources`, `registries`,
-  `versions`, `builders`, `images`, `documentation`, `system_config`,
+  `versions`, `dockerfiles` (reusable, app-managed Dockerfiles a Builder can
+  build from instead of a path inside its repo — see below), `builders`,
+  `images`, `documentation`, `system_config`,
   `deployment_servers`, `deployment_manifests`, `deployment_runs`,
   `deployment_pods` (this last one now has a `forms.py` too — Namespace/
   Secret/ConfigMap create-edit-delete forms, on top of its original
@@ -146,40 +152,82 @@ in exception-swallowing code paths).
 - `RegistryTarget` (a container registry credential, e.g. Docker Hub).
 - `VersionType` (lookup: DEV/STAGING/PROD/…, extensible) → `Version` (a
   named, persistent major.minor.patch counter the user creates ahead of
-  time, e.g. "backend-service").
+  time, e.g. "backend-service"). `Version.linked_versions` is a
+  **one-directional** many-to-many self-link (`version_version_links` table,
+  distinct from the batch-to-batch `VersionLink` table below) — edited via a
+  checkbox picker on the Version's own edit form, it controls which *other*
+  Versions' batches show up in that Version's own "Linked Batches" picker on
+  the Documentation page, beyond batches that already share the same
+  Version (always offered). Linking A → B does not grant B → A; that only
+  exists if B's own picker is separately edited to include A.
+- `Dockerfile` — a reusable, app-managed Dockerfile (name + content), an
+  alternative to a Builder pointing at a path inside its own repo. Same
+  "shared, independently managed config referenced by Builder" shape as
+  `RegistryTarget`/`GitSource`; can't be deleted while any `Builder` still
+  references it.
 - `Builder` — a reusable build config: one `Repository` + one `Version` +
-  branch + Dockerfile path + one `RegistryTarget` + build args + optional
-  `group_name` (purely organizational grouping for the UI) + optional custom
-  `image_name` + `allowed_roles` (many-to-many `Role` — see access control
-  below).
+  branch + one `RegistryTarget` + build args + optional `group_name`
+  (purely organizational grouping for the UI) + optional custom `image_name`
+  + `allowed_roles` (many-to-many `Role` — see access control below).
+  `dockerfile_source` picks which of two mutually-exclusive Dockerfile
+  fields actually applies: `"repo"` (default) uses `dockerfile_path`, a path
+  inside the cloned repository, unchanged from before; `"managed"` uses
+  `managed_dockerfile_id` → `Dockerfile` instead, and the worker writes that
+  Dockerfile's content out to a fixed filename inside the repo clone
+  (`.masimple_cicd_managed.Dockerfile`, rewritten fresh before every build,
+  never committed to git) right before handing the build context to the
+  build engine.
 - `BuildBatch` — one build-trigger action, covering one or more `Builder`s
   that share the same `Version`. Bumps that Version's number **exactly
   once** and produces one shared version string
   (`{TYPE}.{MAJOR}.{MINOR}.{PATCH}.{DATETIME}`) all its images share. Has
   `bump_type` (major/minor/patch), aggregate `status`
-  (queued/running/success/partial_failure/failed), and staged
-  `object`/`change_type_id`/`additional_description` fields captured at
-  trigger time.
+  (queued/running/success/partial_failure/failed), staged `objects`
+  (many-to-many `Object`, see below) /`change_type_id`/
+  `additional_description` fields captured at trigger time.
 - `ImageBuild` — one `Builder`'s execution inside a `BuildBatch`: branch
-  used, status, image tag/size, build log, timestamps.
+  used, status, image tag/size, build log, timestamps, `commit_sha` (the
+  commit this build ran against) → `ImageBuildCommit` (one row per commit
+  since this `(builder, branch)` pair's previous successful build — sha,
+  author, message, committed-at — captured at build time, powers both the
+  "since last build" AI context and the Documentation page's commit-range
+  display).
 - `ChangeType` (lookup: New Program/Update/Bug Fix/…, extensible).
+- `Object` (lookup: what a build/documentation entry is about, e.g.
+  "checkout-flow", extensible — same get-or-create-on-unseen-name shape as
+  `ChangeType`/`VersionType`) — many-to-many with both `BuildBatch` and
+  `VersionDocumentation`, so either can reference several Objects at once.
+  Picked via a search-and-add-new multi-picker (pills) on the Builder
+  trigger modal and the Documentation page, resolved server-side by
+  `Object.resolve(object_ids, new_names)`.
 - `VersionDocumentation` — one-to-one with a **successfully completed**
   `BuildBatch` only (created automatically the moment a batch's last image
-  succeeds, never up front and never for a failed batch): built-by, object,
-  change type, an AI-generated draft description (`ai_description` +
-  `ai_provider_used`, kept separately from the final editable
-  `description`), `is_complete` = whether a change type has been set.
+  succeeds, never up front and never for a failed batch): built-by,
+  `objects` (many-to-many `Object`), change type, an AI-generated draft
+  description (`ai_description` + `ai_provider_used`, kept separately from
+  the final editable `description`), `is_complete` = whether a change type
+  has been set.
 - `VersionLink` — many-to-many batch-to-batch, for a documentation record to
   say "this batch bundles/incorporates these other prior batches."
 - `AIProviderConfig` (provider type, model name, API key, is_default,
   is_active) and `PromptTemplate` (editable prompt text with
   `{{branch_names}}`/`{{object}}`/`{{commit_messages}}`/`{{additional_description}}`
-  placeholders, plain regex substitution not Jinja).
+  placeholders, plain regex substitution not Jinja) — this is the template
+  behind the post-build `ai_description` draft specifically; the
+  build-trigger "Preview from Git" pre-fill (Object(s)/Change Type/
+  Description) uses its own separate, code-defined structured-JSON prompt
+  (`app/services/ai/build_prefill.py`), not `PromptTemplate`, since it needs
+  several distinct fields back reliably rather than one free-text blob.
 - `SystemConfig` — a **singleton** row of app-wide settings: timezone
   (applied to every displayed timestamp via a `localtime` Jinja filter),
   session timeout minutes, build engine choice (`docker`/`kaniko`), a UI
-  toggle (`hide_navbar_title_when_sidebar_open`), and the Deployment
-  module's live-status poll interval.
+  toggle (`hide_navbar_title_when_sidebar_open`), the Deployment module's
+  live-status poll interval, and `commit_log_limit` (max commits
+  `GitProvider.get_commits()`/`get_commit_messages()` reads when there's no
+  prior build to diff against — first build on a branch, or the prior
+  build's commit no longer reachable after a force-push/rebase — read fresh
+  on every call via `app.utils.system_config.get_system_config()`, no
+  restart needed, same pattern as the poll interval).
 
 **Deployment module:**
 - `DeploymentServer` — a registered target: `connection_type` (`kube` or
@@ -253,9 +301,10 @@ in exception-swallowing code paths).
 - **`/` Dashboard** — active users/roles counts; permission-gated Image
   Builder stat cards (Builders/Versions/Images Built/Documentation Pending)
   and Deployment stat cards (Deployment Servers/Manifests/Runs), each only
-  shown if the viewer has that resource's view permission; a build-engine
-  and a deploy-engine busy/idle indicator; a recent-errors count; a
-  recent-builds table; recent activity log.
+  shown if the viewer has that resource's view permission and each with its
+  own small Feather-style icon; a build-engine and a deploy-engine busy/idle
+  indicator; a recent-errors count; a recent-builds table; recent activity
+  log.
 - **`/users`, `/roles`, `/permissions`** — standard RBAC CRUD. The Roles
   page's permission picker groups the ~41 permissions under friendly
   resource headings (Users, Builders, AI Providers, …) with human
@@ -277,31 +326,63 @@ in exception-swallowing code paths).
   save.
 - **`/versions`** — Version entity CRUD; Version Type field is a
   searchable-history combobox (free text, autocompletes from prior values,
-  creates a new `VersionType` row if unseen).
+  creates a new `VersionType` row if unseen). A **Linked Versions** checkbox
+  picker sets `linked_versions` (one-directional — see the data model
+  section above); has no effect on its own beyond widening what the
+  Documentation page's "Linked Batches" picker offers for batches under this
+  Version.
+- **`/dockerfiles`** (`dockerfile.manage`) — CRUD for reusable, app-managed
+  Dockerfiles (name + raw content), referenced by a Builder whose
+  `dockerfile_source` is set to "Managed Dockerfile" instead of "From
+  Repository". Delete is blocked while any Builder still references it,
+  same delete-guard pattern used elsewhere in this app.
 - **`/builders`** — Builder CRUD, grouped by `group_name` (grouped builders
   only build as a group; ungrouped builders build individually); per-builder
   **role-based access control** (a Builder with no `allowed_roles` is
   visible/buildable only to users with `builder.manage`; otherwise limited to
-  users whose role is in the allow-list); Group and Object fields are both
-  searchable-history comboboses. The build-trigger modal requires Bump Type,
-  Object, and Change Type (no silent defaults) and does **not** allow a
-  branch override at trigger time — branch is always the Builder's own
-  configured default, changeable only via Edit Builder. Live build-status
+  users whose role is in the allow-list); Group is a searchable-history
+  combobox, Object(s) a search-and-add-new multi-picker (pills). Dockerfile
+  Source toggles between "From Repository" (a path inside the cloned repo,
+  the original behavior) and "Managed Dockerfile" (picks a `Dockerfile` row
+  from `/dockerfiles` instead — see the data model section above). The
+  build-trigger modal requires Bump Type, at least one Object, and Change
+  Type (no silent defaults) and does **not** allow a branch override at
+  trigger time — branch is always the Builder's own configured default,
+  changeable only via Edit Builder. A **"Preview from Git"** button syncs
+  the selected Builders' repos, reads commits since each one's last
+  successful build, and pre-fills Bump Type (deterministic Conventional
+  Commits guess) plus an AI-assisted Object(s)/Change Type/Description
+  draft (`app/services/build/prefill.py`) — every field stays editable,
+  nothing is submitted until Build is actually clicked. Live build-status
   widget with a spinner + real progress bar while a build runs.
 - **`/images`** — build run history grouped by `BuildBatch`, filterable by
   status, with per-image registry links and human-readable sizes; running
   items show a spinner.
 - **`/documentation`** — list of every fully-successful (and thus
   documented) batch, with a full multi-field filter (Version, Version
-  String substring, Change Type, Object substring, Built By, Documented/Pending
-  status, date range, all AND-combined, preserved across pagination).
+  String substring, Change Type, Object(s), Built By, Documented/Pending
+  status, date range, all AND-combined, preserved across pagination) tucked
+  inside a daisyUI `collapse` (starts open only when a filter is already
+  applied) so it doesn't permanently eat vertical space above the results.
+  Object is a multi-select — pick from *existing* Objects only (no
+  add-new, unlike the pickers below), rendered as a hand-rolled search+pills
+  widget on its own full-width row (`app/static/js/documentation_filters.js`
+  — a third, distinct implementation from `setupMultiObjectPicker`, see
+  Conventions below) rather than a native `<select multiple>` or a
+  third-party library.
 - **`/documentation/<batch_id>`** — per-batch documentation detail/edit:
-  change type, object, description, an AI-assist panel (shows the filled-in
-  prompt, lets you regenerate or edit before saving — never saves raw AI
-  output unseen), and a linked-batches picker.
+  change type, Object(s) (same multi-picker as the build-trigger modal),
+  description, an AI-assist panel (shows the filled-in prompt, lets you
+  regenerate or edit before saving — never saves raw AI output unseen), and
+  a linked-batches picker. Each image in "Images in this Batch" shows a
+  `from → to` short-SHA commit range (from = the previous successful
+  build's commit for that builder/branch as of when this build ran) with a
+  commit-count badge, opening a modal with the full per-commit SHA/author/
+  message/date list — sourced from `ImageBuildCommit`, nothing is tracked
+  for a build that predates commit tracking ("not tracked" shown instead).
 - **`/config`** — System Configuration (`system.manage`): timezone, session
   timeout, build engine, duplicate-title toggle, deploy live-status poll
-  interval.
+  interval, commit log limit (see the data model section above).
 - **`/deployment-servers`** — register/edit target servers (kubeconfig or
   custom-agent credentials, never re-shown after save), per-server "Test
   Connection", `allowed_roles` picker, per-row "Kubernetes" link into that
@@ -384,10 +465,17 @@ in exception-swallowing code paths).
   *ungrouped* Builders/Manifests (an item already in a group is never
   independently selectable — only reachable via its group), plus (build
   steps only) Bump Type/Change Type/Object/Additional Description and a
-  per-step "if this step fails: stop the run / continue anyway" choice.
-  Steps are drag-reordered (SortableJS, same pattern as manifest groups).
-  Each step's card shows a **live** preview of what it currently resolves to
-  (re-computed on every page load, not frozen at step-creation time). "Run"
+  per-step "if this step fails: stop the run / continue anyway" choice —
+  checking a group/Builder auto-fires the same "Preview from Git" pre-fill
+  the Image Builder trigger modal uses (debounced, no separate button here,
+  since the target selection happens inside this modal rather than
+  beforehand). **Still authoring-time only**: the pre-filled/entered values
+  are captured once when the step is added and replayed unchanged on every
+  future run of that step — not re-resolved against fresh commits each run
+  (see Known Gaps). Steps are drag-reordered (SortableJS, same pattern as
+  manifest groups). Each step's card shows a **live** preview of what it
+  currently resolves to (re-computed on every page load, not frozen at
+  step-creation time). "Run"
   (`workflow.run`) queues a `WorkflowRun`; its detail page
   (`/workflows/runs/<id>`) polls run status and renders a step tracker that
   links each finished step straight into the real `/images` or
@@ -409,13 +497,44 @@ in exception-swallowing code paths).
 - New sidebar/navbar entries go in `Menu` rows (via `/menus` or
   `seeds/seed_menu.py`), not hardcoded in templates.
 - Forms: Flask-WTF, one `forms.py` per blueprint. A free-text field that
-  should suggest prior values (like Object/Group/Version Type) uses the
-  established pattern: a plain `<input>` + a same-page `<ul class="...
-  -dropdown">`, suggestions passed via a `<script type="application/json">`
-  block (never a `data-*` HTML attribute — `tojson`'s escaping targets
-  `<script>` content, not quoted attributes, and breaks on any value
-  containing a literal double quote), wired up by a small
-  `setupSearchDropdown()` helper duplicated per page's own JS file.
+  should suggest prior values (like Group/Version Type — single-value)
+  uses the established pattern: a plain `<input>` + a same-page `<ul
+  class="...-dropdown">`, suggestions passed via a `<script
+  type="application/json">` block (never a `data-*` HTML attribute —
+  `tojson`'s escaping targets `<script>` content, not quoted attributes,
+  and breaks on any value containing a literal double quote), wired up by a
+  small `setupSearchDropdown()` helper duplicated per page's own JS file.
+  Object is the multi-value variant of this same idea — pills instead of
+  overwriting a single value, "+ Add ... as new" instead of silently
+  accepting any typed text — `setupMultiObjectPicker()`, duplicated per
+  page's own JS file (`builders.js`'s build-trigger modal,
+  `documentation.js`'s per-batch edit page), backed server-side by
+  `Object.resolve(object_ids, new_names)`. The Documentation *list* page's
+  Object **filter** is a third, deliberately separate implementation
+  (`app/static/js/documentation_filters.js`) rather than a third copy of
+  `setupMultiObjectPicker` — filtering only ever picks from *existing*
+  Objects, so it has no "add new" affordance and posts repeated `object_id`
+  query params (`request.args.getlist("object_id")`) instead of the
+  `object_ids`/`new_object_names` hidden-input pair the other two use.
+  Any dropdown-style popover (search suggestions, this multi-picker, etc.)
+  that can end up inside a daisyUI `collapse` (which sets `overflow:
+  hidden` on itself for its open/close grid animation) or a `<dialog
+  class="modal">` (whose `.modal-box` sets `overflow-y: auto` and the
+  `<dialog>` itself `overflow-y: hidden`) needs to escape that ancestor's
+  clip — `overflow: hidden`/`auto` clips **all** descendants regardless of
+  `position`, so `position: fixed` alone isn't enough; the dropdown element
+  itself has to be moved (`appendChild`) out of that ancestor's DOM subtree.
+  Inside a `.collapse`, portal it to `document.body`. Inside a `<dialog>`
+  shown via `.showModal()`, portal it to the `<dialog>` element itself (a
+  sibling of `.modal-box`, not `document.body`) — once a dialog is open it
+  renders in the browser's top layer, above everything not also in the top
+  layer, so a `document.body` portal would render *behind* it. Either way,
+  position with `position: fixed` and coordinates computed from
+  `anchorEl.getBoundingClientRect()`, recomputed on `window`
+  scroll(`capture: true`)/resize while open. See
+  `documentation_filters.js`/`builders.js`'s `setupMultiObjectPicker` for
+  both variants, including matching Up/Down-arrow-to-highlight +
+  Enter-to-select keyboard support.
 - **Jinja gotcha**: never write `{% if %}...{% endif %}` inline inside an
   HTML tag's attribute list — use `{{ 'x' if cond else '' }}` instead.
 - CSS changes require `npm run build:css` to actually appear (compiled
@@ -443,6 +562,17 @@ in exception-swallowing code paths).
 - No Workflow step *editing* — only add/delete. Changing a step means
   deleting it and adding a new one (blocked entirely if the step has any
   run history — see `WorkflowStepRun`).
+- A Workflow build step's Bump Type/Object(s)/Change Type/Description —
+  whether typed in by hand or pre-filled via "Preview from Git" — are
+  **captured once when the step is added and replayed unchanged on every
+  future run**, never re-resolved against fresh commits at run time. A
+  workflow that runs repeatedly keeps reusing whatever was true (or
+  guessed) at authoring time, even though new commits may have landed
+  since. Moving this to true run-time resolution (the orchestrator calling
+  `compute_build_prefill()` itself right before enqueueing, instead of
+  reading `WorkflowStep`'s frozen columns) would be a real behavior change
+  to this already-existing, deliberate design — not done as part of adding
+  the "Preview from Git" feature; revisit if it comes up.
 - The Workflow feature's UI (drag-and-drop step reorder, the run page's live
   JS polling) has been verified via Flask's test client (every route and
   template renders correctly, including populated/linked/errored run
@@ -452,6 +582,22 @@ in exception-swallowing code paths).
   state" section for the exact live-debugging history (two prior attempts,
   one of which briefly broke the editor entirely via a `ResizeObserver`
   feedback loop). Confirm with the user before treating this as fixed.
+- **The "auto-fill from git commit history" feature is also unverified in a
+  live browser** — "Preview from Git" (Builders), the Object multi-picker
+  pills (Builders + Documentation), the Workflow build-step modal's
+  auto-preview, and the Documentation page's commit-range/commit-list modal
+  have all only been exercised via the Flask test client (same sandbox
+  constraint as the YAML editor above — no working headless Chromium here).
+- **Dockerfile management, Version-to-Version linking, commit log limit,
+  the Home page/sidebar redesign, and the Documentation-page Object filter +
+  build-trigger modal Object picker rework are all also unverified in a
+  live browser** — same sandbox constraint, Flask test client only. The
+  Object filter/picker work in particular went through several rounds of
+  interaction-bug fixes (a dropdown clipped by a daisyUI `collapse`/modal's
+  own `overflow` styling, and a "can't immediately pick a second item"
+  focus/re-render bug) based on user-reported behavior rather than something
+  caught by the test suite — worth an extra-careful manual pass on
+  `/documentation` and the Builders "Build Selected" modal specifically.
 - Everything runs through a single in-process worker thread per queue (one
   each for builds and deploys, plus the workflow orchestrator, which only
   ever enqueues into those same two queues) — there is no distributed/

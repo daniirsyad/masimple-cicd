@@ -5,6 +5,7 @@ from app.extensions import db
 from app.models import (
     Builder,
     BuildBatch,
+    Dockerfile,
     ErrorLog,
     GitSource,
     ImageBuild,
@@ -716,7 +717,7 @@ class _FakeGitProvider:
     def get_latest_commit(self, local_path, branch):
         return self.latest_commit
 
-    def get_commits(self, local_path, since_ref=None, until_ref=None):
+    def get_commits(self, local_path, since_ref=None, until_ref=None, limit=None):
         self.get_commits_calls.append((local_path, since_ref, until_ref))
         return self.commits
 
@@ -997,7 +998,7 @@ class TestRecordCommitHistory:
 
         fake_git = _FakeGitProvider()
 
-        def _raise_get_commits(local_path, since_ref=None, until_ref=None):
+        def _raise_get_commits(local_path, since_ref=None, until_ref=None, limit=None):
             raise RuntimeError("shallow clone, no history")
 
         fake_git.get_commits = _raise_get_commits
@@ -1009,6 +1010,116 @@ class TestRecordCommitHistory:
             assert build.commit_sha is None
             error_log = ErrorLog.query.filter_by(source="worker.record_commit_history").first()
             assert error_log is not None
+
+
+class TestManagedDockerfile:
+    """A Builder with dockerfile_source="managed" builds from a Dockerfile
+    row's content instead of a path inside the repo — _resolve_dockerfile_path
+    writes it into the (real, on-disk) repo clone before the build engine
+    runs, so these tests use a real tmp_path directory as local_path rather
+    than the other tests' fake "/tmp/myapp" (never actually written to,
+    since every other build path only ever reads dockerfile_path as a
+    string handed to the — also faked — build engine).
+    """
+
+    def _make_managed_entities(self, app, local_path, dockerfile_content="FROM python:3.12-slim\n"):
+        with app.app_context():
+            git_source = GitSource(name="conn", provider_type="github", encrypted_token="x")
+            db.session.add(git_source)
+            db.session.flush()
+            repository = Repository(
+                git_source_id=git_source.id,
+                full_name="owner/myapp",
+                local_path=local_path,
+                status="ready",
+                default_branch="main",
+            )
+            db.session.add(repository)
+            registry_target = RegistryTarget(name="reg", provider_type="dockerhub", username="myuser")
+            db.session.add(registry_target)
+            version_type = VersionType(name="DEV")
+            db.session.add(version_type)
+            db.session.flush()
+            version = Version(name="svc", version_type_id=version_type.id)
+            db.session.add(version)
+            dockerfile = Dockerfile(name="base", content=dockerfile_content)
+            db.session.add(dockerfile)
+            db.session.flush()
+            builder = Builder(
+                name="b1",
+                version_id=version.id,
+                repository_id=repository.id,
+                default_branch="main",
+                dockerfile_source="managed",
+                managed_dockerfile_id=dockerfile.id,
+                registry_target_id=registry_target.id,
+            )
+            db.session.add(builder)
+            db.session.commit()
+            return {"version_id": version.id, "builder_id": builder.id}
+
+    def test_writes_the_managed_dockerfile_content_and_builds_from_it(self, app, monkeypatch, tmp_path):
+        local_path = str(tmp_path)
+        entities = self._make_managed_entities(app, local_path, dockerfile_content="FROM python:3.12-slim\n")
+        build_id = _make_queued_build(app, entities)
+        with app.app_context():
+            _claim(build_id)
+
+        fake_engine = _FakeBuildEngine(_FakeBuildResult(success=True))
+        monkeypatch.setattr(
+            "app.services.build.worker.provider_for_git_source", lambda source: _FakeGitProvider()
+        )
+        monkeypatch.setattr("app.services.build.worker.get_build_engine", lambda: fake_engine)
+        monkeypatch.setattr(
+            "app.services.build.worker.get_registry_provider",
+            lambda provider_type, username, password, registry_url=None: _FakeRegistryProvider(),
+        )
+
+        _run_build(app, build_id)
+
+        with app.app_context():
+            build = ImageBuild.query.get(build_id)
+            assert build.status == "success"
+
+        written_path = tmp_path / ".masimple_cicd_managed.Dockerfile"
+        assert written_path.read_text() == "FROM python:3.12-slim\n"
+
+        assert len(fake_engine.build_calls) == 1
+        _, dockerfile_path, _, _ = fake_engine.build_calls[0]
+        assert dockerfile_path == ".masimple_cicd_managed.Dockerfile"
+
+    def test_missing_managed_dockerfile_fails_the_build_cleanly(self, app, monkeypatch, tmp_path):
+        local_path = str(tmp_path)
+        entities = self._make_managed_entities(app, local_path)
+        build_id = _make_queued_build(app, entities)
+        with app.app_context():
+            _claim(build_id)
+            # Simulate a Builder whose managed Dockerfile reference is gone
+            # (shouldn't happen via the app's own delete-guard, but the
+            # build must still fail cleanly rather than raise out of the
+            # worker thread if it ever does).
+            build = ImageBuild.query.get(build_id)
+            build.builder.managed_dockerfile_id = None
+            db.session.commit()
+
+        monkeypatch.setattr(
+            "app.services.build.worker.provider_for_git_source", lambda source: _FakeGitProvider()
+        )
+        monkeypatch.setattr(
+            "app.services.build.worker.get_build_engine",
+            lambda: _FakeBuildEngine(_FakeBuildResult(success=True)),
+        )
+        monkeypatch.setattr(
+            "app.services.build.worker.get_registry_provider",
+            lambda provider_type, username, password, registry_url=None: _FakeRegistryProvider(),
+        )
+
+        _run_build(app, build_id)  # must not raise
+
+        with app.app_context():
+            build = ImageBuild.query.get(build_id)
+            assert build.status == "failed"
+            assert "managed Dockerfile" in build.build_log
 
 
 class TestRunBuildFailureModes:

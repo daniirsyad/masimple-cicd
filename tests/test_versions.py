@@ -310,3 +310,114 @@ class TestDeleteVersion:
 
         with app.app_context():
             assert Version.query.get(version_id) is not None
+
+
+class TestLinkedVersions:
+    def test_linking_on_create_is_one_directional(self, version_client, app, version_type):
+        with app.app_context():
+            dev = Version(name="DEV-svc", version_type_id=version_type)
+            db.session.add(dev)
+            db.session.commit()
+            dev_id = dev.id
+
+        response = version_client.post(
+            "/versions/create",
+            data={
+                "create-version-name": "QAS-svc",
+                "create-version-version_type": "DEV",
+                "create-version-linked_version_ids": [str(dev_id)],
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+
+        with app.app_context():
+            qas = Version.query.filter_by(name="QAS-svc").first()
+            dev = Version.query.get(dev_id)
+            assert [v.name for v in qas.linked_versions] == ["DEV-svc"]
+            # One-directional: DEV's own picker does NOT show QAS as linked —
+            # only QAS's own form granted this, and only in that direction.
+            assert dev.linked_versions == []
+
+    def test_editing_links_and_unlinks_only_this_versions_own_direction(
+        self, version_client, app, version_type
+    ):
+        with app.app_context():
+            dev = Version(name="DEV-svc", version_type_id=version_type)
+            qas = Version(name="QAS-svc", version_type_id=version_type)
+            db.session.add_all([dev, qas])
+            db.session.commit()
+            dev_id, qas_id = dev.id, qas.id
+
+        version_client.post(
+            f"/versions/{qas_id}/edit",
+            data={
+                f"version-{qas_id}-name": "QAS-svc",
+                f"version-{qas_id}-version_type": "DEV",
+                f"version-{qas_id}-linked_version_ids": [str(dev_id)],
+            },
+        )
+        with app.app_context():
+            assert [v.name for v in Version.query.get(qas_id).linked_versions] == ["DEV-svc"]
+            # DEV's own outgoing links are untouched by QAS's edit.
+            assert Version.query.get(dev_id).linked_versions == []
+
+        # Unlinking from QAS's side only ever affects QAS's own direction.
+        version_client.post(
+            f"/versions/{qas_id}/edit",
+            data={
+                f"version-{qas_id}-name": "QAS-svc",
+                f"version-{qas_id}-version_type": "DEV",
+            },
+        )
+        with app.app_context():
+            assert Version.query.get(qas_id).linked_versions == []
+            assert Version.query.get(dev_id).linked_versions == []
+
+    def test_linking_both_directions_requires_editing_both_versions(
+        self, version_client, app, version_type
+    ):
+        with app.app_context():
+            dev = Version(name="DEV-svc", version_type_id=version_type)
+            qas = Version(name="QAS-svc", version_type_id=version_type)
+            db.session.add_all([dev, qas])
+            db.session.commit()
+            dev_id, qas_id = dev.id, qas.id
+
+        version_client.post(
+            f"/versions/{qas_id}/edit",
+            data={
+                f"version-{qas_id}-name": "QAS-svc",
+                f"version-{qas_id}-version_type": "DEV",
+                f"version-{qas_id}-linked_version_ids": [str(dev_id)],
+            },
+        )
+        version_client.post(
+            f"/versions/{dev_id}/edit",
+            data={
+                f"version-{dev_id}-name": "DEV-svc",
+                f"version-{dev_id}-version_type": "DEV",
+                f"version-{dev_id}-linked_version_ids": [str(qas_id)],
+            },
+        )
+        with app.app_context():
+            assert [v.name for v in Version.query.get(qas_id).linked_versions] == ["DEV-svc"]
+            assert [v.name for v in Version.query.get(dev_id).linked_versions] == ["QAS-svc"]
+
+    def test_a_version_cannot_link_to_itself(self, version_client, app, version_type):
+        with app.app_context():
+            version = Version(name="solo-svc", version_type_id=version_type)
+            db.session.add(version)
+            db.session.commit()
+            version_id = version.id
+
+        version_client.post(
+            f"/versions/{version_id}/edit",
+            data={
+                f"version-{version_id}-name": "solo-svc",
+                f"version-{version_id}-version_type": "DEV",
+                f"version-{version_id}-linked_version_ids": [str(version_id)],
+            },
+        )
+        with app.app_context():
+            assert Version.query.get(version_id).linked_versions == []

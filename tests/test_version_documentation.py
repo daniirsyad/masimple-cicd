@@ -210,6 +210,8 @@ class TestDocumentationFilters:
         distinguishable by every filter dimension tested below.
         """
         with app.app_context():
+            from app.models import Object
+
             change_type = _make_change_type(name="Feature")
             documented, _ = _make_documented_batch(
                 base_entities,
@@ -227,6 +229,8 @@ class TestDocumentationFilters:
                 "pending_batch_id": pending.id,
                 "change_type_id": change_type.id,
                 "original_builder_id": base_entities["original_builder_id"],
+                "checkout_object_id": Object.query.filter_by(name="checkout").first().id,
+                "backend_object_id": Object.query.filter_by(name="backend").first().id,
             }
 
     def test_filters_by_version(self, doc_client, app, base_entities):
@@ -261,11 +265,19 @@ class TestDocumentationFilters:
         assert b"DEV.0.0.1.010101010101" in response.data
         assert b"DEV.0.0.2.020202020202" not in response.data
 
-    def test_filters_by_object_substring(self, doc_client, app, base_entities):
-        self._make_two_batches(app, base_entities)
-        response = doc_client.get("/documentation/?object=check")
+    def test_filters_by_object_id(self, doc_client, app, base_entities):
+        ids = self._make_two_batches(app, base_entities)
+        response = doc_client.get(f"/documentation/?object_id={ids['checkout_object_id']}")
         assert b"DEV.0.0.1.010101010101" in response.data
         assert b"DEV.0.0.2.020202020202" not in response.data
+
+    def test_filters_by_multiple_object_ids_is_an_or(self, doc_client, app, base_entities):
+        ids = self._make_two_batches(app, base_entities)
+        response = doc_client.get(
+            f"/documentation/?object_id={ids['checkout_object_id']}&object_id={ids['backend_object_id']}"
+        )
+        assert b"DEV.0.0.1.010101010101" in response.data
+        assert b"DEV.0.0.2.020202020202" in response.data
 
     def test_filters_by_built_by(self, doc_client, app, base_entities):
         ids = self._make_two_batches(app, base_entities)
@@ -301,14 +313,15 @@ class TestDocumentationFilters:
     def test_combining_filters_narrows_further(self, doc_client, app, base_entities):
         ids = self._make_two_batches(app, base_entities)
         response = doc_client.get(
-            f"/documentation/?status=documented&object=backend&change_type_id={ids['change_type_id']}"
+            f"/documentation/?status=documented&object_id={ids['backend_object_id']}"
+            f"&change_type_id={ids['change_type_id']}"
         )
         assert b"DEV.0.0.1.010101010101" not in response.data
         assert b"DEV.0.0.2.020202020202" not in response.data
 
     def test_no_match_shows_filtered_empty_state(self, doc_client, app, base_entities):
         self._make_two_batches(app, base_entities)
-        response = doc_client.get("/documentation/?object=nonexistent-object")
+        response = doc_client.get("/documentation/?object_id=00000000-0000-0000-0000-000000000000")
         assert b"No documented batches match these filters." in response.data
 
 
@@ -394,6 +407,43 @@ class TestDocumentationPageDisplays:
         response = doc_client.get(f"/documentation/{batch_id}")
         assert b"DEV.0.0.2.020202020202" not in response.data
         assert b"DEV.0.0.3.030303030303" not in response.data
+
+    def test_linked_batches_are_scoped_to_the_same_or_linked_version(self, doc_client, app, base_entities):
+        with app.app_context():
+            from app.models import Version, VersionType
+
+            batch, _ = _make_documented_batch(base_entities, full_version_string="DEV.0.0.1.010101010101")
+
+            other_type = VersionType(name="QAS")
+            db.session.add(other_type)
+            db.session.flush()
+            linked_version = Version(name="qas-svc", version_type_id=other_type.id)
+            unlinked_version = Version(name="staging-svc", version_type_id=other_type.id)
+            db.session.add_all([linked_version, unlinked_version])
+            db.session.flush()
+
+            dev_version = Version.query.get(base_entities["version_id"])
+            dev_version.linked_versions = [linked_version]
+
+            linked_batch = BuildBatch(
+                version_id=linked_version.id,
+                full_version_string="QAS.0.0.1.010101010101",
+                bump_type="patch",
+                status="success",
+            )
+            unlinked_batch = BuildBatch(
+                version_id=unlinked_version.id,
+                full_version_string="STG.0.0.1.010101010101",
+                bump_type="patch",
+                status="success",
+            )
+            db.session.add_all([linked_batch, unlinked_batch])
+            db.session.commit()
+            batch_id = batch.id
+
+        response = doc_client.get(f"/documentation/{batch_id}")
+        assert b"QAS.0.0.1.010101010101" in response.data
+        assert b"STG.0.0.1.010101010101" not in response.data
 
 
 class TestCommitRangeDisplay:
@@ -559,7 +609,7 @@ class TestPromptPreview:
             batch_id = batch.id
 
         class FakeGitProvider:
-            def get_commit_messages(self, local_path, since_ref=None):
+            def get_commit_messages(self, local_path, since_ref=None, limit=None):
                 return ["fixed the bug", "added a test"]
 
         monkeypatch.setattr(
@@ -821,7 +871,7 @@ class TestGatherBatchAiContext:
             db.session.commit()
 
             class FakeGitProvider:
-                def get_commit_messages(self, local_path, since_ref=None):
+                def get_commit_messages(self, local_path, since_ref=None, limit=None):
                     assert since_ref is None
                     return ["did a thing", "did another thing"]
 

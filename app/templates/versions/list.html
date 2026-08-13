@@ -129,6 +129,19 @@ MASIMPLE CICD{% endblock %} {% block content %}
         </div>
       </div>
 
+      <div>
+        {{ create_form.linked_version_ids.label(class="label text-sm") }}
+        <div class="grid max-h-40 grid-cols-2 gap-2 overflow-y-auto rounded border border-base-300 p-2">
+          {% for subfield in create_form.linked_version_ids %}
+          <label class="flex items-center gap-2 text-sm">
+            {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+          </label>
+          {% else %}
+          <span class="text-xs text-base-content/60">No other Versions exist yet.</span>
+          {% endfor %}
+        </div>
+      </div>
+
       <div class="modal-action">
         <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
           Cancel
@@ -186,6 +199,19 @@ MASIMPLE CICD{% endblock %} {% block content %}
         <div>
           {{ form.patch.label(class="label text-sm") }} {{
           form.patch(class="input input-bordered input-sm w-20") }}
+        </div>
+      </div>
+
+      <div>
+        {{ form.linked_version_ids.label(class="label text-sm") }}
+        <div class="grid max-h-40 grid-cols-2 gap-2 overflow-y-auto rounded border border-base-300 p-2">
+          {% for subfield in form.linked_version_ids %}
+          <label class="flex items-center gap-2 text-sm">
+            {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+          </label>
+          {% else %}
+          <span class="text-xs text-base-content/60">No other Versions exist yet.</span>
+          {% endfor %}
         </div>
       </div>
 

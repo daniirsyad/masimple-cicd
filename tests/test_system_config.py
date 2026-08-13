@@ -167,6 +167,37 @@ class TestIndexPage:
         with app.app_context():
             assert get_system_config().session_timeout_minutes != 0
 
+    def test_post_updates_commit_log_limit(self, config_client, app):
+        response = config_client.post(
+            "/config/",
+            data={
+                "timezone": "UTC",
+                "session_timeout_minutes": "60",
+                "build_engine": "docker",
+                "deployment_status_check_interval_seconds": "60",
+                "commit_log_limit": "50",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        with app.app_context():
+            assert get_system_config().commit_log_limit == 50
+
+    def test_post_rejects_out_of_range_commit_log_limit(self, config_client, app):
+        response = config_client.post(
+            "/config/",
+            data={
+                "timezone": "UTC",
+                "session_timeout_minutes": "60",
+                "build_engine": "docker",
+                "deployment_status_check_interval_seconds": "60",
+                "commit_log_limit": "0",
+            },
+        )
+        assert response.status_code == 200  # re-renders form with validation error
+        with app.app_context():
+            assert get_system_config().commit_log_limit != 0
+
     def test_post_logs_activity(self, config_client, app):
         config_client.post(
             "/config/",

@@ -176,18 +176,15 @@ MASIMPLE CICD{% endblock %} {% block content %}
           </div>
         </div>
 
-        <div class="mt-2">
-          <label class="label text-xs">Prompt (editable for this generation only)</label>
-          <textarea id="ai-prompt-preview" class="textarea textarea-bordered textarea-xs w-full" rows="4">{{ rendered_prompt }}</textarea>
-        </div>
+        {# Prompt kept in the DOM (never shown) so ai-generate.js still has
+           its text to send to /generate — just not surfaced in the UI. #}
+        <textarea id="ai-prompt-preview" class="hidden">{{ rendered_prompt }}</textarea>
 
         <p id="ai-generate-error" class="text-error text-xs mt-1 hidden"></p>
 
-        <div id="ai-draft-container" class="mt-2 {{ '' if doc.ai_description else 'hidden' }}">
-          <label class="label text-xs">AI Draft</label>
-          <pre id="ai-draft-preview" class="whitespace-pre-wrap rounded bg-base-200 p-2 text-xs">{{ doc.ai_description or '' }}</pre>
-          <button type="button" id="use-ai-draft-btn" class="btn btn-sm mt-1">Use this draft</button>
-        </div>
+        <p class="mt-1 text-xs text-base-content/60">
+          Generates a draft and fills it straight into Description below — review/edit it there before saving.
+        </p>
       </div>
 
       {{ form.ai_description() }} {{ form.ai_provider_used() }}

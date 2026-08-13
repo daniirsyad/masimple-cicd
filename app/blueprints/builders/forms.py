@@ -9,6 +9,12 @@ class MultiCheckboxField(SelectMultipleField):
     option_widget = CheckboxInput()
 
 
+DOCKERFILE_SOURCE_CHOICES = [
+    ("repo", "From Repository"),
+    ("managed", "Managed Dockerfile"),
+]
+
+
 class BuilderForm(FlaskForm):
     name = StringField("Name", validators=[DataRequired(), Length(max=120)])
     version_id = SelectField("Version", validators=[DataRequired()])
@@ -22,9 +28,18 @@ class BuilderForm(FlaskForm):
     image_name = StringField(
         "Docker Image Name (optional)", validators=[Optional(), Length(max=255)]
     )
-    dockerfile_path = StringField(
-        "Dockerfile Path", default="Dockerfile", validators=[DataRequired(), Length(max=300)]
+    # Exactly one of dockerfile_path/managed_dockerfile_id actually applies,
+    # picked via dockerfile_source — both stay Optional() here (not
+    # DataRequired) since only one panel is ever shown/relevant client-side;
+    # which one is actually required is checked manually in routes.py once
+    # dockerfile_source itself is known.
+    dockerfile_source = SelectField(
+        "Dockerfile Source", choices=DOCKERFILE_SOURCE_CHOICES, default="repo", validators=[DataRequired()]
     )
+    dockerfile_path = StringField(
+        "Dockerfile Path", default="Dockerfile", validators=[Optional(), Length(max=300)]
+    )
+    managed_dockerfile_id = SelectField("Managed Dockerfile", validators=[Optional()])
     registry_target_id = SelectField("Registry Target", validators=[DataRequired()])
     allowed_role_ids = MultiCheckboxField(
         "Allowed Roles (leave empty to restrict to builder.manage users only)", validators=[Optional()]

@@ -17,6 +17,7 @@ from app.services.git.helpers import provider_for_git_source
 from app.services.registry.factory import get_registry_provider
 from app.utils.crypto import decrypt
 from app.utils.error_logger import log_error
+from app.utils.system_config import get_system_config
 
 POLL_INTERVAL_SECONDS = 2
 LOG_FLUSH_EVERY_N_LINES = 20
@@ -364,10 +365,19 @@ def _record_commit_history(git_provider, repository, build):
     build itself, only leave this supplementary data missing.
     """
     try:
+        # Fetched first, before any pending change on `build` — get_system_config()
+        # commits on its own (creating the singleton row on first access ever),
+        # and doing that *after* staging build.commit_sha below would sweep
+        # that uncommitted change into it too, defeating the rollback on a
+        # later failure in this same try block.
+        commit_log_limit = get_system_config().commit_log_limit
         build.commit_sha = git_provider.get_latest_commit(repository.local_path, build.branch_used)
         since_ref = get_last_built_commit(build.builder_id, build.branch_used)
         for commit in git_provider.get_commits(
-            repository.local_path, since_ref=since_ref, until_ref=build.branch_used
+            repository.local_path,
+            since_ref=since_ref,
+            until_ref=build.branch_used,
+            limit=commit_log_limit,
         ):
             db.session.add(ImageBuildCommit(image_build_id=build.id, **commit))
         db.session.commit()
@@ -385,6 +395,37 @@ def _derive_image_name(full_name):
     in the schema, so the built image is named after the repository itself.
     """
     return full_name.rsplit("/", 1)[-1]
+
+
+MANAGED_DOCKERFILE_FILENAME = ".masimple_cicd_managed.Dockerfile"
+
+
+def _resolve_dockerfile_path(repository, builder):
+    """The dockerfile_path to hand the build engine: a path inside the repo
+    clone for "repo"-sourced Builders (unchanged behavior), or a freshly
+    written file holding the selected managed Dockerfile's content for
+    "managed"-sourced ones.
+
+    Writing it into the repo clone (rather than some other directory) keeps
+    it inside the build context the engine already uses, under a name
+    unlikely to collide with anything real
+    (`.masimple_cicd_managed.Dockerfile`) — never committed to git, just
+    rewritten fresh before every build; sync_repo's own fetch/checkout/pull
+    never touches untracked files, so this survives between builds but is
+    always overwritten with the current content anyway.
+    """
+    if builder.dockerfile_source == "managed":
+        managed_dockerfile = builder.managed_dockerfile
+        if managed_dockerfile is None:
+            raise RuntimeError(
+                f"Builder '{builder.name}' is set to use a managed Dockerfile, but none is selected."
+            )
+        path = os.path.join(repository.local_path, MANAGED_DOCKERFILE_FILENAME)
+        with open(path, "w") as dockerfile:
+            dockerfile.write(managed_dockerfile.content)
+        return MANAGED_DOCKERFILE_FILENAME
+
+    return builder.dockerfile_path or "Dockerfile"
 
 
 def _run_build(app, build_id):
@@ -455,7 +496,7 @@ def _run_build(app, build_id):
             engine = get_build_engine()
             result = engine.build_image(
                 context_dir=repository.local_path,
-                dockerfile_path=builder.dockerfile_path or "Dockerfile",
+                dockerfile_path=_resolve_dockerfile_path(repository, builder),
                 tags=[full_tag],
                 build_args=builder.default_build_args or {},
                 on_log_line=on_log_line,

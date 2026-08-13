@@ -1,9 +1,12 @@
+import uuid
+
 from flask import flash, redirect, render_template, url_for
 
 from app.blueprints.versions import versions_bp
 from app.blueprints.versions.forms import VersionForm
 from app.extensions import db
 from app.models import Builder, BuildBatch, Version, VersionType
+from app.models.version import version_version_links
 from app.utils.decorators import permission_required
 from app.utils.logger import log_activity
 
@@ -12,6 +15,35 @@ CREATE_PREFIX = "create-version-"
 
 def _edit_prefix(version_id):
     return f"version-{version_id}-"
+
+
+def _linked_version_choices(version_id=None):
+    query = Version.query
+    if version_id is not None:
+        query = query.filter(Version.id != version_id)
+    return [(str(v.id), v.name) for v in query.order_by(Version.name).all()]
+
+
+def _sync_linked_versions(version, selected_ids):
+    """One-directional: writes only (version, other) rows for every selected
+    id, after clearing `version`'s own prior outgoing links — never touches
+    (other, version) rows, since those are a *different* Version's own
+    outgoing links, owned and edited from that Version's own form. Linking
+    QAS to DEV (from QAS's edit form) lets QAS's batches offer DEV's batches
+    as Linked Batches; it does not also let DEV offer QAS's — that direction
+    only exists if DEV's own picker is separately edited to include QAS.
+    """
+    db.session.execute(
+        version_version_links.delete().where(version_version_links.c.version_id == version.id)
+    )
+    for raw_id in selected_ids:
+        try:
+            other_id = uuid.UUID(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if other_id == version.id:
+            continue
+        db.session.execute(version_version_links.insert().values(version_id=version.id, linked_version_id=other_id))
 
 
 def _version_type_names():
@@ -50,6 +82,7 @@ def _latest_batch_by_version():
 def _render_index(create_form=None, open_modal=None, invalid_edit=None):
     if create_form is None:
         create_form = VersionForm(prefix=CREATE_PREFIX)
+    create_form.linked_version_ids.choices = _linked_version_choices()
 
     versions = Version.query.order_by(Version.name).all()
     latest_batches = _latest_batch_by_version()
@@ -58,10 +91,13 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
     edit_forms = {}
     for version in versions:
         if version.id == invalid_id:
+            invalid_form.linked_version_ids.choices = _linked_version_choices(version.id)
             edit_forms[version.id] = invalid_form
         else:
             form = VersionForm(obj=version, prefix=_edit_prefix(version.id))
             form.version_type.data = version.version_type.name
+            form.linked_version_ids.choices = _linked_version_choices(version.id)
+            form.linked_version_ids.data = [str(v.id) for v in version.linked_versions]
             edit_forms[version.id] = form
 
     return render_template(
@@ -85,6 +121,7 @@ def list_versions():
 @permission_required("version.manage")
 def create_version():
     form = VersionForm(prefix=CREATE_PREFIX)
+    form.linked_version_ids.choices = _linked_version_choices()
 
     if form.validate_on_submit():
         if Version.query.filter_by(name=form.name.data).first() is not None:
@@ -101,6 +138,8 @@ def create_version():
             patch=form.patch.data or 0,
         )
         db.session.add(version)
+        db.session.flush()  # assign version.id so _sync_linked_versions can reference it
+        _sync_linked_versions(version, form.linked_version_ids.data)
         db.session.commit()
 
         log_activity(
@@ -121,6 +160,7 @@ def create_version():
 def edit_version(version_id):
     version = Version.query.get_or_404(version_id)
     form = VersionForm(prefix=_edit_prefix(version_id))
+    form.linked_version_ids.choices = _linked_version_choices(version_id)
 
     if form.validate_on_submit():
         duplicate = Version.query.filter(
@@ -137,6 +177,7 @@ def edit_version(version_id):
         version.major = form.major.data or 0
         version.minor = form.minor.data or 0
         version.patch = form.patch.data or 0
+        _sync_linked_versions(version, form.linked_version_ids.data)
         db.session.commit()
 
         log_activity(

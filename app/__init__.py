@@ -79,6 +79,7 @@ def create_app(config_name=None):
     from app.blueprints.git_sources import git_sources_bp
     from app.blueprints.registries import registries_bp
     from app.blueprints.versions import versions_bp
+    from app.blueprints.dockerfiles import dockerfiles_bp
     from app.blueprints.builders import builders_bp
     from app.blueprints.images import images_bp
     from app.blueprints.documentation import documentation_bp
@@ -105,6 +106,7 @@ def create_app(config_name=None):
     app.register_blueprint(git_sources_bp, url_prefix="/github")
     app.register_blueprint(registries_bp, url_prefix="/registries")
     app.register_blueprint(versions_bp, url_prefix="/versions")
+    app.register_blueprint(dockerfiles_bp, url_prefix="/dockerfiles")
     app.register_blueprint(builders_bp, url_prefix="/builders")
     app.register_blueprint(images_bp, url_prefix="/images")
     app.register_blueprint(documentation_bp, url_prefix="/documentation")

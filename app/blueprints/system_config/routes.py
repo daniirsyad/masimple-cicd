@@ -20,6 +20,7 @@ def index():
         config.build_engine = form.build_engine.data
         config.hide_navbar_title_when_sidebar_open = form.hide_navbar_title_when_sidebar_open.data
         config.deployment_status_check_interval_seconds = form.deployment_status_check_interval_seconds.data
+        config.commit_log_limit = form.commit_log_limit.data
         db.session.commit()
 
         log_activity(
@@ -31,7 +32,8 @@ def index():
                 f"session_timeout_minutes={config.session_timeout_minutes}, "
                 f"build_engine={config.build_engine}, "
                 f"hide_navbar_title_when_sidebar_open={config.hide_navbar_title_when_sidebar_open}, "
-                f"deployment_status_check_interval_seconds={config.deployment_status_check_interval_seconds})"
+                f"deployment_status_check_interval_seconds={config.deployment_status_check_interval_seconds}, "
+                f"commit_log_limit={config.commit_log_limit})"
             ),
         )
 

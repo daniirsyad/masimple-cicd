@@ -27,6 +27,13 @@ class SystemConfig(db.Model):
     # restart (same pattern as session_timeout_minutes in app/__init__.py's
     # _apply_session_timeout).
     deployment_status_check_interval_seconds = db.Column(db.Integer, nullable=False, default=60)
+    # Max commits GitProvider.get_commits()/get_commit_messages() reads when
+    # there's no prior build to diff against (first build on a branch) or the
+    # prior one's commit is no longer reachable (force-push/rebase) — see
+    # GitHubProvider.get_commits's DEFAULT_LOG_LIMIT fallback. Read fresh on
+    # every call site (app.utils.system_config.get_system_config()), same
+    # "no restart needed" pattern as deployment_status_check_interval_seconds.
+    commit_log_limit = db.Column(db.Integer, nullable=False, default=20)
     updated_at = db.Column(
         db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )

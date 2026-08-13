@@ -76,6 +76,23 @@ MASIMPLE CICD{% endblock %} {% block content %}
         {% endfor %}
       </div>
 
+      <div class="form-control">
+        <label class="label" for="{{ form.commit_log_limit.id }}">
+          <span class="label-text">Commit Log Limit</span>
+        </label>
+        {{ form.commit_log_limit(class="input input-bordered input-sm w-full") }}
+        <p class="mt-1 text-xs text-base-content/60">
+          Max commits read from git when there's no prior build to diff against — the first build on a
+          Builder's branch, or a since-last-build commit that's no longer reachable (force-push/rebase).
+          Used by "Preview from Git", the Workflow build-step auto-preview, and the post-build AI
+          description draft. Higher values give more context on a first build at the cost of a slower
+          git log read.
+        </p>
+        {% for error in form.commit_log_limit.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
       <div>{{ form.submit(class="btn btn-primary btn-sm") }}</div>
     </form>
   </div>

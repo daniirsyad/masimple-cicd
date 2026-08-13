@@ -14,43 +14,51 @@
     <a href="{{ url_for('logs.view_error_logs') }}" class="link link-primary">View all Error Logs →</a>
   </span>
 </div>
-{% else %}
-<form method="get" class="mt-4 flex flex-wrap items-end gap-3">
-  <div>
-    <label class="label text-sm">Source</label>
-    <select name="source" class="select select-bordered select-sm">
-      <option value="">All</option>
-      {% for source_option in sources %}
-      <option value="{{ source_option }}" {{ 'selected' if selected_source == source_option else '' }}>
-        {{ source_option }}
-      </option>
-      {% endfor %}
-    </select>
-  </div>
+{% else %} {% set has_filters = selected_source or date_from or date_to %}
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">
+      Filters
+      {% if has_filters %}<span class="badge badge-primary badge-sm">Active</span>{% endif %}
+    </h2>
+    <form method="get" class="mt-2 flex flex-wrap items-end gap-3">
+      <div>
+        <label class="label text-sm">Source</label>
+        <select name="source" class="select select-bordered select-sm">
+          <option value="">All</option>
+          {% for source_option in sources %}
+          <option value="{{ source_option }}" {{ 'selected' if selected_source == source_option else '' }}>
+            {{ source_option }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
 
-  <div>
-    <label class="label text-sm">From</label>
-    <input
-      type="date"
-      name="date_from"
-      value="{{ date_from }}"
-      class="input input-bordered input-sm"
-    />
-  </div>
+      <div>
+        <label class="label text-sm">From</label>
+        <input
+          type="date"
+          name="date_from"
+          value="{{ date_from }}"
+          class="input input-bordered input-sm"
+        />
+      </div>
 
-  <div>
-    <label class="label text-sm">To</label>
-    <input
-      type="date"
-      name="date_to"
-      value="{{ date_to }}"
-      class="input input-bordered input-sm"
-    />
-  </div>
+      <div>
+        <label class="label text-sm">To</label>
+        <input
+          type="date"
+          name="date_to"
+          value="{{ date_to }}"
+          class="input input-bordered input-sm"
+        />
+      </div>
 
-  <button type="submit" class="btn btn-primary btn-sm">Filter</button>
-  <a href="{{ url_for('logs.view_error_logs') }}" class="btn btn-ghost btn-sm">Reset</a>
-</form>
+      <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+      <a href="{{ url_for('logs.view_error_logs') }}" class="btn btn-ghost btn-sm">Reset</a>
+    </form>
+  </div>
+</div>
 {% endif %}
 
 <div class="mt-4 overflow-x-auto">

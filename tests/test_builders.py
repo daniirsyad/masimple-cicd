@@ -6,6 +6,7 @@ from app.models import (
     Builder,
     BuildBatch,
     ChangeType,
+    Dockerfile,
     GitSource,
     ImageBuild,
     Object,
@@ -484,6 +485,118 @@ class TestCreateBuilder:
             assert Builder.query.count() == 0
 
 
+class TestDockerfileSource:
+    def test_creates_a_builder_using_a_managed_dockerfile(self, builder_client, app, base_entities):
+        with app.app_context():
+            dockerfile = Dockerfile(name="base", content="FROM python:3.12-slim\n")
+            db.session.add(dockerfile)
+            db.session.commit()
+            dockerfile_id = dockerfile.id
+
+        response = builder_client.post(
+            "/builders/create",
+            data={
+                "create-builder-name": "managed-builder",
+                "create-builder-version_id": str(base_entities["version_id"]),
+                "create-builder-repository_id": str(base_entities["repository_id"]),
+                "create-builder-default_branch": "main",
+                "create-builder-dockerfile_source": "managed",
+                "create-builder-managed_dockerfile_id": str(dockerfile_id),
+                "create-builder-registry_target_id": str(base_entities["registry_target_id"]),
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+
+        with app.app_context():
+            builder = Builder.query.filter_by(name="managed-builder").first()
+            assert builder is not None
+            assert builder.dockerfile_source == "managed"
+            assert builder.managed_dockerfile_id == dockerfile_id
+
+    def test_managed_source_without_a_selected_dockerfile_is_rejected(self, builder_client, app, base_entities):
+        response = builder_client.post(
+            "/builders/create",
+            data={
+                "create-builder-name": "managed-builder",
+                "create-builder-version_id": str(base_entities["version_id"]),
+                "create-builder-repository_id": str(base_entities["repository_id"]),
+                "create-builder-default_branch": "main",
+                "create-builder-dockerfile_source": "managed",
+                "create-builder-registry_target_id": str(base_entities["registry_target_id"]),
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert b"Select a Managed Dockerfile" in response.data
+        with app.app_context():
+            assert Builder.query.filter_by(name="managed-builder").first() is None
+
+    def test_default_source_is_repo_and_uses_dockerfile_path(self, builder_client, app, base_entities):
+        builder_client.post(
+            "/builders/create",
+            data={
+                "create-builder-name": "repo-builder",
+                "create-builder-version_id": str(base_entities["version_id"]),
+                "create-builder-repository_id": str(base_entities["repository_id"]),
+                "create-builder-default_branch": "main",
+                "create-builder-dockerfile_path": "docker/Dockerfile.prod",
+                "create-builder-registry_target_id": str(base_entities["registry_target_id"]),
+            },
+            follow_redirects=True,
+        )
+        with app.app_context():
+            builder = Builder.query.filter_by(name="repo-builder").first()
+            assert builder.dockerfile_source == "repo"
+            assert builder.dockerfile_path == "docker/Dockerfile.prod"
+            assert builder.managed_dockerfile_id is None
+
+    def test_editing_from_repo_to_managed_clears_nothing_unexpected(self, builder_client, app, base_entities):
+        with app.app_context():
+            dockerfile = Dockerfile(name="base", content="FROM python:3.12-slim\n")
+            db.session.add(dockerfile)
+            builder = _make_builder(base_entities)
+            db.session.commit()
+            builder_id, dockerfile_id = builder.id, dockerfile.id
+
+        builder_client.post(
+            f"/builders/{builder_id}/edit",
+            data={
+                f"builder-{builder_id}-name": "b1",
+                f"builder-{builder_id}-version_id": str(base_entities["version_id"]),
+                f"builder-{builder_id}-repository_id": str(base_entities["repository_id"]),
+                f"builder-{builder_id}-default_branch": "main",
+                f"builder-{builder_id}-dockerfile_source": "managed",
+                f"builder-{builder_id}-managed_dockerfile_id": str(dockerfile_id),
+                f"builder-{builder_id}-registry_target_id": str(base_entities["registry_target_id"]),
+            },
+            follow_redirects=True,
+        )
+        with app.app_context():
+            updated = Builder.query.get(builder_id)
+            assert updated.dockerfile_source == "managed"
+            assert updated.managed_dockerfile_id == dockerfile_id
+
+        # Switching back to "repo" must null out the now-stale managed_dockerfile_id.
+        builder_client.post(
+            f"/builders/{builder_id}/edit",
+            data={
+                f"builder-{builder_id}-name": "b1",
+                f"builder-{builder_id}-version_id": str(base_entities["version_id"]),
+                f"builder-{builder_id}-repository_id": str(base_entities["repository_id"]),
+                f"builder-{builder_id}-default_branch": "main",
+                f"builder-{builder_id}-dockerfile_source": "repo",
+                f"builder-{builder_id}-dockerfile_path": "Dockerfile",
+                f"builder-{builder_id}-registry_target_id": str(base_entities["registry_target_id"]),
+            },
+            follow_redirects=True,
+        )
+        with app.app_context():
+            reverted = Builder.query.get(builder_id)
+            assert reverted.dockerfile_source == "repo"
+            assert reverted.managed_dockerfile_id is None
+
+
 class TestEditBuilder:
     def test_edits_branch_and_dockerfile(self, builder_client, app, base_entities):
         with app.app_context():
@@ -880,7 +993,7 @@ class _FakePreviewGitProvider:
     def sync_repo(self, local_path, branch, repo_name=None):
         self.synced = (local_path, branch)
 
-    def get_commits(self, local_path, since_ref=None, until_ref=None):
+    def get_commits(self, local_path, since_ref=None, until_ref=None, limit=None):
         return [{"sha": f"sha-{i}", "message": m} for i, m in enumerate(self.messages)]
 
 

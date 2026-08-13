@@ -15,6 +15,14 @@ from app import create_app
 from app.extensions import db
 from app.models import Menu
 
+# Kept in sync by hand with the direct Menu inserts applied to any
+# already-seeded dev DB when these icons were added (see SESSION_START.md) —
+# `.sidebar-icon` CSS already forces fill/stroke to currentColor for dark
+# mode, so no explicit fill="currentColor" is needed on the paths themselves.
+_FILE_TEXT_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><title>file-text</title><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>'
+_CODE_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><title>code</title><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>'
+_WORKFLOW_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><title>workflow</title><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>'
+
 
 def get_or_create(label, parent_id=None, **kwargs):
     menu = Menu.query.filter_by(label=label, parent_id=parent_id).first()
@@ -50,7 +58,7 @@ def run():
         get_or_create("Home", url="/", order=0, show_in_navbar=False, show_in_sidebar=True)
 
         management = get_or_create(
-            "Management", url=None, order=1, show_in_navbar=False, show_in_sidebar=True
+            "Management", url=None, order=5, show_in_navbar=False, show_in_sidebar=True
         )
 
         get_or_create(
@@ -95,7 +103,7 @@ def run():
         # here (not nested under management.id) so re-running this script
         # doesn't recreate "Activity Logs" as a duplicate under Management.
         logging_group = get_or_create(
-            "Logging", url=None, order=2, show_in_navbar=False, show_in_sidebar=True
+            "Logging", url=None, order=4, show_in_navbar=False, show_in_sidebar=True
         )
         get_or_create(
             "Activity Logs",
@@ -117,51 +125,18 @@ def run():
         )
 
         image_builder = get_or_create(
-            "Image Builder", url=None, order=3, show_in_navbar=False, show_in_sidebar=True
+            "Image Builder", url=None, order=2, show_in_navbar=False, show_in_sidebar=True
         )
 
-        get_or_create(
-            "Versions",
-            parent_id=image_builder.id,
-            url="/versions",
-            permission_code="version.view",
-            order=0,
-            show_in_navbar=False,
-            show_in_sidebar=True,
-        )
-        get_or_create(
-            "Images",
-            parent_id=image_builder.id,
-            url="/images",
-            permission_code="image.view",
-            order=1,
-            show_in_navbar=False,
-            show_in_sidebar=True,
-        )
-        get_or_create(
-            "Builders",
-            parent_id=image_builder.id,
-            url="/builders",
-            permission_code="builder.view",
-            order=2,
-            show_in_navbar=False,
-            show_in_sidebar=True,
-        )
-        get_or_create(
-            "AI Settings",
-            parent_id=image_builder.id,
-            url="/ai-settings",
-            permission_code="aiprovider.manage",
-            order=3,
-            show_in_navbar=False,
-            show_in_sidebar=True,
-        )
+        # Order follows a logical setup-to-usage flow: connect a repo/registry,
+        # define a Version, create a Builder (optionally with a managed
+        # Dockerfile), build, then browse the results/documentation.
         get_or_create(
             "GitHub",
             parent_id=image_builder.id,
             url="/github",
             permission_code="gitsource.manage",
-            order=4,
+            order=0,
             show_in_navbar=False,
             show_in_sidebar=True,
         )
@@ -170,6 +145,43 @@ def run():
             parent_id=image_builder.id,
             url="/registries",
             permission_code="registry.manage",
+            order=1,
+            show_in_navbar=False,
+            show_in_sidebar=True,
+        )
+        get_or_create(
+            "Versions",
+            parent_id=image_builder.id,
+            url="/versions",
+            permission_code="version.view",
+            order=2,
+            show_in_navbar=False,
+            show_in_sidebar=True,
+        )
+        get_or_create(
+            "Dockerfiles",
+            parent_id=image_builder.id,
+            url="/dockerfiles",
+            permission_code="dockerfile.manage",
+            order=3,
+            icon=_FILE_TEXT_ICON,
+            show_in_navbar=False,
+            show_in_sidebar=True,
+        )
+        get_or_create(
+            "Builders",
+            parent_id=image_builder.id,
+            url="/builders",
+            permission_code="builder.view",
+            order=4,
+            show_in_navbar=False,
+            show_in_sidebar=True,
+        )
+        get_or_create(
+            "Images",
+            parent_id=image_builder.id,
+            url="/images",
+            permission_code="image.view",
             order=5,
             show_in_navbar=False,
             show_in_sidebar=True,
@@ -183,6 +195,15 @@ def run():
             show_in_navbar=False,
             show_in_sidebar=True,
         )
+        get_or_create(
+            "AI Settings",
+            parent_id=image_builder.id,
+            url="/ai-settings",
+            permission_code="aiprovider.manage",
+            order=7,
+            show_in_navbar=False,
+            show_in_sidebar=True,
+        )
 
         # Added after "System" (order=4) was already seeded on existing
         # installs — get_or_create leaves already-existing rows' order
@@ -190,7 +211,7 @@ def run():
         # avoid a same-parent order tie on a re-run against a DB that already
         # has "System" at order=4.
         deployment = get_or_create(
-            "Deployment", url=None, order=5, show_in_navbar=False, show_in_sidebar=True
+            "Deployment", url=None, order=3, show_in_navbar=False, show_in_sidebar=True
         )
 
         get_or_create(
@@ -211,40 +232,47 @@ def run():
             show_in_navbar=False,
             show_in_sidebar=True,
         )
-        get_or_create(
-            "Deployment Runs",
-            parent_id=deployment.id,
-            url="/deployment-runs",
-            permission_code="deployment_run.view",
-            order=2,
-            show_in_navbar=False,
-            show_in_sidebar=True,
-        )
         # No "Deployment Pods" entry here anymore — retired in favor of
         # per-row links on Deployment Servers, see
         # migrate_remove_deployment_pods_menu below.
 
+        # Sits next to the Manifests it feeds ("Save as Manifest" hands off
+        # into the Deployment Manifest create flow), ahead of Runs.
         get_or_create(
             "YAML Generator",
             parent_id=deployment.id,
             url="/yaml-generator",
             permission_code="yaml_generator.view",
+            order=2,
+            icon=_CODE_ICON,
+            show_in_navbar=False,
+            show_in_sidebar=True,
+        )
+        get_or_create(
+            "Deployment Runs",
+            parent_id=deployment.id,
+            url="/deployment-runs",
+            permission_code="deployment_run.view",
             order=3,
             show_in_navbar=False,
             show_in_sidebar=True,
         )
 
+        # Elevated to right after Home — the orchestration layer tying the
+        # Image Builder and Deployment modules together, not a peer of the
+        # admin/config groups below it.
         get_or_create(
             "Workflows",
             url="/workflows",
             permission_code="workflow.view",
-            order=6,
+            order=1,
+            icon=_WORKFLOW_ICON,
             show_in_navbar=False,
             show_in_sidebar=True,
         )
 
         system_group = get_or_create(
-            "System", url=None, order=4, show_in_navbar=False, show_in_sidebar=True
+            "System", url=None, order=6, show_in_navbar=False, show_in_sidebar=True
         )
         get_or_create(
             "Configuration",

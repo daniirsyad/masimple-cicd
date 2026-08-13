@@ -42,6 +42,7 @@ BASE_PERMISSIONS = [
     ("aiprovider.manage", "Manage AI provider settings and prompt templates"),
     ("gitsource.manage", "Manage GitHub connections and registered repositories"),
     ("registry.manage", "Manage container registry targets"),
+    ("dockerfile.manage", "Manage reusable Dockerfiles a Builder can build from"),
     ("documentation.edit", "View and edit build batch documentation"),
     ("system.manage", "Manage system configuration (timezone, session timeout)"),
     ("deployment_server.view", "View deployment servers"),

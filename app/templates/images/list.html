@@ -11,21 +11,29 @@ MASIMPLE CICD{% endblock %} {% block content %}
   </div>
 </div>
 
-<form method="get" class="mt-4 flex flex-wrap items-end gap-3">
-  <div>
-    <label class="label text-sm">Status</label>
-    <select name="status" class="select select-bordered select-sm">
-      <option value="">All</option>
-      {% for choice in status_choices %}
-      <option value="{{ choice }}" {{ 'selected' if selected_status == choice else '' }}>
-        {{ choice }}
-      </option>
-      {% endfor %}
-    </select>
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">
+      Filters
+      {% if selected_status %}<span class="badge badge-primary badge-sm">Active</span>{% endif %}
+    </h2>
+    <form method="get" class="mt-2 flex flex-wrap items-end gap-3">
+      <div>
+        <label class="label text-sm">Status</label>
+        <select name="status" class="select select-bordered select-sm">
+          <option value="">All</option>
+          {% for choice in status_choices %}
+          <option value="{{ choice }}" {{ 'selected' if selected_status == choice else '' }}>
+            {{ choice }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+      <a href="{{ url_for('images.list_images') }}" class="btn btn-ghost btn-sm">Reset</a>
+    </form>
   </div>
-  <button type="submit" class="btn btn-primary btn-sm">Filter</button>
-  <a href="{{ url_for('images.list_images') }}" class="btn btn-ghost btn-sm">Reset</a>
-</form>
+</div>
 
 <div class="mt-4 flex flex-col gap-4">
   {% for batch in batches %} {% set doc = batch.documentation %}

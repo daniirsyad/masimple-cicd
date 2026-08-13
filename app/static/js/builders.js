@@ -47,6 +47,26 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // --- Dockerfile source toggle (create + each edit form): shows either
+  // the repo-path field or the managed-Dockerfile picker depending on the
+  // select, never both — matches which one BuilderForm/_apply_dockerfile_source
+  // actually reads server-side. ---
+  document.querySelectorAll(".builder-form").forEach((form) => {
+    const sourceSelect = form.querySelector(".dockerfile-source-select");
+    const repoFields = form.querySelector(".dockerfile-repo-fields");
+    const managedFields = form.querySelector(".dockerfile-managed-fields");
+    if (!sourceSelect || !repoFields || !managedFields) return;
+
+    function syncVisibility() {
+      const isManaged = sourceSelect.value === "managed";
+      repoFields.classList.toggle("hidden", isManaged);
+      managedFields.classList.toggle("hidden", !isManaged);
+    }
+
+    sourceSelect.addEventListener("change", syncVisibility);
+    syncVisibility();
+  });
+
   // --- Build args repeatable rows (one rows-container + add-button pair per form) ---
   document.querySelectorAll(".add-build-arg-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -127,6 +147,26 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const selected = []; // {kind: "existing"|"new", id, name}
 
+    // This field lives inside a daisyUI modal (.modal-box has its own
+    // overflow-y: auto, and the outer <dialog class="modal"> clips with
+    // overflow-y: hidden) — an absolutely-positioned dropdown nested inside
+    // either gets clipped or forces the whole modal to scroll just to reveal
+    // it. Portaling the dropdown to be a direct child of the <dialog> itself
+    // (sibling of .modal-box, not a descendant of it) sidesteps both: it
+    // stays inside the dialog's own top-layer stacking (so it still paints
+    // above the backdrop, unlike a portal to document.body would once the
+    // dialog is open), and position: fixed is computed straight from the
+    // field's own bounding rect so it never depends on modal-box's overflow.
+    const anchor = input.closest(".relative") || input;
+    const dialog = input.closest("dialog");
+    (dialog || document.body).appendChild(dropdown);
+    dropdown.classList.remove("absolute");
+    dropdown.style.position = "fixed";
+    dropdown.style.zIndex = "10";
+
+    let currentOptions = []; // [{kind: "existing"|"new", id, name, apply()}]
+    let highlightedIndex = -1;
+
     function isSelected(name) {
       return selected.some((item) => item.name.toLowerCase() === name.toLowerCase());
     }
@@ -177,45 +217,77 @@ document.addEventListener("DOMContentLoaded", () => {
       renderPills();
     }
 
+    function positionDropdown() {
+      const rect = anchor.getBoundingClientRect();
+      dropdown.style.top = `${rect.bottom + 4}px`;
+      dropdown.style.left = `${rect.left}px`;
+      dropdown.style.width = `${rect.width}px`;
+    }
+
+    function applyHighlight() {
+      dropdown.querySelectorAll("[data-picker-option]").forEach((el, i) => {
+        el.classList.toggle("active", i === highlightedIndex);
+        el.classList.toggle("bg-base-200", i === highlightedIndex);
+        if (i === highlightedIndex) el.scrollIntoView({ block: "nearest" });
+      });
+    }
+
     function renderOptions() {
       const query = input.value.trim().toLowerCase();
       const matches = suggestions.filter(
         (s) => !isSelected(s.name) && (!query || s.name.toLowerCase().includes(query))
       );
 
-      dropdown.innerHTML = "";
-      matches.forEach((s) => {
-        const li = document.createElement("li");
-        const a = document.createElement("a");
-        a.textContent = s.name;
-        a.addEventListener("mousedown", (event) => {
-          event.preventDefault();
-          addExisting(s);
-          input.value = "";
-          renderOptions();
-        });
-        li.appendChild(a);
-        dropdown.appendChild(li);
-      });
+      currentOptions = matches.map((s) => ({ kind: "existing", id: s.id, name: s.name, apply: () => addExisting(s) }));
 
       const trimmed = input.value.trim();
       const exactMatch = suggestions.some((s) => s.name.toLowerCase() === trimmed.toLowerCase());
-      if (trimmed && !exactMatch && !isSelected(trimmed)) {
-        const li = document.createElement("li");
-        const a = document.createElement("a");
-        a.textContent = `+ Add "${trimmed}" as new`;
-        a.addEventListener("mousedown", (event) => {
-          event.preventDefault();
-          addNew(trimmed);
-          input.value = "";
-          renderOptions();
-        });
-        li.appendChild(a);
-        dropdown.appendChild(li);
+      const canAddNew = trimmed && !exactMatch && !isSelected(trimmed);
+      if (canAddNew) {
+        currentOptions.push({ kind: "new", name: trimmed, apply: () => addNew(trimmed) });
       }
 
-      dropdown.classList.toggle("hidden", dropdown.children.length === 0);
+      dropdown.innerHTML = currentOptions
+        .map(
+          (opt, i) =>
+            `<li><a data-picker-option data-index="${i}">${
+              opt.kind === "new" ? `+ Add &quot;${opt.name.replace(/"/g, "&quot;")}&quot; as new` : opt.name
+            }</a></li>`
+        )
+        .join("");
+
+      if (currentOptions.length === 0) {
+        dropdown.classList.add("hidden");
+        highlightedIndex = -1;
+        return;
+      }
+
+      highlightedIndex = 0;
+      applyHighlight();
+      positionDropdown();
+      dropdown.classList.remove("hidden");
     }
+
+    function selectHighlighted() {
+      const opt = currentOptions[highlightedIndex];
+      if (!opt) return;
+      opt.apply();
+      input.value = "";
+      renderOptions();
+    }
+
+    // mousedown (not click) fires before the input's "blur" handler below,
+    // and preventDefault stops that blur from happening at all — so
+    // renderOptions() below runs with the input still focused, keeping the
+    // dropdown open (now excluding this pick) instead of it closing and
+    // needing a fresh click into the input to pick a second Object.
+    dropdown.addEventListener("mousedown", (event) => {
+      const option = event.target.closest("[data-picker-option]");
+      if (!option) return;
+      event.preventDefault();
+      highlightedIndex = Number(option.dataset.index);
+      selectHighlighted();
+    });
 
     input.addEventListener("focus", renderOptions);
     input.addEventListener("input", renderOptions);
@@ -223,16 +295,49 @@ document.addEventListener("DOMContentLoaded", () => {
     input.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         dropdown.classList.add("hidden");
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        if (dropdown.classList.contains("hidden")) {
+          renderOptions();
+          return;
+        }
+        if (currentOptions.length === 0) return;
+        highlightedIndex = (highlightedIndex + 1) % currentOptions.length;
+        applyHighlight();
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        if (dropdown.classList.contains("hidden")) {
+          renderOptions();
+          return;
+        }
+        if (currentOptions.length === 0) return;
+        highlightedIndex = (highlightedIndex - 1 + currentOptions.length) % currentOptions.length;
+        applyHighlight();
       } else if (event.key === "Enter") {
         event.preventDefault();
-        const trimmed = input.value.trim();
-        if (!trimmed) return;
-        const match = suggestions.find((s) => s.name.toLowerCase() === trimmed.toLowerCase());
-        if (match) addExisting(match);
-        else addNew(trimmed);
-        input.value = "";
-        dropdown.classList.add("hidden");
+        if (!dropdown.classList.contains("hidden") && currentOptions[highlightedIndex]) {
+          selectHighlighted();
+        } else {
+          const trimmed = input.value.trim();
+          if (!trimmed) return;
+          const match = suggestions.find((s) => s.name.toLowerCase() === trimmed.toLowerCase());
+          if (match) addExisting(match);
+          else addNew(trimmed);
+          input.value = "";
+          dropdown.classList.add("hidden");
+        }
       }
+    });
+
+    window.addEventListener(
+      "scroll",
+      () => {
+        if (!dropdown.classList.contains("hidden")) positionDropdown();
+      },
+      true
+    );
+    window.addEventListener("resize", () => {
+      if (!dropdown.classList.contains("hidden")) positionDropdown();
     });
 
     renderPills();

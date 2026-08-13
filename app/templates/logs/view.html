@@ -7,54 +7,63 @@
   <a role="tab" href="{{ url_for('logs.view_error_logs') }}" class="tab">Errors</a>
 </div>
 
-<form method="get" class="mt-4 flex flex-wrap items-end gap-3">
-  <div>
-    <label class="label text-sm">User</label>
-    <select name="user_id" class="select select-bordered select-sm">
-      <option value="">All</option>
-      {% for user in users %}
-      <option value="{{ user.id }}" {{ 'selected' if selected_user_id == user.id|string else '' }}>
-        {{ user.username }}
-      </option>
-      {% endfor %}
-    </select>
-  </div>
+{% set has_filters = selected_user_id or selected_action or date_from or date_to %}
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">
+      Filters
+      {% if has_filters %}<span class="badge badge-primary badge-sm">Active</span>{% endif %}
+    </h2>
+    <form method="get" class="mt-2 flex flex-wrap items-end gap-3">
+      <div>
+        <label class="label text-sm">User</label>
+        <select name="user_id" class="select select-bordered select-sm">
+          <option value="">All</option>
+          {% for user in users %}
+          <option value="{{ user.id }}" {{ 'selected' if selected_user_id == user.id|string else '' }}>
+            {{ user.username }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
 
-  <div>
-    <label class="label text-sm">Action</label>
-    <select name="action" class="select select-bordered select-sm">
-      <option value="">All</option>
-      {% for action_option in actions %}
-      <option value="{{ action_option }}" {{ 'selected' if selected_action == action_option else '' }}>
-        {{ action_option }}
-      </option>
-      {% endfor %}
-    </select>
-  </div>
+      <div>
+        <label class="label text-sm">Action</label>
+        <select name="action" class="select select-bordered select-sm">
+          <option value="">All</option>
+          {% for action_option in actions %}
+          <option value="{{ action_option }}" {{ 'selected' if selected_action == action_option else '' }}>
+            {{ action_option }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
 
-  <div>
-    <label class="label text-sm">From</label>
-    <input
-      type="date"
-      name="date_from"
-      value="{{ date_from }}"
-      class="input input-bordered input-sm"
-    />
-  </div>
+      <div>
+        <label class="label text-sm">From</label>
+        <input
+          type="date"
+          name="date_from"
+          value="{{ date_from }}"
+          class="input input-bordered input-sm"
+        />
+      </div>
 
-  <div>
-    <label class="label text-sm">To</label>
-    <input
-      type="date"
-      name="date_to"
-      value="{{ date_to }}"
-      class="input input-bordered input-sm"
-    />
-  </div>
+      <div>
+        <label class="label text-sm">To</label>
+        <input
+          type="date"
+          name="date_to"
+          value="{{ date_to }}"
+          class="input input-bordered input-sm"
+        />
+      </div>
 
-  <button type="submit" class="btn btn-primary btn-sm">Filter</button>
-  <a href="{{ url_for('logs.view_logs') }}" class="btn btn-ghost btn-sm">Reset</a>
-</form>
+      <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+      <a href="{{ url_for('logs.view_logs') }}" class="btn btn-ghost btn-sm">Reset</a>
+    </form>
+  </div>
+</div>
 
 <div class="mt-4 overflow-x-auto">
   <table class="table table-sm">

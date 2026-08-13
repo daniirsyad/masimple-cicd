@@ -8,14 +8,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const providerSelect = document.getElementById("ai-provider-select");
   const promptField = document.getElementById("ai-prompt-preview");
   const errorEl = document.getElementById("ai-generate-error");
-  const draftContainer = document.getElementById("ai-draft-container");
-  const draftPreview = document.getElementById("ai-draft-preview");
-  const useDraftBtn = document.getElementById("use-ai-draft-btn");
   const descriptionField = document.querySelector('textarea[name="description"]');
   const aiDescriptionField = document.querySelector('input[name="ai_description"]');
   const aiProviderUsedField = document.querySelector('input[name="ai_provider_used"]');
-
-  let lastDraft = "";
 
   function showError(message, errorLogUrl) {
     errorEl.textContent = message;
@@ -58,9 +53,10 @@ document.addEventListener("DOMContentLoaded", () => {
           showError(data.error || "Failed to generate a description.", data.error_log_url);
           return;
         }
-        lastDraft = data.description;
-        draftPreview.textContent = data.description;
-        draftContainer.classList.remove("hidden");
+        // Written straight into the real Description field — no separate
+        // draft box to review/copy from first, per the "don't show the AI
+        // Draft" UI decision. Still fully editable there before saving.
+        if (descriptionField) descriptionField.value = data.description;
         if (aiDescriptionField) aiDescriptionField.value = data.description;
         if (aiProviderUsedField) aiProviderUsedField.value = data.provider;
       })
@@ -70,10 +66,4 @@ document.addEventListener("DOMContentLoaded", () => {
         generateBtn.textContent = originalLabel;
       });
   });
-
-  if (useDraftBtn) {
-    useDraftBtn.addEventListener("click", () => {
-      if (descriptionField) descriptionField.value = lastDraft;
-    });
-  }
 });

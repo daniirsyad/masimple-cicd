@@ -33,7 +33,14 @@ class Builder(db.Model):
     # worker._derive_image_name) — e.g. to push under a different name than
     # the source repo, or include an explicit registry namespace ("org/name").
     image_name = db.Column(db.String, nullable=True)
+    # "repo" (default, existing behavior): dockerfile_path is a path inside
+    # the cloned repository. "managed": build from managed_dockerfile's
+    # content instead — dockerfile_path is ignored in that case, kept
+    # populated with its "Dockerfile" default so switching back to "repo"
+    # doesn't land on an empty path.
+    dockerfile_source = db.Column(db.String, default="repo", nullable=False)
     dockerfile_path = db.Column(db.String, default="Dockerfile", nullable=False)
+    managed_dockerfile_id = db.Column(UUID(as_uuid=True), db.ForeignKey("dockerfiles.id"), nullable=True)
     registry_target_id = db.Column(UUID(as_uuid=True), db.ForeignKey("registry_targets.id"), nullable=False)
     default_build_args = db.Column(db.JSON, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -42,6 +49,7 @@ class Builder(db.Model):
     version = db.relationship("Version", backref=db.backref("builders", lazy="dynamic"))
     repository = db.relationship("Repository", backref=db.backref("builders", lazy="dynamic"))
     registry_target = db.relationship("RegistryTarget")
+    managed_dockerfile = db.relationship("Dockerfile", backref=db.backref("builders", lazy="dynamic"))
     # Roles allowed to view/build this Builder when the current user lacks
     # builder.manage (which always grants full access to every Builder). No
     # roles assigned means restricted to builder.manage users only — see

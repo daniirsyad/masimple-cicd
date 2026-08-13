@@ -39,13 +39,25 @@ def _change_type_choices():
     ]
 
 
-def _linked_batch_choices(batch_id):
+def _linked_batch_choices(batch):
     # Only successful batches ever get documented (see worker
     # ._create_documentation_for_successful_batch), so a failed/partial
     # batch's version string doesn't correspond to anything real to link to.
+    #
+    # Scoped to batches from the same Version (always allowed — bundling
+    # several batches under one Version together needs no extra config) plus
+    # batches from any Version explicitly linked to this one on the Versions
+    # page (Version.linked_versions, e.g. "QAS" linked with "DEV") — not
+    # every successful batch in the system regardless of Version, like
+    # before this was added.
+    allowed_version_ids = {batch.version_id} | {v.id for v in batch.version.linked_versions}
     return [
         (str(b.id), b.full_version_string)
-        for b in BuildBatch.query.filter(BuildBatch.id != batch_id, BuildBatch.status == "success")
+        for b in BuildBatch.query.filter(
+            BuildBatch.id != batch.id,
+            BuildBatch.status == "success",
+            BuildBatch.version_id.in_(allowed_version_ids),
+        )
         .order_by(BuildBatch.created_at.desc())
         .all()
     ]
@@ -163,8 +175,8 @@ def _documented_batches_query(filters):
     elif status == "pending":
         query = query.filter(VersionDocumentation.change_type_id.is_(None))
 
-    if filters.get("object"):
-        query = query.filter(VersionDocumentation.objects.any(Object.name.ilike(f"%{filters['object']}%")))
+    if filters.get("object_ids"):
+        query = query.filter(VersionDocumentation.objects.any(Object.id.in_(filters["object_ids"])))
 
     if filters.get("version_string"):
         query = query.filter(BuildBatch.full_version_string.ilike(f"%{filters['version_string']}%"))
@@ -188,7 +200,7 @@ def _render_view(batch, doc, form=None):
         ]
 
     form.change_type_id.choices = _change_type_choices()
-    form.linked_batch_ids.choices = _linked_batch_choices(batch.id)
+    form.linked_batch_ids.choices = _linked_batch_choices(batch)
 
     return render_template(
         "documentation/view.html",
@@ -211,7 +223,7 @@ def list_documentation():
     version_id = _parse_uuid(request.args.get("version_id") or "")
     change_type_id = _parse_uuid(request.args.get("change_type_id") or "")
     built_by = _parse_uuid(request.args.get("built_by") or "")
-    object_ = (request.args.get("object") or "").strip()
+    object_ids = [oid for oid in (_parse_uuid(raw) for raw in request.args.getlist("object_id")) if oid is not None]
     version_string = (request.args.get("version_string") or "").strip()
     status = request.args.get("status") or ""
 
@@ -235,7 +247,7 @@ def list_documentation():
         "version_id": version_id,
         "change_type_id": change_type_id,
         "built_by": built_by,
-        "object": object_,
+        "object_ids": object_ids,
         "version_string": version_string,
         "status": status if status in ("documented", "pending") else "",
         "date_from": date_from,
@@ -244,6 +256,12 @@ def list_documentation():
 
     page = request.args.get("page", 1, type=int)
     pagination = _documented_batches_query(filters).paginate(page=page, per_page=DOC_PER_PAGE, error_out=False)
+
+    selected_objects = (
+        [{"id": str(obj.id), "name": obj.name} for obj in Object.query.filter(Object.id.in_(object_ids)).order_by(Object.name).all()]
+        if object_ids
+        else []
+    )
 
     return render_template(
         "documentation/index.html",
@@ -256,13 +274,14 @@ def list_documentation():
         selected_version_id=str(version_id) if version_id else "",
         selected_change_type_id=str(change_type_id) if change_type_id else "",
         selected_built_by=str(built_by) if built_by else "",
-        selected_object=object_,
+        selected_object_ids=[str(oid) for oid in object_ids],
+        selected_objects=selected_objects,
         selected_version_string=version_string,
         selected_status=filters["status"],
         date_from=date_from_raw,
         date_to=date_to_raw,
         has_filters=any(
-            [version_id, change_type_id, built_by, object_, version_string, filters["status"], date_from_raw, date_to_raw]
+            [version_id, change_type_id, built_by, object_ids, version_string, filters["status"], date_from_raw, date_to_raw]
         ),
     )
 
@@ -282,7 +301,7 @@ def view_documentation(batch_id):
     if request.method == "POST":
         form = DocumentationForm()
         form.change_type_id.choices = _change_type_choices()
-        form.linked_batch_ids.choices = _linked_batch_choices(batch.id)
+        form.linked_batch_ids.choices = _linked_batch_choices(batch)
 
         if form.validate_on_submit():
             doc.change_type_id = uuid.UUID(form.change_type_id.data) if form.change_type_id.data else None

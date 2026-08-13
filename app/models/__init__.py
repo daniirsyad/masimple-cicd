@@ -9,6 +9,7 @@ from app.models.repository import Repository
 from app.models.registry_target import RegistryTarget
 from app.models.version_type import VersionType
 from app.models.version import Version
+from app.models.dockerfile import Dockerfile
 from app.models.builder import Builder
 from app.models.build_batch import BuildBatch
 from app.models.image_build import ImageBuild
@@ -44,6 +45,7 @@ __all__ = [
     "RegistryTarget",
     "VersionType",
     "Version",
+    "Dockerfile",
     "Builder",
     "BuildBatch",
     "ImageBuild",

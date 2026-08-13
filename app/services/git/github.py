@@ -98,18 +98,26 @@ class GitHubProvider(GitProvider):
             commit = repo.commit(f"origin/{branch}")
         return commit.hexsha
 
-    def get_commits(self, local_path, since_ref=None, until_ref=None):
+    def get_commits(self, local_path, since_ref=None, until_ref=None, limit=None):
+        # Looked up here (not as a `limit=DEFAULT_LOG_LIMIT` default parameter
+        # value) so a caller-supplied None still falls back to whatever
+        # DEFAULT_LOG_LIMIT is *right now* — matters both for tests that
+        # monkeypatch the module constant and for SystemConfig.commit_log_limit
+        # changing at runtime with no restart needed.
+        if limit is None:
+            limit = DEFAULT_LOG_LIMIT
+
         repo = self._open_repo(local_path)
         until_ref = until_ref or "HEAD"
         try:
             if since_ref:
                 commits = list(repo.iter_commits(f"{since_ref}..{until_ref}"))
             else:
-                commits = list(repo.iter_commits(until_ref, max_count=DEFAULT_LOG_LIMIT))
+                commits = list(repo.iter_commits(until_ref, max_count=limit))
         except git.GitCommandError:
             # since_ref may no longer be reachable (force-push, rebase, etc.) —
             # fall back to a bounded recent log rather than failing the build.
-            commits = list(repo.iter_commits(until_ref, max_count=DEFAULT_LOG_LIMIT))
+            commits = list(repo.iter_commits(until_ref, max_count=limit))
         return [
             {
                 "sha": commit.hexsha,

@@ -6,15 +6,18 @@ block content %}
 
 <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
   <div class="stat rounded-box bg-base-100 shadow">
+    <div class="stat-figure text-primary [&>svg]:h-8 [&>svg]:w-8">{{ active_users_icon | safe }}</div>
     <div class="stat-title">Active Users</div>
     <div class="stat-value">{{ active_users_count }}</div>
   </div>
   <div class="stat rounded-box bg-base-100 shadow">
+    <div class="stat-figure text-primary [&>svg]:h-8 [&>svg]:w-8">{{ roles_icon | safe }}</div>
     <div class="stat-title">Roles</div>
     <div class="stat-value">{{ roles_count }}</div>
   </div>
   {% for stat in module_stats %}
   <a href="{{ stat.url }}" class="stat rounded-box bg-base-100 shadow transition hover:shadow-md">
+    <div class="stat-figure text-primary [&>svg]:h-8 [&>svg]:w-8">{{ stat.icon | safe }}</div>
     <div class="stat-title">{{ stat.label }}</div>
     <div class="stat-value">{{ stat.value }}</div>
   </a>
@@ -67,67 +70,75 @@ block content %}
 </div>
 {% endif %} {% if recent_batches %}
 <h2 class="mt-8 text-xl font-semibold">Recent Builds</h2>
-<div class="mt-2 overflow-x-auto">
-  <table class="table table-sm">
-    <thead>
-      <tr>
-        <th>Version</th>
-        <th>Status</th>
-        <th>Requested by</th>
-        <th>Date</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for batch in recent_batches %}
-      <tr>
-        <td><code class="text-xs">{{ batch.full_version_string or "pending" }}</code></td>
-        <td>
-          {% if batch.status == 'running' %}
-          <span class="loading loading-spinner loading-xs text-warning"></span>
-          {% endif %}
-          <span
-            class="badge badge-sm {{ 'badge-success' if batch.status == 'success' else 'badge-error' if batch.status in ('failed', 'partial_failure') else 'badge-warning' }}"
-          >
-            {{ batch.status }}
-          </span>
-        </td>
-        <td>{{ batch.requester.username if batch.requester else "—" }}</td>
-        <td class="text-xs text-base-content/60">{{ batch.created_at | localtime("%Y-%m-%d %H:%M") }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div class="card mt-2 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Version</th>
+            <th>Status</th>
+            <th>Requested by</th>
+            <th>Date</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for batch in recent_batches %}
+          <tr>
+            <td><code class="text-xs">{{ batch.full_version_string or "pending" }}</code></td>
+            <td>
+              {% if batch.status == 'running' %}
+              <span class="loading loading-spinner loading-xs text-warning"></span>
+              {% endif %}
+              <span
+                class="badge badge-sm {{ 'badge-success' if batch.status == 'success' else 'badge-error' if batch.status in ('failed', 'partial_failure') else 'badge-warning' }}"
+              >
+                {{ batch.status }}
+              </span>
+            </td>
+            <td>{{ batch.requester.username if batch.requester else "—" }}</td>
+            <td class="text-xs text-base-content/60">{{ batch.created_at | localtime("%Y-%m-%d %H:%M") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
 </div>
 {% endif %}
 
 <h2 class="mt-8 text-xl font-semibold">Recent Activity</h2>
-<div class="mt-2 overflow-x-auto">
-  <table class="table table-sm">
-    <thead>
-      <tr>
-        <th>When</th>
-        <th>Action</th>
-        <th>Target</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for log in recent_logs %}
-      <tr>
-        <td>{{ log.created_at | localtime }}</td>
-        <td><span class="badge badge-sm">{{ log.action }}</span></td>
-        <td>
-          {{ log.target_type }}{% if log.target_id %} #{{ log.target_id }}{%
-          endif %}
-        </td>
-        <td>{{ log.description }}</td>
-      </tr>
-      {% else %}
-      <tr>
-        <td colspan="4">No activity yet.</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div class="card mt-2 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Action</th>
+            <th>Target</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for log in recent_logs %}
+          <tr>
+            <td>{{ log.created_at | localtime }}</td>
+            <td><span class="badge badge-sm">{{ log.action }}</span></td>
+            <td>
+              {{ log.target_type }}{% if log.target_id %} #{{ log.target_id }}{%
+              endif %}
+            </td>
+            <td>{{ log.description }}</td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="4">No activity yet.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
 </div>
 {% endblock %}

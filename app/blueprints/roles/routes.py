@@ -26,6 +26,7 @@ RESOURCE_LABELS = {
     "image": "Images",
     "gitsource": "Git Sources",
     "registry": "Registries",
+    "dockerfile": "Dockerfiles",
     "documentation": "Documentation",
     "aiprovider": "AI Providers",
     "deployment_namespace": "Deployment Namespaces",

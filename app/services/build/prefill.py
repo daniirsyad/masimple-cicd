@@ -7,6 +7,7 @@ from app.services.build.bump_heuristic import suggest_bump_type
 from app.services.build.history import get_last_built_commit
 from app.services.git.helpers import provider_for_git_source
 from app.utils.error_logger import log_error
+from app.utils.system_config import get_system_config
 
 
 def compute_build_prefill(builder_branches, additional_description=None):
@@ -33,6 +34,8 @@ def compute_build_prefill(builder_branches, additional_description=None):
     rows), "new_object_names" (list of str), "change_type_id" (uuid or
     None), "description", "commit_count"}.
     """
+    commit_log_limit = get_system_config().commit_log_limit
+
     all_messages = []
     for builder, branch in builder_branches:
         if not branch:
@@ -46,7 +49,9 @@ def compute_build_prefill(builder_branches, additional_description=None):
             db.session.commit()
 
             since_ref = get_last_built_commit(builder.id, branch)
-            commits = git_provider.get_commits(repository.local_path, since_ref=since_ref, until_ref=branch)
+            commits = git_provider.get_commits(
+                repository.local_path, since_ref=since_ref, until_ref=branch, limit=commit_log_limit
+            )
         except Exception as exc:
             db.session.rollback()
             log_error(

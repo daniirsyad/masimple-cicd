@@ -185,6 +185,61 @@ class TestIndexRendering:
         assert b"Existing WF" in response.data
 
 
+def _form_html(html, action_substring):
+    """The <form ...>...</form> block whose action contains `action_substring`
+    — used to check a specific form's own fields, not just "csrf_token
+    appears somewhere on the page" (which every WTForms-backed form on the
+    same page would already satisfy, masking a plain-HTML form's missing
+    token).
+    """
+    start = html.index(action_substring)
+    form_start = html.rindex("<form", 0, start)
+    form_end = html.index("</form>", start)
+    return html[form_start:form_end]
+
+
+class TestDetailPageIncludesCsrfTokens:
+    """Regression test: the Run/Delete Workflow/Delete Step forms were plain
+    HTML forms (not WTForms-backed with hidden_tag()) and were missing their
+    csrf_token field entirely, so submitting them failed with "The CSRF
+    token is missing" outside of TestingConfig — which disables CSRF here,
+    so a plain functional POST test wouldn't have caught this; only
+    inspecting the rendered HTML does.
+    """
+
+    def test_run_delete_workflow_and_delete_step_forms_include_csrf_token(
+        self, workflow_client, app, base_entities
+    ):
+        with app.app_context():
+            builder = _make_builder(base_entities)
+            workflow = _make_workflow()
+            step = WorkflowStep(
+                workflow_id=workflow.id,
+                order=0,
+                step_type="build",
+                on_failure="stop",
+                bump_type="patch",
+                object="svc",
+            )
+            step.selected_builders = [builder]
+            db.session.add(step)
+            db.session.commit()
+            workflow_id, step_id = workflow.id, step.id
+
+        response = workflow_client.get(f"/workflows/{workflow_id}")
+        assert response.status_code == 200
+        html = response.data.decode()
+
+        run_form = _form_html(html, f'action="/workflows/{workflow_id}/run"')
+        assert 'name="csrf_token"' in run_form
+
+        delete_workflow_form = _form_html(html, f'action="/workflows/{workflow_id}/delete"')
+        assert 'name="csrf_token"' in delete_workflow_form
+
+        delete_step_form = _form_html(html, f'action="/workflows/{workflow_id}/steps/{step_id}/delete"')
+        assert 'name="csrf_token"' in delete_step_form
+
+
 class TestCreateWorkflow:
     def test_creates_workflow_and_redirects_to_detail(self, workflow_client, app):
         response = workflow_client.post(
@@ -273,7 +328,7 @@ class _FakePreviewGitProvider:
     def sync_repo(self, local_path, branch, repo_name=None):
         pass
 
-    def get_commits(self, local_path, since_ref=None, until_ref=None):
+    def get_commits(self, local_path, since_ref=None, until_ref=None, limit=None):
         return [{"sha": f"sha-{i}", "message": m} for i, m in enumerate(self.messages)]
 
 

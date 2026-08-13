@@ -6,86 +6,143 @@ MASIMPLE CICD{% endblock %} {% block content %}
   documented once every image in it built and pushed successfully.
 </p>
 
-<form method="get" class="mt-4 flex flex-wrap items-end gap-3">
-  <div>
-    <label class="label text-sm">Version</label>
-    <select name="version_id" class="select select-bordered select-sm">
-      <option value="">All</option>
-      {% for value, label in versions %}
-      <option value="{{ value }}" {{ 'selected' if selected_version_id == value else '' }}>{{ label }}</option>
-      {% endfor %}
-    </select>
-  </div>
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-0">
+    {# collapse-arrow, checkbox-driven (no JS needed) — starts open when a
+       filter is already applied (so it's obvious at a glance what's
+       narrowing the list below), collapsed otherwise to keep this section
+       from permanently eating vertical space above the results. #}
+    <div class="collapse collapse-arrow">
+      <input type="checkbox" {{ 'checked' if has_filters else '' }} />
+      <div class="collapse-title p-4 text-base font-semibold">
+        Filters
+        {% if has_filters %}<span class="badge badge-primary badge-sm ml-2">Active</span>{% endif %}
+      </div>
+      <div class="collapse-content px-4 pb-4">
+        <form method="get" class="flex flex-col gap-3">
+          <div class="flex flex-wrap items-end gap-3">
+            <div>
+              <label class="label text-sm">Version</label>
+              <select name="version_id" class="select select-bordered select-sm">
+                <option value="">All</option>
+                {% for value, label in versions %}
+                <option value="{{ value }}" {{ 'selected' if selected_version_id == value else '' }}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
 
-  <div>
-    <label class="label text-sm">Version String</label>
-    <input
-      type="text"
-      name="version_string"
-      value="{{ selected_version_string }}"
-      placeholder="e.g. DEV.2.0"
-      class="input input-bordered input-sm"
-    />
-  </div>
+            <div>
+              <label class="label text-sm">Version String</label>
+              <input
+                type="text"
+                name="version_string"
+                value="{{ selected_version_string }}"
+                placeholder="e.g. DEV.2.0"
+                class="input input-bordered input-sm"
+              />
+            </div>
 
-  <div>
-    <label class="label text-sm">Change Type</label>
-    <select name="change_type_id" class="select select-bordered select-sm">
-      <option value="">All</option>
-      {% for value, label in change_type_choices %}
-      <option value="{{ value }}" {{ 'selected' if selected_change_type_id == value else '' }}>{{ label }}</option>
-      {% endfor %}
-    </select>
-  </div>
+            <div>
+              <label class="label text-sm">Change Type</label>
+              <select name="change_type_id" class="select select-bordered select-sm">
+                <option value="">All</option>
+                {% for value, label in change_type_choices %}
+                <option value="{{ value }}" {{ 'selected' if selected_change_type_id == value else '' }}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
 
-  <div>
-    <label class="label text-sm">Object</label>
-    <input
-      type="text"
-      name="object"
-      value="{{ selected_object }}"
-      list="documentation-object-suggestions"
-      class="input input-bordered input-sm"
-    />
-    <datalist id="documentation-object-suggestions">
-      {% for suggestion in object_suggestions %}
-      <option value="{{ suggestion.name }}"></option>
-      {% endfor %}
-    </datalist>
-  </div>
+            <div>
+              <label class="label text-sm">Built by</label>
+              <select name="built_by" class="select select-bordered select-sm">
+                <option value="">All</option>
+                {% for value, label in built_by_choices %}
+                <option value="{{ value }}" {{ 'selected' if selected_built_by == value else '' }}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
 
-  <div>
-    <label class="label text-sm">Built by</label>
-    <select name="built_by" class="select select-bordered select-sm">
-      <option value="">All</option>
-      {% for value, label in built_by_choices %}
-      <option value="{{ value }}" {{ 'selected' if selected_built_by == value else '' }}>{{ label }}</option>
-      {% endfor %}
-    </select>
-  </div>
+            <div>
+              <label class="label text-sm">Status</label>
+              <select name="status" class="select select-bordered select-sm">
+                <option value="">All</option>
+                <option value="documented" {{ 'selected' if selected_status == 'documented' else '' }}>Documented</option>
+                <option value="pending" {{ 'selected' if selected_status == 'pending' else '' }}>Documentation Pending</option>
+              </select>
+            </div>
 
-  <div>
-    <label class="label text-sm">Status</label>
-    <select name="status" class="select select-bordered select-sm">
-      <option value="">All</option>
-      <option value="documented" {{ 'selected' if selected_status == 'documented' else '' }}>Documented</option>
-      <option value="pending" {{ 'selected' if selected_status == 'pending' else '' }}>Documentation Pending</option>
-    </select>
-  </div>
+            <div>
+              <label class="label text-sm">From</label>
+              <input type="date" name="date_from" value="{{ date_from }}" class="input input-bordered input-sm" />
+            </div>
 
-  <div>
-    <label class="label text-sm">From</label>
-    <input type="date" name="date_from" value="{{ date_from }}" class="input input-bordered input-sm" />
-  </div>
+            <div>
+              <label class="label text-sm">To</label>
+              <input type="date" name="date_to" value="{{ date_to }}" class="input input-bordered input-sm" />
+            </div>
+          </div>
 
-  <div>
-    <label class="label text-sm">To</label>
-    <input type="date" name="date_to" value="{{ date_to }}" class="input input-bordered input-sm" />
-  </div>
+          {# Object gets its own full-width row — a multi-select naturally
+             grows as more are picked, and sharing a row with the single-line
+             fields above made the whole bar wrap/misalign as it grew.
+             Hand-rolled search+pills widget (see documentation_filters.js):
+             a text input filters object_suggestions into a dropdown, picking
+             one adds a removable daisyUI badge pill and a hidden
+             name="object_id" input so the plain GET form still submits
+             multiple values with no JS framework/third-party lib involved. #}
+          <div>
+            <label class="label text-sm">Object</label>
+            <div id="doc-filter-object" class="relative">
+              <div
+                id="doc-filter-object-pills"
+                class="flex min-h-[2rem] flex-wrap items-center gap-1 rounded-btn border border-base-300 bg-base-100 px-2 py-1"
+              >
+                {% for obj in selected_objects %}
+                <span
+                  class="badge badge-primary badge-sm gap-1 transition-transform"
+                  data-object-pill
+                  data-object-id="{{ obj.id }}"
+                >
+                  {{ obj.name }}
+                  <input type="hidden" name="object_id" value="{{ obj.id }}" />
+                  <button
+                    type="button"
+                    class="leading-none opacity-70 transition-opacity hover:opacity-100"
+                    data-remove-pill
+                    aria-label="Remove {{ obj.name }}"
+                  >
+                    &times;
+                  </button>
+                </span>
+                {% endfor %}
+                <input
+                  type="text"
+                  id="doc-filter-object-search"
+                  class="min-w-[8rem] grow border-none bg-transparent p-0 text-sm focus:outline-none"
+                  placeholder="{{ 'Search Objects...' if not selected_objects else '' }}"
+                  autocomplete="off"
+                />
+              </div>
+              <ul
+                id="doc-filter-object-dropdown"
+                class="menu absolute z-10 mt-1 hidden max-h-56 w-full flex-nowrap overflow-y-auto rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
+              ></ul>
+            </div>
+            {# json, not an HTML attribute — tojson's escaping targets <script> content, not a quoted attribute #}
+            <script type="application/json" id="doc-filter-object-suggestions-data">
+              {{ object_suggestions | tojson }}
+            </script>
+          </div>
 
-  <button type="submit" class="btn btn-primary btn-sm">Filter</button>
-  <a href="{{ url_for('documentation.list_documentation') }}" class="btn btn-ghost btn-sm">Reset</a>
-</form>
+          <div>
+            <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+            <a href="{{ url_for('documentation.list_documentation') }}" class="btn btn-ghost btn-sm">Reset</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div class="card mt-4 bg-base-100 shadow-sm">
   <div class="card-body p-4">
@@ -98,6 +155,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
             <th>Object</th>
             <th>Built by</th>
             <th>Date</th>
+            <th>Status</th>
             <th></th>
           </tr>
         </thead>
@@ -114,17 +172,19 @@ MASIMPLE CICD{% endblock %} {% block content %}
             <td>{{ doc.built_by_user.username if doc.built_by_user else "—" }}</td>
             <td class="text-xs text-base-content/60">{{ batch.created_at | localtime("%Y-%m-%d %H:%M") }}</td>
             <td>
-              <a
-                href="{{ url_for('documentation.view_documentation', batch_id=batch.id) }}"
-                class="badge badge-sm {{ 'badge-success' if doc.is_complete else 'badge-warning' }}"
-              >
+              <span class="badge badge-sm {{ 'badge-success' if doc.is_complete else 'badge-warning' }}">
                 {{ 'Documented' if doc.is_complete else 'Documentation Pending' }}
+              </span>
+            </td>
+            <td>
+              <a href="{{ url_for('documentation.view_documentation', batch_id=batch.id) }}" class="btn btn-ghost btn-xs">
+                Detail
               </a>
             </td>
           </tr>
           {% else %}
           <tr>
-            <td colspan="6">
+            <td colspan="7">
               {{ 'No documented batches match these filters.' if has_filters else 'No documented batches yet.' }}
             </td>
           </tr>
@@ -139,7 +199,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 <div class="join mt-4">
   {% for page_num in pagination.iter_pages() %} {% if page_num %}
   <a
-    href="{{ url_for('documentation.list_documentation', page=page_num, version_id=selected_version_id, version_string=selected_version_string, change_type_id=selected_change_type_id, object=selected_object, built_by=selected_built_by, status=selected_status, date_from=date_from, date_to=date_to) }}"
+    href="{{ url_for('documentation.list_documentation', page=page_num, version_id=selected_version_id, version_string=selected_version_string, change_type_id=selected_change_type_id, object_id=selected_object_ids, built_by=selected_built_by, status=selected_status, date_from=date_from, date_to=date_to) }}"
     class="join-item btn btn-sm {{ 'btn-active' if page_num == pagination.page else '' }}"
   >
     {{ page_num }}
@@ -149,4 +209,6 @@ MASIMPLE CICD{% endblock %} {% block content %}
   {% endif %} {% endfor %}
 </div>
 {% endif %}
+
+<script src="{{ url_for('static', filename='js/documentation_filters.js') }}"></script>
 {% endblock %}

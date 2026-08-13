@@ -11,33 +11,43 @@ block content %}
   </button>
 </div>
 
-<form method="get" class="mt-4 flex flex-wrap gap-2">
-  <input
-    type="text"
-    name="q"
-    value="{{ search }}"
-    placeholder="Search username"
-    class="input input-bordered input-sm"
-  />
-  <select name="role_id" class="select select-bordered select-sm">
-    <option value="">All roles</option>
-    {% for role in roles %}
-    <option value="{{ role.id }}" {{ 'selected' if selected_role_id == role.id|string else '' }}>
-      {{ role.name }}
-    </option>
-    {% endfor %}
-  </select>
-  <select name="status" class="select select-bordered select-sm">
-    <option value="">All statuses</option>
-    <option value="active" {{ 'selected' if selected_status == 'active' else '' }}>
-      Active
-    </option>
-    <option value="inactive" {{ 'selected' if selected_status == 'inactive' else '' }}>
-      Inactive
-    </option>
-  </select>
-  <button type="submit" class="btn btn-sm">Filter</button>
-</form>
+{% set has_filters = search or selected_role_id or selected_status %}
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">
+      Filters
+      {% if has_filters %}<span class="badge badge-primary badge-sm">Active</span>{% endif %}
+    </h2>
+    <form method="get" class="mt-2 flex flex-wrap items-end gap-2">
+      <input
+        type="text"
+        name="q"
+        value="{{ search }}"
+        placeholder="Search username"
+        class="input input-bordered input-sm"
+      />
+      <select name="role_id" class="select select-bordered select-sm">
+        <option value="">All roles</option>
+        {% for role in roles %}
+        <option value="{{ role.id }}" {{ 'selected' if selected_role_id == role.id|string else '' }}>
+          {{ role.name }}
+        </option>
+        {% endfor %}
+      </select>
+      <select name="status" class="select select-bordered select-sm">
+        <option value="">All statuses</option>
+        <option value="active" {{ 'selected' if selected_status == 'active' else '' }}>
+          Active
+        </option>
+        <option value="inactive" {{ 'selected' if selected_status == 'inactive' else '' }}>
+          Inactive
+        </option>
+      </select>
+      <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+      {% if has_filters %}<a href="{{ url_for('users.list_users') }}" class="btn btn-ghost btn-sm">Reset</a>{% endif %}
+    </form>
+  </div>
+</div>
 
 <div class="mt-4 overflow-x-auto">
   <table class="table table-sm">

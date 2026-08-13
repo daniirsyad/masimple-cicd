@@ -13,6 +13,17 @@
 }
 
 @layer components {
+  /* Every .badge/.btn in this app is short, static-ish label/action text
+     (status words, "Filter", "Delete", ...) or a single dynamic value that
+     reads better truncated than wrapped mid-word onto a second line inside
+     an already-small pill/button — applied once here rather than adding
+     whitespace-nowrap to every individual class="badge ..."/class="btn ..."
+     across dozens of templates. */
+  .badge,
+  .btn {
+    white-space: nowrap;
+  }
+
   /* Animated hamburger <-> cross icon for #sidebar-toggle (see sidebar.js,
      which toggles the .is-active class to match the drawer's actual
      open/closed state). All three bars stay position: absolute the whole

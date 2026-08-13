@@ -9,6 +9,7 @@ from app.extensions import db
 from app.models import (
     Builder,
     ChangeType,
+    Dockerfile,
     ImageBuild,
     Object,
     RegistryTarget,
@@ -55,6 +56,12 @@ def _registry_choices():
     return [(str(r.id), r.name) for r in RegistryTarget.query.order_by(RegistryTarget.name).all()]
 
 
+def _dockerfile_choices():
+    return [("", "— Select —")] + [
+        (str(d.id), d.name) for d in Dockerfile.query.order_by(Dockerfile.name).all()
+    ]
+
+
 def _role_choices():
     return [(str(r.id), r.name) for r in Role.query.order_by(Role.name).all()]
 
@@ -62,6 +69,33 @@ def _role_choices():
 def _apply_allowed_roles(builder, form):
     selected_ids = {uuid.UUID(rid) for rid in form.allowed_role_ids.data}
     builder.allowed_roles = Role.query.filter(Role.id.in_(selected_ids)).all() if selected_ids else []
+
+
+def _apply_dockerfile_source(builder, form):
+    """Validates + applies dockerfile_source/dockerfile_path/
+    managed_dockerfile_id from a submitted BuilderForm — only one of
+    dockerfile_path/managed_dockerfile_id actually applies depending on
+    dockerfile_source, so it's checked here rather than via unconditional
+    WTForms validators on both fields (see BuilderForm's own docstring).
+    Returns an error message string on failure (nothing applied), or None
+    on success.
+    """
+    if form.dockerfile_source.data == "managed":
+        dockerfile_id = _parse_uuid(form.managed_dockerfile_id.data)
+        managed_dockerfile = Dockerfile.query.get(dockerfile_id) if dockerfile_id else None
+        if managed_dockerfile is None:
+            return "Select a Managed Dockerfile."
+        builder.dockerfile_source = "managed"
+        builder.managed_dockerfile_id = managed_dockerfile.id
+        return None
+
+    path = (form.dockerfile_path.data or "").strip()
+    if not path:
+        return "Dockerfile Path is required."
+    builder.dockerfile_source = "repo"
+    builder.dockerfile_path = path
+    builder.managed_dockerfile_id = None
+    return None
 
 
 def _repo_info(repository, cache):
@@ -179,6 +213,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None, selected
     create_form.version_id.choices = _version_choices()
     create_form.repository_id.choices = _repository_choices()
     create_form.registry_target_id.choices = _registry_choices()
+    create_form.managed_dockerfile_id.choices = _dockerfile_choices()
     create_form.allowed_role_ids.choices = _role_choices()
 
     query = Builder.query
@@ -198,6 +233,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None, selected
             invalid_form.version_id.choices = _version_choices()
             invalid_form.repository_id.choices = _repository_choices()
             invalid_form.registry_target_id.choices = _registry_choices()
+            invalid_form.managed_dockerfile_id.choices = _dockerfile_choices()
             invalid_form.allowed_role_ids.choices = _role_choices()
             invalid_form.default_branch.choices = _branch_choices(info, invalid_form.default_branch.data)
             edit_forms[builder.id] = invalid_form
@@ -206,10 +242,12 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None, selected
             form.version_id.choices = _version_choices()
             form.repository_id.choices = _repository_choices()
             form.registry_target_id.choices = _registry_choices()
+            form.managed_dockerfile_id.choices = _dockerfile_choices()
             form.allowed_role_ids.choices = _role_choices()
             form.version_id.data = str(builder.version_id)
             form.repository_id.data = str(builder.repository_id)
             form.registry_target_id.data = str(builder.registry_target_id)
+            form.managed_dockerfile_id.data = str(builder.managed_dockerfile_id) if builder.managed_dockerfile_id else ""
             form.allowed_role_ids.data = [str(role.id) for role in builder.allowed_roles]
             form.default_branch.choices = _branch_choices(info, builder.default_branch)
             form.default_branch.data = builder.default_branch
@@ -270,6 +308,7 @@ def create_builder():
     form.version_id.choices = _version_choices()
     form.repository_id.choices = _repository_choices()
     form.registry_target_id.choices = _registry_choices()
+    form.managed_dockerfile_id.choices = _dockerfile_choices()
     form.allowed_role_ids.choices = _role_choices()
 
     if form.validate_on_submit():
@@ -280,10 +319,13 @@ def create_builder():
             default_branch=form.default_branch.data or None,
             group_name=(form.group_name.data or "").strip() or None,
             image_name=(form.image_name.data or "").strip() or None,
-            dockerfile_path=form.dockerfile_path.data or "Dockerfile",
             registry_target_id=uuid.UUID(form.registry_target_id.data),
             default_build_args=_parse_build_args(),
         )
+        dockerfile_error = _apply_dockerfile_source(builder, form)
+        if dockerfile_error:
+            flash(dockerfile_error, "error")
+            return _render_index(create_form=form, open_modal="create-builder-modal")
         _apply_allowed_roles(builder, form)
         db.session.add(builder)
         db.session.commit()
@@ -309,16 +351,21 @@ def edit_builder(builder_id):
     form.version_id.choices = _version_choices()
     form.repository_id.choices = _repository_choices()
     form.registry_target_id.choices = _registry_choices()
+    form.managed_dockerfile_id.choices = _dockerfile_choices()
     form.allowed_role_ids.choices = _role_choices()
 
     if form.validate_on_submit():
+        dockerfile_error = _apply_dockerfile_source(builder, form)
+        if dockerfile_error:
+            flash(dockerfile_error, "error")
+            return _render_index(open_modal=f"edit-builder-modal-{builder_id}", invalid_edit=(builder_id, form))
+
         builder.name = form.name.data
         builder.version_id = uuid.UUID(form.version_id.data)
         builder.repository_id = uuid.UUID(form.repository_id.data)
         builder.default_branch = form.default_branch.data or None
         builder.group_name = (form.group_name.data or "").strip() or None
         builder.image_name = (form.image_name.data or "").strip() or None
-        builder.dockerfile_path = form.dockerfile_path.data or "Dockerfile"
         builder.registry_target_id = uuid.UUID(form.registry_target_id.data)
         builder.default_build_args = _parse_build_args()
         _apply_allowed_roles(builder, form)

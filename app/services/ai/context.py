@@ -1,5 +1,6 @@
 from app.services.build.history import get_last_built_commit
 from app.services.git.helpers import provider_for_git_source
+from app.utils.system_config import get_system_config
 
 
 def gather_ai_context(builder_branches):
@@ -21,6 +22,7 @@ def gather_ai_context(builder_branches):
     branches) and the documentation page (`gather_batch_ai_context` below,
     once a batch's `ImageBuild`s already record which branch was used).
     """
+    commit_log_limit = get_system_config().commit_log_limit
     branch_names = []
     commit_blocks = []
 
@@ -31,7 +33,11 @@ def gather_ai_context(builder_branches):
         try:
             provider = provider_for_git_source(builder.repository.git_source)
             since_ref = get_last_built_commit(builder.id, branch)
-            messages = provider.get_commit_messages(builder.repository.local_path, since_ref=since_ref)
+            messages = provider.get_commit_messages(
+                builder.repository.local_path,
+                since_ref=since_ref,
+                limit=commit_log_limit,
+            )
         except Exception:
             messages = []
 
