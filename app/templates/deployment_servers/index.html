@@ -5,7 +5,7 @@ MASIMPLE CICD{% endblock %}
 <link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/material-darker.css') }}" />
 {% endblock %}
 {% block content %}
-<div class="flex items-center justify-between">
+<div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Deployment Servers</h1>
   <button
     type="button"
@@ -126,7 +126,7 @@ MASIMPLE CICD{% endblock %}
 
 <div>
   {{ form.allowed_role_ids.label(class="label text-sm") }}
-  <div class="grid grid-cols-2 gap-2">
+  <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
     {% for subfield in form.allowed_role_ids %}
     <label class="flex items-center gap-2 text-sm">
       {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}

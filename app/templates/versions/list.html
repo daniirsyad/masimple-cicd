@@ -1,6 +1,6 @@
 {% extends "base.html" %} {% block title %}Versions -
 MASIMPLE CICD{% endblock %} {% block content %}
-<div class="flex items-center justify-between">
+<div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Versions</h1>
   <button
     type="button"
@@ -131,7 +131,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 
       <div>
         {{ create_form.linked_version_ids.label(class="label text-sm") }}
-        <div class="grid max-h-40 grid-cols-2 gap-2 overflow-y-auto rounded border border-base-300 p-2">
+        <div class="grid max-h-40 grid-cols-1 gap-2 overflow-y-auto rounded border border-base-300 p-2 sm:grid-cols-2">
           {% for subfield in create_form.linked_version_ids %}
           <label class="flex items-center gap-2 text-sm">
             {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
@@ -204,7 +204,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 
       <div>
         {{ form.linked_version_ids.label(class="label text-sm") }}
-        <div class="grid max-h-40 grid-cols-2 gap-2 overflow-y-auto rounded border border-base-300 p-2">
+        <div class="grid max-h-40 grid-cols-1 gap-2 overflow-y-auto rounded border border-base-300 p-2 sm:grid-cols-2">
           {% for subfield in form.linked_version_ids %}
           <label class="flex items-center gap-2 text-sm">
             {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}

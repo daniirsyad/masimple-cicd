@@ -1,47 +1,52 @@
 {# Shared tab nav between the Pods page and each generic resource-kind page
    — expects `server` and `active_kind` ("pods" or a RESOURCE_KINDS slug) in
    scope, plus `resource_kinds` (only needed on pages that have it; falls
-   back to an empty dict so this partial also works standalone). #}
-<div class="tabs tabs-boxed mt-4 mb-2 flex-wrap">
+   back to an empty dict so this partial also works standalone).
+   daisyUI's `.tabs` is `display:grid` under the hood, not flex, so it never
+   wraps on its own — `flex flex-nowrap` here overrides that (Tailwind's
+   utility layer loads after daisyUI's component layer, so it wins) and
+   `overflow-x-auto` turns the bar into a single horizontally-scrollable row
+   instead of silently overflowing the page on narrow screens. #}
+<div class="tabs tabs-boxed mt-4 mb-2 flex flex-nowrap overflow-x-auto">
   <a
     href="{{ url_for('deployment_pods.list_pods', server_id=server.id) }}"
-    class="tab {{ 'tab-active' if active_kind == 'pods' else '' }}"
+    class="tab whitespace-nowrap {{ 'tab-active' if active_kind == 'pods' else '' }}"
   >
     Pods
   </a>
   <a
     href="{{ url_for('deployment_pods.namespaces', server_id=server.id) }}"
-    class="tab {{ 'tab-active' if active_kind == 'namespaces' else '' }}"
+    class="tab whitespace-nowrap {{ 'tab-active' if active_kind == 'namespaces' else '' }}"
   >
     Namespaces
   </a>
   <a
     href="{{ url_for('deployment_pods.secrets', server_id=server.id) }}"
-    class="tab {{ 'tab-active' if active_kind == 'secrets' else '' }}"
+    class="tab whitespace-nowrap {{ 'tab-active' if active_kind == 'secrets' else '' }}"
   >
     Secrets
   </a>
   <a
     href="{{ url_for('deployment_pods.configmaps', server_id=server.id) }}"
-    class="tab {{ 'tab-active' if active_kind == 'configmaps' else '' }}"
+    class="tab whitespace-nowrap {{ 'tab-active' if active_kind == 'configmaps' else '' }}"
   >
     ConfigMaps
   </a>
   <a
     href="{{ url_for('deployment_pods.ingresses', server_id=server.id) }}"
-    class="tab {{ 'tab-active' if active_kind == 'ingresses' else '' }}"
+    class="tab whitespace-nowrap {{ 'tab-active' if active_kind == 'ingresses' else '' }}"
   >
     Ingress
   </a>
   <a
     href="{{ url_for('deployment_pods.network_policies', server_id=server.id) }}"
-    class="tab {{ 'tab-active' if active_kind == 'network_policies' else '' }}"
+    class="tab whitespace-nowrap {{ 'tab-active' if active_kind == 'network_policies' else '' }}"
   >
     Network Policies
   </a>
   <a
     href="{{ url_for('deployment_pods.workloads', server_id=server.id) }}"
-    class="tab {{ 'tab-active' if active_kind == 'workloads' else '' }}"
+    class="tab whitespace-nowrap {{ 'tab-active' if active_kind == 'workloads' else '' }}"
   >
     Workloads
   </a>
@@ -49,7 +54,7 @@
   {% if slug != 'ingresses' %}
   <a
     href="{{ url_for('deployment_pods.list_resources', server_id=server.id, kind=slug) }}"
-    class="tab {{ 'tab-active' if active_kind == slug else '' }}"
+    class="tab whitespace-nowrap {{ 'tab-active' if active_kind == slug else '' }}"
   >
     {{ config.label }}
   </a>

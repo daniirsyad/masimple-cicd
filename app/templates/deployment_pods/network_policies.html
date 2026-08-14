@@ -6,7 +6,7 @@
 {% block content %}
 <span id="deployment-pods-list-page" data-server-id="{{ server.id }}" class="hidden"></span>
 {% set active_kind = 'network_policies' %}
-<div class="flex items-center justify-between">
+<div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Network Policies: {{ server.name }}</h1>
   <div class="flex gap-2">
     <button
@@ -119,7 +119,7 @@
 {% endmacro %}
 
 {% macro peer_row_fields(subform) %}
-<div class="grid grid-cols-3 gap-2">
+<div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
   <div>
     <label class="text-xs font-semibold text-base-content/70">Peer Type</label>
     {{ subform.peer_type(class="select select-bordered select-sm w-full mt-1") }}
@@ -132,7 +132,7 @@
 {% endmacro %}
 
 {% macro peer_row_template_markup(name_prefix) %}
-<div class="grid grid-cols-3 gap-2">
+<div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
   <div>
     <label class="text-xs font-semibold text-base-content/70">Peer Type</label>
     <select name="{{ name_prefix }}-__INDEX__-peer_type" class="select select-bordered select-sm w-full mt-1">
@@ -149,7 +149,7 @@
 {% endmacro %}
 
 {% macro port_row_fields(subform) %}
-<div class="grid grid-cols-2 gap-2">
+<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
   <div>
     <label class="text-xs font-semibold text-base-content/70">Protocol</label>
     {{ subform.protocol(class="select select-bordered select-sm w-full mt-1") }}
@@ -162,7 +162,7 @@
 {% endmacro %}
 
 {% macro port_row_template_markup(name_prefix) %}
-<div class="grid grid-cols-2 gap-2">
+<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
   <div>
     <label class="text-xs font-semibold text-base-content/70">Protocol</label>
     <select name="{{ name_prefix }}-__INDEX__-protocol" class="select select-bordered select-sm w-full mt-1">
@@ -256,7 +256,7 @@
       {{ mode_toggle(create_mode) }}
 
       <div class="netpol-mode-fields {{ '' if create_mode == 'form' else 'hidden' }}" data-netpol-mode="form">
-        <div class="grid grid-cols-2 gap-2">
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <div>
             {{ create_form.name.label(class="label text-sm") }}
             {{ create_form.name(class="input input-bordered input-sm w-full", placeholder="e.g. backend-policy") }}

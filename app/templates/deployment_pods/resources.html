@@ -2,7 +2,7 @@
 content %}
 <span id="deployment-pods-list-page" data-server-id="{{ server.id }}" class="hidden"></span>
 {% set active_kind = kind %}
-<div class="flex items-center justify-between">
+<div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">{{ kind_config.label }}: {{ server.name }}</h1>
   <a href="{{ url_for('deployment_pods.index') }}" class="btn btn-sm">Back to Servers</a>
 </div>

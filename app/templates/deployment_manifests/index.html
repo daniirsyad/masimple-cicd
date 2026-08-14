@@ -21,7 +21,7 @@ MASIMPLE CICD{% endblock %}
 </script>
 {% endfor %}
 
-<div class="flex items-center justify-between">
+<div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Deployment Manifests</h1>
   <button
     type="button"
@@ -154,7 +154,7 @@ MASIMPLE CICD{% endblock %}
 {% for group in groups %}
 <div class="card mt-4 bg-base-100 shadow-sm manifest-group" data-group-name="{{ group.name }}">
   <div class="card-body p-4">
-    <div class="flex items-center justify-between">
+    <div class="flex flex-wrap items-center justify-between gap-2">
       <h2 class="card-title text-base">
         {{ group.name }}
         <span class="badge badge-ghost badge-sm">{{ group.manifests|length }} manifest{{ '' if group.manifests|length == 1 else 's' }}</span>
@@ -267,7 +267,7 @@ MASIMPLE CICD{% endblock %}
 
 <div>
   {{ form.server_ids.label(class="label text-sm") }}
-  <div class="grid grid-cols-2 gap-2">
+  <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
     {% for subfield in form.server_ids %}
     <label class="flex items-center gap-2 text-sm">
       {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
@@ -281,7 +281,7 @@ MASIMPLE CICD{% endblock %}
 
 <div>
   {{ form.allowed_user_ids.label(class="label text-sm") }}
-  <div class="grid grid-cols-2 gap-2">
+  <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
     {% for subfield in form.allowed_user_ids %}
     <label class="flex items-center gap-2 text-sm">
       {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
@@ -294,7 +294,7 @@ MASIMPLE CICD{% endblock %}
 </div>
 
 <div>
-  <div class="flex items-center justify-between">
+  <div class="flex flex-wrap items-center justify-between gap-2">
     <span class="label text-sm">Version Bindings</span>
     <button type="button" class="scan-placeholders-btn btn btn-sm" data-yaml-input-id="{{ form.yaml_content.id }}">
       Scan YAML for placeholders

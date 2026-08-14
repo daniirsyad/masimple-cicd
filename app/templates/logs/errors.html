@@ -109,7 +109,7 @@
   <div class="modal-box w-11/12 max-w-3xl">
     <h3 class="text-lg font-bold">Error Detail</h3>
 
-    <div class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+    <div class="mt-3 grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
       <div><span class="text-base-content/60">Time:</span> {{ log.created_at | localtime }}</div>
       <div><span class="text-base-content/60">Source:</span> <span class="badge badge-error badge-sm">{{ log.source }}</span></div>
       <div><span class="text-base-content/60">User:</span> {{ log.user.username if log.user else 'System' }}</div>
@@ -126,7 +126,7 @@
     </div>
 
     <div class="mt-4">
-      <div class="flex items-center justify-between">
+      <div class="flex flex-wrap items-center justify-between gap-2">
         <div class="label text-sm">Traceback</div>
         {% if log.traceback %}
         <button

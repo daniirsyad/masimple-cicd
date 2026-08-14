@@ -6,7 +6,7 @@ block content %}
   {% for group in permission_groups %}
   <div>
     <h4 class="text-xs font-semibold uppercase tracking-wide opacity-60">{{ group.label }}</h4>
-    <div class="mt-1 grid grid-cols-2 gap-x-4 gap-y-1">
+    <div class="mt-1 grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
       {% for permission in group.permissions %}
       <label class="flex items-center gap-2 text-sm" title="{{ permission.code }}">
         <input
@@ -24,7 +24,7 @@ block content %}
   {% endfor %}
 </div>
 {% endmacro %}
-<div class="flex items-center justify-between">
+<div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Roles</h1>
   <button
     type="button"

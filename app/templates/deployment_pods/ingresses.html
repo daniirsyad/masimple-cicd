@@ -6,7 +6,7 @@
 {% block content %}
 <span id="deployment-pods-list-page" data-server-id="{{ server.id }}" class="hidden"></span>
 {% set active_kind = 'ingresses' %}
-<div class="flex items-center justify-between">
+<div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Ingress: {{ server.name }}</h1>
   <div class="flex gap-2">
     <button
@@ -127,7 +127,7 @@
 {% endmacro %}
 
 {% macro path_row_fields(subform) %}
-<div class="grid grid-cols-2 gap-2">
+<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
   <div>
     <label class="text-xs font-semibold text-base-content/70">Path</label>
     {{ subform.path(class="input input-bordered input-sm w-full font-mono mt-1", placeholder="/") }}
@@ -148,7 +148,7 @@
 {% endmacro %}
 
 {% macro path_row_template_markup(name_prefix) %}
-<div class="grid grid-cols-2 gap-2">
+<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
   <div>
     <label class="text-xs font-semibold text-base-content/70">Path</label>
     <input type="text" name="{{ name_prefix }}-__INDEX__-path" value="/" class="input input-bordered input-sm w-full font-mono mt-1" />
@@ -174,7 +174,7 @@
 
 {% macro form_mode_fields(form, mode, container_id, template_id) %}
 <div class="ingress-mode-fields {{ '' if mode == 'form' else 'hidden' }}" data-ingress-mode="form">
-  <div class="grid grid-cols-2 gap-2">
+  <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
     <div>
       {{ form.host.label(class="label text-sm") }}
       {{ form.host(class="input input-bordered input-sm w-full", placeholder="e.g. app.example.com") }}
@@ -240,7 +240,7 @@
       {{ mode_toggle(create_mode) }}
 
       <div class="ingress-mode-fields {{ '' if create_mode == 'form' else 'hidden' }}" data-ingress-mode="form">
-        <div class="grid grid-cols-2 gap-2">
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <div>
             {{ create_form.name.label(class="label text-sm") }}
             {{ create_form.name(class="input input-bordered input-sm w-full", placeholder="e.g. app-ingress") }}
@@ -251,7 +251,7 @@
             {{ create_form.namespace(class="select select-bordered select-sm w-full") }}
           </div>
         </div>
-        <div class="grid grid-cols-2 gap-2 mt-3">
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 mt-3">
           <div>
             {{ create_form.host.label(class="label text-sm") }}
             {{ create_form.host(class="input input-bordered input-sm w-full", placeholder="e.g. app.example.com") }}

@@ -28,7 +28,57 @@ Then ask me what to work on next rather than assuming.
 
 - **829 tests passing** (as of the last full run).
 - **Everything is committed and pushed to `origin/main`**, most recently as:
-  1. **This same commit** — Kubernetes Ingress/NetworkPolicy management, login
+  1. **This same commit** — a responsive-design pass across the whole app,
+     prompted by the user noticing the Kubernetes management pages' tab bar
+     didn't fit on narrow screens:
+     - **28 templates touched**, all pure Tailwind/daisyUI class changes, no
+       markup restructuring, no new JS, no model/route changes, no new
+       tests (the existing 829 still cover behavior; nothing here is
+       behavior).
+     - **Header rows** (title + action button, ~19 pages across nearly
+       every blueprint): `flex items-center justify-between` →
+       `flex flex-wrap items-center justify-between gap-2`, so the button
+       drops below the title instead of getting clipped/squeezed on a
+       narrow screen.
+     - **Form-field grids inside modals** (role/permission/version-link
+       checkbox pickers, Ingress path rows, NetworkPolicy peer/port rows,
+       the Error Log detail grid — 19 occurrences): fixed `grid-cols-2`/
+       `grid-cols-3` → `grid-cols-1 sm:grid-cols-2`/`sm:grid-cols-3`, so
+       they stack into one column on a phone-width modal instead of
+       cramming.
+     - **`documentation/view.html`'s per-batch commit-list modal table**:
+       was `overflow-y-auto` only, missing horizontal scroll — changed to
+       `overflow-auto`.
+     - **The actual bug that prompted this** (`deployment_pods/_nav.html`,
+       the shared tab bar included on all 8 Kubernetes-management pages —
+       Pods/Namespaces/Secrets/ConfigMaps/Ingress/Network Policies/
+       Workloads/the four read-only kinds): daisyUI's `.tabs` class is
+       `display: grid`, **not flex** — so the `flex-wrap` utility a first
+       pass had added onto it was a silent no-op (`flex-wrap` only affects
+       a flex container) and all 11 tabs stayed on one unwrapped grid row,
+       overflowing the page on narrow viewports. Fixed by forcing
+       `flex flex-nowrap` (Tailwind's utility layer loads after daisyUI's
+       component layer in the compiled CSS, so the override wins) plus
+       `overflow-x-auto` so the bar becomes one horizontally-scrollable row
+       instead of wrapping into several — chosen over wrapping since
+       wrapping 11 tabs of uneven label length onto 3-4 rows looked worse
+       than a scrollable single row (same pattern most apps use for wide
+       tab bars). Each `<a class="tab">` also got `whitespace-nowrap` so a
+       label can't wrap mid-word while the bar scrolls. **Worth remembering
+       if another daisyUI `.tabs`/`.tabs-boxed` bar is added anywhere
+       else**: `flex-wrap` alone does nothing on it; you need `flex
+       flex-nowrap overflow-x-auto` (or `flex flex-wrap` if wrapping to
+       multiple rows is actually wanted instead of scrolling).
+     - Verified: `npm run build:css` rebuilt clean with the new utility
+       classes present in the compiled output, and the full test suite
+       (829/829) plus the `deployment_pods`-specific subset were both
+       re-run after the fix and pass.
+     - **Not verified in a live browser** — same sandbox constraint as
+       everything else in this file (no working headless Chromium here).
+       Worth an actual mobile-width visual pass, especially the
+       Ingress/NetworkPolicy modals' multi-row pickers and the
+       now-horizontally-scrollable Kubernetes tab bar.
+  2. **`a2e1703`** — Kubernetes Ingress/NetworkPolicy management, login
      security (lockout), and a Telegram security-notification integration,
      all from one session's work:
      - **Ingress CRUD** (`/deployment-pods`'s new "Ingress" tab,
@@ -141,7 +191,7 @@ Then ask me what to work on next rather than assuming.
        Workflow runs, not just notify about login/security events. The
        bot-token/chat-ID plumbing here is meant to be reused for that
        later, but no command-listening/webhook surface exists yet.
-  2. **`ec9d727`** — Dockerfile management (`/dockerfiles`, a `Builder` can
+  3. **`ec9d727`** — Dockerfile management (`/dockerfiles`, a `Builder` can
      build from a managed Dockerfile instead of a path in its own repo),
      one-directional Version-to-Version linking (widens a Version's
      "Linked Batches" picker on Documentation), a configurable commit log
@@ -150,7 +200,7 @@ Then ask me what to work on next rather than assuming.
      of dropdown-clipping and re-render interaction-bug fixes along the
      way — see this commit or `AI_CONTEXT.md` Part 9 if a similar
      dropdown-in-a-`.collapse`-or-`<dialog>` widget is added elsewhere).
-  3. **`6e8eede`** — a shared `app/static/js/yaml_editor.js` CodeMirror
+  4. **`6e8eede`** — a shared `app/static/js/yaml_editor.js` CodeMirror
      module (fixing a cursor-position bug that existed as two duplicated
      init blocks) plus the original `/yaml-generator` page (Deployment/
      Service/ConfigMap/Secret/Ingress — Ingress and the shared editor are
@@ -174,8 +224,9 @@ Then ask me what to work on next rather than assuming.
   gateway IP `172.29.16.1` directly, not the `db` Docker Compose hostname —
   no `sed` swap needed from inside the sandbox.)
 - CSS changes need a rebuild to actually show up: `npm run build:css`
-  (already run as of this session's work — new daisyUI classes pulled in
-  along the way, e.g. `.divider`, weren't previously compiled).
+  (already run as of this session's work — the responsive pass above pulled
+  in new utility classes, e.g. `flex-nowrap`/`overflow-x-auto` on the
+  Kubernetes tab bar, that weren't previously compiled).
 - **gunicorn now runs `--worker-class gthread --threads 4 --timeout 120`**
   (`entrypoint.sh`), not plain sync workers — changed to support the pod-logs
   SSE stream. Keep this in mind before adding any other long-lived-connection

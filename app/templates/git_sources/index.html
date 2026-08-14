@@ -1,6 +1,6 @@
 {% extends "base.html" %} {% block title %}GitHub Connections -
 MASIMPLE CICD{% endblock %} {% block content %}
-<div class="flex items-center justify-between">
+<div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">GitHub Connections</h1>
   <button
     type="button"
@@ -18,7 +18,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 {% for entry in connections %}
 <div class="card mt-4 bg-base-100 shadow-sm">
   <div class="card-body p-4">
-    <div class="flex items-center justify-between">
+    <div class="flex flex-wrap items-center justify-between gap-2">
       <h2 class="card-title text-base">{{ entry.source.name }}</h2>
       <div class="flex gap-2">
         <button

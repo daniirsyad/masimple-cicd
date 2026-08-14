@@ -660,6 +660,17 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   several independent add/remove-row widgets (Ingress paths; NetworkPolicy
   peers and ports, ×2 for Ingress/Egress), and on actually receiving a
   Telegram message end-to-end against a real bot.
+- **A responsive-design pass touched 28 templates app-wide** (header rows
+  now wrap via `flex flex-wrap ... gap-2`, modal form-field grids now
+  collapse to one column below `sm:` instead of staying fixed at 2-3
+  columns) but, same sandbox constraint as everything else in this list,
+  **hasn't been visually confirmed in a live mobile browser**. One real bug
+  was caught and fixed this way: daisyUI's `.tabs`/`.tabs-boxed` class is
+  `display: grid`, not flex, so a naive `flex-wrap` class on it is a silent
+  no-op — `/deployment-pods`'s shared tab bar (`_nav.html`, 11 tabs across
+  every Kubernetes-management page) now uses `flex flex-nowrap
+  overflow-x-auto` instead, making it a horizontally-scrollable single row.
+  Worth remembering for any other `.tabs` bar added later.
 - The Telegram integration (`app/services/telegram/`) only ever sends
   outbound notifications — there's no incoming webhook or command listener,
   so it can't yet be used to *trigger* anything (e.g. a Workflow run via a

@@ -8,7 +8,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 <script type="application/json" id="group-name-suggestions-data">
   {{ group_name_suggestions | tojson }}
 </script>
-<div class="flex items-center justify-between">
+<div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Builders</h1>
   <button
     type="button"
@@ -126,7 +126,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 {% for group in groups %}
 <div class="card mt-4 bg-base-100 shadow-sm builder-group" data-group-name="{{ group.name }}">
   <div class="card-body p-4">
-    <div class="flex items-center justify-between">
+    <div class="flex flex-wrap items-center justify-between gap-2">
       <h2 class="card-title text-base">
         {{ group.name }}
         <span class="badge badge-ghost badge-sm">{{ group.builders|length }} builder{{ '' if group.builders|length == 1 else 's' }}</span>
@@ -286,7 +286,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 
       <div>
         {{ create_form.allowed_role_ids.label(class="label text-sm") }}
-        <div class="grid grid-cols-2 gap-2">
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {% for subfield in create_form.allowed_role_ids %}
           <label class="flex items-center gap-2 text-sm">
             {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
@@ -412,7 +412,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 
       <div>
         {{ form.allowed_role_ids.label(class="label text-sm") }}
-        <div class="grid grid-cols-2 gap-2">
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {% for subfield in form.allowed_role_ids %}
           <label class="flex items-center gap-2 text-sm">
             {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
