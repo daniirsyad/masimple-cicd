@@ -68,6 +68,7 @@ def create_app(config_name=None):
     # collected the moment create_app() returns, silently disconnecting it.
     got_request_exception.connect(_log_unhandled_exception, app, weak=False)
 
+    from app.blueprints.account import account_bp
     from app.blueprints.auth import auth_bp
     from app.blueprints.main import main_bp
     from app.blueprints.users import users_bp
@@ -97,6 +98,7 @@ def create_app(config_name=None):
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
+    app.register_blueprint(account_bp, url_prefix="/account")
     app.register_blueprint(users_bp, url_prefix="/users")
     app.register_blueprint(roles_bp, url_prefix="/roles")
     app.register_blueprint(logs_bp, url_prefix="/logs")

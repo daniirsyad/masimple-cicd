@@ -37,12 +37,15 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // Delegated (rows are added dynamically after page load).
-  document.querySelectorAll(".key-value-rows, .port-rows").forEach((container) => {
+  // Delegated (rows are added dynamically after page load). `.peer-rows`
+  // (NetworkPolicy's peer-type + labels/CIDR rows) clones the same way as
+  // the other two despite its different field shape — addRow()/the
+  // __INDEX__ template-clone approach above doesn't care what's inside a row.
+  document.querySelectorAll(".key-value-rows, .port-rows, .peer-rows").forEach((container) => {
     container.addEventListener("click", (event) => {
       const removeButton = event.target.closest(".remove-row-btn");
       if (!removeButton) return;
-      removeButton.closest(".key-value-row, .port-row")?.remove();
+      removeButton.closest(".key-value-row, .port-row, .peer-row")?.remove();
       scheduleGenerate();
     });
   });

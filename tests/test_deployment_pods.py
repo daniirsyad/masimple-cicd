@@ -95,6 +95,8 @@ def manage_user(app):
             Permission(code="deployment_namespace.manage", description="manage namespaces"),
             Permission(code="deployment_secret.manage", description="manage secrets"),
             Permission(code="deployment_configmap.manage", description="manage configmaps"),
+            Permission(code="deployment_ingress.manage", description="manage ingresses"),
+            Permission(code="deployment_network_policy.manage", description="manage network policies"),
             Permission(code="deployment_workload.restart", description="restart workloads"),
         ]
         db.session.add_all(permissions)
@@ -1205,6 +1207,630 @@ class TestDeleteConfigMap:
         )
         assert response.status_code == 200
         assert b"Could not delete configmap" in response.data
+
+
+def _single_host_ingress(name="app-ingress", namespace="default", host="app.example.com"):
+    return {
+        "name": name,
+        "namespace": namespace,
+        "created_at": "2026-08-01T00:00:00Z",
+        "hosts": [host],
+        "rule_count": 1,
+        "tls_secret_names": [],
+        "ingress_class_name": None,
+        "spec": {
+            "rules": [
+                {
+                    "host": host,
+                    "http": {
+                        "paths": [
+                            {
+                                "path": "/",
+                                "pathType": "Prefix",
+                                "backend": {"service": {"name": "app-svc", "port": {"number": 80}}},
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+    }
+
+
+def _multi_host_ingress(name="multi-ingress", namespace="default"):
+    item = _single_host_ingress(name=name, namespace=namespace)
+    item["hosts"] = ["a.example.com", "b.example.com"]
+    item["rule_count"] = 2
+    item["spec"]["rules"].append(
+        {
+            "host": "b.example.com",
+            "http": {"paths": [{"path": "/", "pathType": "Prefix", "backend": {"service": {"name": "b-svc", "port": {"number": 80}}}}]},
+        }
+    )
+    return item
+
+
+class TestIngressList:
+    def test_lists_ingresses(self, pod_client, kube_server, monkeypatch):
+        monkeypatch.setattr(
+            KubernetesProvider, "list_ingresses", lambda self, namespace=None: [_single_host_ingress()]
+        )
+        response = pod_client.get(f"/deployment-pods/{kube_server}/ingresses")
+        assert response.status_code == 200
+        assert b"app-ingress" in response.data
+        assert b"app.example.com" in response.data
+
+    def test_requires_permission(self, noperm_client, app):
+        with app.app_context():
+            server = DeploymentServer(name="srv", connection_type="kube")
+            db.session.add(server)
+            db.session.commit()
+            server_id = server.id
+        assert noperm_client.get(f"/deployment-pods/{server_id}/ingresses").status_code == 403
+
+    def test_api_type_server_is_404(self, pod_client, api_server):
+        assert pod_client.get(f"/deployment-pods/{api_server}/ingresses").status_code == 404
+
+    def test_provider_error_shows_inline_error_not_500(self, pod_client, kube_server, monkeypatch):
+        def _raise(self, namespace=None):
+            raise RuntimeError("kubectl get ingress failed.")
+
+        monkeypatch.setattr(KubernetesProvider, "list_ingresses", _raise)
+        response = pod_client.get(f"/deployment-pods/{kube_server}/ingresses")
+        assert response.status_code == 200
+        assert b"Could not list ingresses" in response.data
+
+    def test_multi_host_ingress_hides_form_mode(self, pod_client, kube_server, monkeypatch):
+        # form_supported must be False for a multi-rule Ingress, otherwise
+        # saving it via the simple single-host Form editor would silently
+        # drop every rule/host beyond the first on save.
+        monkeypatch.setattr(
+            KubernetesProvider, "list_ingresses", lambda self, namespace=None: [_multi_host_ingress()]
+        )
+        response = pod_client.get(f"/deployment-pods/{kube_server}/ingresses")
+        assert response.status_code == 200
+        assert b"edit it as raw YAML" in response.data
+
+
+class TestIngressWritePermissionGating:
+    def test_create_requires_manage_permission(self, pod_client, kube_server):
+        response = pod_client.post(f"/deployment-pods/{kube_server}/ingresses/create", data={"ingress_mode": "form"})
+        assert response.status_code == 403
+
+    def test_edit_requires_manage_permission(self, pod_client, kube_server):
+        response = pod_client.post(
+            f"/deployment-pods/{kube_server}/ingresses/default/app-ingress/edit", data={"ingress_mode": "form"}
+        )
+        assert response.status_code == 403
+
+    def test_delete_requires_manage_permission(self, pod_client, kube_server):
+        response = pod_client.post(f"/deployment-pods/{kube_server}/ingresses/default/app-ingress/delete", data={})
+        assert response.status_code == 403
+
+
+class TestCreateIngress:
+    def test_creates_ingress_via_form_mode_and_logs_activity(self, manage_client, manage_kube_server, monkeypatch, app):
+        called = {}
+
+        def _fake_apply(self, manifest_text):
+            import json as _json
+
+            called["manifest"] = _json.loads(manifest_text)
+            return DeployResult(success=True, log="ingress.networking.k8s.io/app-ingress created")
+
+        monkeypatch.setattr(KubernetesProvider, "apply", _fake_apply)
+        monkeypatch.setattr(KubernetesProvider, "list_resources", _one_namespace)
+        monkeypatch.setattr(KubernetesProvider, "list_ingresses", lambda self, namespace=None: [])
+
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/ingresses/create",
+            data={
+                "ingress_mode": "form",
+                "create-ingress-form-name": "app-ingress",
+                "create-ingress-form-namespace": "default",
+                "create-ingress-form-host": "app.example.com",
+                "create-ingress-form-ingress_class_name": "nginx",
+                "create-ingress-form-tls_secret_name": "",
+                "create-ingress-form-paths-0-path": "/",
+                "create-ingress-form-paths-0-path_type": "Prefix",
+                "create-ingress-form-paths-0-backend_service_name": "app-svc",
+                "create-ingress-form-paths-0-backend_service_port": "80",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        manifest = called["manifest"]
+        assert manifest["kind"] == "Ingress"
+        assert manifest["metadata"] == {"name": "app-ingress", "namespace": "default"}
+        assert manifest["spec"]["ingressClassName"] == "nginx"
+        assert manifest["spec"]["rules"][0]["host"] == "app.example.com"
+        assert manifest["spec"]["rules"][0]["http"]["paths"][0]["backend"]["service"]["name"] == "app-svc"
+
+        with app.app_context():
+            entry = ActivityLog.query.filter_by(action="CREATE_INGRESS").first()
+            assert entry is not None
+
+    def test_creates_ingress_via_yaml_mode(self, manage_client, manage_kube_server, monkeypatch):
+        called = {}
+
+        def _fake_apply(self, manifest_text):
+            called["text"] = manifest_text
+            return DeployResult(success=True, log="ingress.networking.k8s.io/app-ingress created")
+
+        monkeypatch.setattr(KubernetesProvider, "apply", _fake_apply)
+        monkeypatch.setattr(KubernetesProvider, "list_resources", _one_namespace)
+        monkeypatch.setattr(KubernetesProvider, "list_ingresses", lambda self, namespace=None: [])
+
+        yaml_text = (
+            "apiVersion: networking.k8s.io/v1\n"
+            "kind: Ingress\n"
+            "metadata:\n  name: app-ingress\n  namespace: default\n"
+            "spec:\n  rules:\n    - host: app.example.com\n"
+        )
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/ingresses/create",
+            data={"ingress_mode": "yaml", "create-ingress-yaml-yaml_content": yaml_text},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert called["text"] == yaml_text
+
+    def test_yaml_mode_rejects_non_ingress_kind(self, manage_client, manage_kube_server, monkeypatch):
+        applied = {"called": False}
+
+        def _fake_apply(self, manifest_text):
+            applied["called"] = True
+            return DeployResult(success=True, log="")
+
+        monkeypatch.setattr(KubernetesProvider, "apply", _fake_apply)
+        monkeypatch.setattr(KubernetesProvider, "list_resources", _one_namespace)
+        monkeypatch.setattr(KubernetesProvider, "list_ingresses", lambda self, namespace=None: [])
+
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/ingresses/create",
+            data={
+                "ingress_mode": "yaml",
+                "create-ingress-yaml-yaml_content": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert not applied["called"]
+        assert b"must define a single resource with kind: Ingress" in response.data
+
+    def test_api_type_server_is_404(self, manage_client, manage_api_server):
+        response = manage_client.post(
+            f"/deployment-pods/{manage_api_server}/ingresses/create", data={"ingress_mode": "form"}
+        )
+        assert response.status_code == 404
+
+
+class TestEditIngress:
+    def test_updates_ingress_via_form_mode(self, manage_client, manage_kube_server, monkeypatch, app):
+        called = {}
+
+        def _fake_apply(self, manifest_text):
+            import json as _json
+
+            called["manifest"] = _json.loads(manifest_text)
+            return DeployResult(success=True, log="ingress.networking.k8s.io/app-ingress configured")
+
+        monkeypatch.setattr(KubernetesProvider, "apply", _fake_apply)
+        monkeypatch.setattr(
+            KubernetesProvider, "list_ingresses", lambda self, namespace=None: [_single_host_ingress()]
+        )
+
+        prefix = "ingress-default-app-ingress-form-"
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/ingresses/default/app-ingress/edit",
+            data={
+                "ingress_mode": "form",
+                f"{prefix}host": "new.example.com",
+                f"{prefix}ingress_class_name": "",
+                f"{prefix}tls_secret_name": "",
+                f"{prefix}paths-0-path": "/api",
+                f"{prefix}paths-0-path_type": "Prefix",
+                f"{prefix}paths-0-backend_service_name": "app-svc",
+                f"{prefix}paths-0-backend_service_port": "8080",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        manifest = called["manifest"]
+        assert manifest["spec"]["rules"][0]["host"] == "new.example.com"
+        assert manifest["spec"]["rules"][0]["http"]["paths"][0]["path"] == "/api"
+
+        with app.app_context():
+            entry = ActivityLog.query.filter_by(action="UPDATE_INGRESS").first()
+            assert entry is not None
+
+    def test_updates_ingress_via_yaml_mode(self, manage_client, manage_kube_server, monkeypatch):
+        called = {}
+
+        def _fake_apply(self, manifest_text):
+            called["text"] = manifest_text
+            return DeployResult(success=True, log="ingress.networking.k8s.io/app-ingress configured")
+
+        monkeypatch.setattr(KubernetesProvider, "apply", _fake_apply)
+        monkeypatch.setattr(
+            KubernetesProvider, "list_ingresses", lambda self, namespace=None: [_single_host_ingress()]
+        )
+
+        yaml_text = (
+            "apiVersion: networking.k8s.io/v1\nkind: Ingress\n"
+            "metadata:\n  name: app-ingress\n  namespace: default\n"
+            "spec:\n  rules:\n    - host: edited.example.com\n"
+        )
+        prefix = "ingress-default-app-ingress-yaml-"
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/ingresses/default/app-ingress/edit",
+            data={"ingress_mode": "yaml", f"{prefix}yaml_content": yaml_text},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert called["text"] == yaml_text
+
+
+class TestDeleteIngress:
+    def test_deletes_and_logs_activity(self, manage_client, manage_kube_server, monkeypatch, app):
+        called = {}
+
+        def _fake_delete(self, namespace, name):
+            called.update(namespace=namespace, name=name)
+            return DeployResult(success=True, log="ingress.networking.k8s.io/app-ingress deleted")
+
+        monkeypatch.setattr(KubernetesProvider, "delete_ingress", _fake_delete)
+        monkeypatch.setattr(KubernetesProvider, "list_ingresses", lambda self, namespace=None: [])
+
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/ingresses/default/app-ingress/delete", follow_redirects=True
+        )
+        assert response.status_code == 200
+        assert called == {"namespace": "default", "name": "app-ingress"}
+
+        with app.app_context():
+            entry = ActivityLog.query.filter_by(action="DELETE_INGRESS").first()
+            assert entry is not None
+
+    def test_kubectl_failure_shows_flash_not_500(self, manage_client, manage_kube_server, monkeypatch):
+        monkeypatch.setattr(
+            KubernetesProvider,
+            "delete_ingress",
+            lambda self, namespace, name: DeployResult(success=False, log="", error="ingresses \"app-ingress\" is forbidden"),
+        )
+        monkeypatch.setattr(KubernetesProvider, "list_ingresses", lambda self, namespace=None: [])
+
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/ingresses/default/app-ingress/delete", follow_redirects=True
+        )
+        assert response.status_code == 200
+        assert b"Could not delete ingress" in response.data
+
+
+def _single_rule_network_policy(name="backend-policy", namespace="default"):
+    return {
+        "name": name,
+        "namespace": namespace,
+        "created_at": "2026-08-01T00:00:00Z",
+        "pod_selector": {"app": "backend"},
+        "policy_types": ["Ingress"],
+        "ingress_rule_count": 1,
+        "egress_rule_count": 0,
+        "annotations": {},
+        "spec": {
+            "podSelector": {"matchLabels": {"app": "backend"}},
+            "policyTypes": ["Ingress"],
+            "ingress": [
+                {
+                    "from": [{"podSelector": {"matchLabels": {"app": "frontend"}}}],
+                    "ports": [{"protocol": "TCP", "port": 8080}],
+                }
+            ],
+        },
+    }
+
+
+def _multi_rule_network_policy(name="multi-policy", namespace="default"):
+    item = _single_rule_network_policy(name=name, namespace=namespace)
+    item["ingress_rule_count"] = 2
+    item["spec"]["ingress"].append({"from": [{"ipBlock": {"cidr": "10.0.0.0/8"}}]})
+    return item
+
+
+class TestNetworkPolicyList:
+    def test_lists_network_policies(self, pod_client, kube_server, monkeypatch):
+        monkeypatch.setattr(
+            KubernetesProvider,
+            "list_network_policies",
+            lambda self, namespace=None: [_single_rule_network_policy()],
+        )
+        response = pod_client.get(f"/deployment-pods/{kube_server}/network-policies")
+        assert response.status_code == 200
+        assert b"backend-policy" in response.data
+        assert b"app=backend" in response.data
+
+    def test_requires_permission(self, noperm_client, app):
+        with app.app_context():
+            server = DeploymentServer(name="srv", connection_type="kube")
+            db.session.add(server)
+            db.session.commit()
+            server_id = server.id
+        assert noperm_client.get(f"/deployment-pods/{server_id}/network-policies").status_code == 403
+
+    def test_api_type_server_is_404(self, pod_client, api_server):
+        assert pod_client.get(f"/deployment-pods/{api_server}/network-policies").status_code == 404
+
+    def test_provider_error_shows_inline_error_not_500(self, pod_client, kube_server, monkeypatch):
+        def _raise(self, namespace=None):
+            raise RuntimeError("kubectl get networkpolicies failed.")
+
+        monkeypatch.setattr(KubernetesProvider, "list_network_policies", _raise)
+        response = pod_client.get(f"/deployment-pods/{kube_server}/network-policies")
+        assert response.status_code == 200
+        assert b"Could not list network policies" in response.data
+
+    def test_multi_rule_policy_hides_form_mode(self, pod_client, kube_server, monkeypatch):
+        monkeypatch.setattr(
+            KubernetesProvider,
+            "list_network_policies",
+            lambda self, namespace=None: [_multi_rule_network_policy()],
+        )
+        response = pod_client.get(f"/deployment-pods/{kube_server}/network-policies")
+        assert response.status_code == 200
+        assert b"edit it as raw YAML" in response.data
+
+
+class TestNetworkPolicyWritePermissionGating:
+    def test_create_requires_manage_permission(self, pod_client, kube_server):
+        response = pod_client.post(
+            f"/deployment-pods/{kube_server}/network-policies/create", data={"netpol_mode": "form"}
+        )
+        assert response.status_code == 403
+
+    def test_edit_requires_manage_permission(self, pod_client, kube_server):
+        response = pod_client.post(
+            f"/deployment-pods/{kube_server}/network-policies/default/backend-policy/edit",
+            data={"netpol_mode": "form"},
+        )
+        assert response.status_code == 403
+
+    def test_delete_requires_manage_permission(self, pod_client, kube_server):
+        response = pod_client.post(
+            f"/deployment-pods/{kube_server}/network-policies/default/backend-policy/delete", data={}
+        )
+        assert response.status_code == 403
+
+
+class TestCreateNetworkPolicy:
+    def test_creates_network_policy_via_form_mode_and_logs_activity(
+        self, manage_client, manage_kube_server, monkeypatch, app
+    ):
+        called = {}
+
+        def _fake_apply(self, manifest_text):
+            import json as _json
+
+            called["manifest"] = _json.loads(manifest_text)
+            return DeployResult(success=True, log="networkpolicy.networking.k8s.io/backend-policy created")
+
+        monkeypatch.setattr(KubernetesProvider, "apply", _fake_apply)
+        monkeypatch.setattr(KubernetesProvider, "list_resources", _one_namespace)
+        monkeypatch.setattr(KubernetesProvider, "list_network_policies", lambda self, namespace=None: [])
+
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/network-policies/create",
+            data={
+                "netpol_mode": "form",
+                "create-netpol-form-name": "backend-policy",
+                "create-netpol-form-namespace": "default",
+                "create-netpol-form-pod_selector": "app=backend",
+                "create-netpol-form-enable_ingress_rules": "y",
+                "create-netpol-form-ingress_peers-0-peer_type": "pod",
+                "create-netpol-form-ingress_peers-0-value": "app=frontend",
+                "create-netpol-form-ingress_ports-0-protocol": "TCP",
+                "create-netpol-form-ingress_ports-0-port": "8080",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        manifest = called["manifest"]
+        assert manifest["kind"] == "NetworkPolicy"
+        assert manifest["metadata"] == {"name": "backend-policy", "namespace": "default"}
+        assert manifest["spec"]["podSelector"]["matchLabels"] == {"app": "backend"}
+        assert manifest["spec"]["policyTypes"] == ["Ingress"]
+        assert manifest["spec"]["ingress"][0]["from"] == [{"podSelector": {"matchLabels": {"app": "frontend"}}}]
+        assert manifest["spec"]["ingress"][0]["ports"] == [{"protocol": "TCP", "port": 8080}]
+        assert "egress" not in manifest["spec"]
+
+        with app.app_context():
+            entry = ActivityLog.query.filter_by(action="CREATE_NETWORK_POLICY").first()
+            assert entry is not None
+
+    def test_creates_network_policy_via_yaml_mode(self, manage_client, manage_kube_server, monkeypatch):
+        called = {}
+
+        def _fake_apply(self, manifest_text):
+            called["text"] = manifest_text
+            return DeployResult(success=True, log="networkpolicy.networking.k8s.io/backend-policy created")
+
+        monkeypatch.setattr(KubernetesProvider, "apply", _fake_apply)
+        monkeypatch.setattr(KubernetesProvider, "list_resources", _one_namespace)
+        monkeypatch.setattr(KubernetesProvider, "list_network_policies", lambda self, namespace=None: [])
+
+        yaml_text = (
+            "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\n"
+            "metadata:\n  name: backend-policy\n  namespace: default\n"
+            "spec:\n  podSelector:\n    matchLabels:\n      app: backend\n"
+        )
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/network-policies/create",
+            data={"netpol_mode": "yaml", "create-netpol-yaml-yaml_content": yaml_text},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert called["text"] == yaml_text
+
+    def test_yaml_mode_rejects_non_network_policy_kind(self, manage_client, manage_kube_server, monkeypatch):
+        applied = {"called": False}
+
+        def _fake_apply(self, manifest_text):
+            applied["called"] = True
+            return DeployResult(success=True, log="")
+
+        monkeypatch.setattr(KubernetesProvider, "apply", _fake_apply)
+        monkeypatch.setattr(KubernetesProvider, "list_resources", _one_namespace)
+        monkeypatch.setattr(KubernetesProvider, "list_network_policies", lambda self, namespace=None: [])
+
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/network-policies/create",
+            data={
+                "netpol_mode": "yaml",
+                "create-netpol-yaml-yaml_content": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert not applied["called"]
+        assert b"must define a single resource with kind: NetworkPolicy" in response.data
+
+    def test_form_mode_requires_a_direction(self, manage_client, manage_kube_server, monkeypatch):
+        applied = {"called": False}
+
+        def _fake_apply(self, manifest_text):
+            applied["called"] = True
+            return DeployResult(success=True, log="")
+
+        monkeypatch.setattr(KubernetesProvider, "apply", _fake_apply)
+        monkeypatch.setattr(KubernetesProvider, "list_resources", _one_namespace)
+        monkeypatch.setattr(KubernetesProvider, "list_network_policies", lambda self, namespace=None: [])
+
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/network-policies/create",
+            data={
+                "netpol_mode": "form",
+                "create-netpol-form-name": "backend-policy",
+                "create-netpol-form-namespace": "default",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert not applied["called"]
+        assert b"Select at least one traffic direction" in response.data
+
+    def test_api_type_server_is_404(self, manage_client, manage_api_server):
+        response = manage_client.post(
+            f"/deployment-pods/{manage_api_server}/network-policies/create", data={"netpol_mode": "form"}
+        )
+        assert response.status_code == 404
+
+
+class TestEditNetworkPolicy:
+    def test_updates_network_policy_via_form_mode(self, manage_client, manage_kube_server, monkeypatch, app):
+        called = {}
+
+        def _fake_apply(self, manifest_text):
+            import json as _json
+
+            called["manifest"] = _json.loads(manifest_text)
+            return DeployResult(success=True, log="networkpolicy.networking.k8s.io/backend-policy configured")
+
+        monkeypatch.setattr(KubernetesProvider, "apply", _fake_apply)
+        monkeypatch.setattr(
+            KubernetesProvider,
+            "list_network_policies",
+            lambda self, namespace=None: [_single_rule_network_policy()],
+        )
+
+        prefix = "netpol-default-backend-policy-form-"
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/network-policies/default/backend-policy/edit",
+            data={
+                "netpol_mode": "form",
+                f"{prefix}pod_selector": "app=backend",
+                f"{prefix}enable_ingress_rules": "y",
+                f"{prefix}ingress_peers-0-peer_type": "ip_block",
+                f"{prefix}ingress_peers-0-value": "10.1.0.0/16",
+                f"{prefix}ingress_ports-0-protocol": "TCP",
+                f"{prefix}ingress_ports-0-port": "9090",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        manifest = called["manifest"]
+        assert manifest["spec"]["ingress"][0]["from"] == [{"ipBlock": {"cidr": "10.1.0.0/16"}}]
+        assert manifest["spec"]["ingress"][0]["ports"] == [{"protocol": "TCP", "port": 9090}]
+
+        with app.app_context():
+            entry = ActivityLog.query.filter_by(action="UPDATE_NETWORK_POLICY").first()
+            assert entry is not None
+
+    def test_updates_network_policy_via_yaml_mode(self, manage_client, manage_kube_server, monkeypatch):
+        called = {}
+
+        def _fake_apply(self, manifest_text):
+            called["text"] = manifest_text
+            return DeployResult(success=True, log="networkpolicy.networking.k8s.io/backend-policy configured")
+
+        monkeypatch.setattr(KubernetesProvider, "apply", _fake_apply)
+        monkeypatch.setattr(
+            KubernetesProvider,
+            "list_network_policies",
+            lambda self, namespace=None: [_single_rule_network_policy()],
+        )
+
+        yaml_text = (
+            "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\n"
+            "metadata:\n  name: backend-policy\n  namespace: default\n"
+            "spec:\n  podSelector:\n    matchLabels:\n      app: backend-edited\n"
+        )
+        prefix = "netpol-default-backend-policy-yaml-"
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/network-policies/default/backend-policy/edit",
+            data={"netpol_mode": "yaml", f"{prefix}yaml_content": yaml_text},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert called["text"] == yaml_text
+
+
+class TestDeleteNetworkPolicy:
+    def test_deletes_and_logs_activity(self, manage_client, manage_kube_server, monkeypatch, app):
+        called = {}
+
+        def _fake_delete(self, namespace, name):
+            called.update(namespace=namespace, name=name)
+            return DeployResult(success=True, log="networkpolicy.networking.k8s.io/backend-policy deleted")
+
+        monkeypatch.setattr(KubernetesProvider, "delete_network_policy", _fake_delete)
+        monkeypatch.setattr(KubernetesProvider, "list_network_policies", lambda self, namespace=None: [])
+
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/network-policies/default/backend-policy/delete",
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert called == {"namespace": "default", "name": "backend-policy"}
+
+        with app.app_context():
+            entry = ActivityLog.query.filter_by(action="DELETE_NETWORK_POLICY").first()
+            assert entry is not None
+
+    def test_kubectl_failure_shows_flash_not_500(self, manage_client, manage_kube_server, monkeypatch):
+        monkeypatch.setattr(
+            KubernetesProvider,
+            "delete_network_policy",
+            lambda self, namespace, name: DeployResult(
+                success=False, log="", error="networkpolicies \"backend-policy\" is forbidden"
+            ),
+        )
+        monkeypatch.setattr(KubernetesProvider, "list_network_policies", lambda self, namespace=None: [])
+
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/network-policies/default/backend-policy/delete",
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert b"Could not delete network policy" in response.data
 
 
 class TestWorkloadList:

@@ -269,6 +269,55 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  // --- Ingress create/edit modal: toggle between Form and Raw YAML editing
+  // modes (deployment_pods/ingresses.html) — same shape as the Secret
+  // opaque/pull toggle above, just per-modal-scoped since (unlike Secrets,
+  // which only has one create-modal-wide toggle) an Ingress edit modal
+  // exists once per row, each with its own independent mode radios. ---
+  document.querySelectorAll(".ingress-mode-radio").forEach((radio) => {
+    radio.addEventListener("change", () => {
+      const scope = radio.closest("form");
+      if (!scope) return;
+      const selected = scope.querySelector(".ingress-mode-radio:checked")?.value;
+      scope.querySelectorAll(".ingress-mode-fields").forEach((section) => {
+        section.classList.toggle("hidden", section.dataset.ingressMode !== selected);
+      });
+    });
+  });
+
+  // --- Network Policy create/edit modal: Form/Raw YAML toggle (same shape
+  // as the Ingress toggle above, kept as its own block rather than merged
+  // with it — small, per-page-scoped widget duplication, same convention
+  // this app already uses for setupMultiObjectPicker()/setupSearchDropdown()
+  // across pages) plus the Ingress/Egress direction checkboxes, each of
+  // which shows/hides its own peers+ports block. ---
+  document.querySelectorAll(".netpol-mode-radio").forEach((radio) => {
+    radio.addEventListener("change", () => {
+      const scope = radio.closest("form");
+      if (!scope) return;
+      const selected = scope.querySelector(".netpol-mode-radio:checked")?.value;
+      scope.querySelectorAll(".netpol-mode-fields").forEach((section) => {
+        section.classList.toggle("hidden", section.dataset.netpolMode !== selected);
+      });
+    });
+  });
+
+  document.querySelectorAll(".netpol-direction-toggle").forEach((checkbox) => {
+    const target = document.getElementById(checkbox.dataset.target);
+    if (!target) return;
+    checkbox.addEventListener("change", () => target.classList.toggle("hidden", !checkbox.checked));
+  });
+
+  // --- Raw YAML editors (Ingress create/edit "YAML" mode textareas) — same
+  // CodeMirror wiring as deployment_manifests.js/deployment_servers.js/
+  // yaml_generator.js. A no-op if this page didn't include CodeMirror
+  // (window.YamlEditor undefined) or has no such textarea. ---
+  if (window.YamlEditor) {
+    document.querySelectorAll(".yaml-content-input").forEach((textarea) => {
+      window.YamlEditor.initYamlEditor(textarea);
+    });
+  }
+
   // --- Dynamic key/value rows for Secret/ConfigMap create/edit (`entries`/
   // `new_entries` FieldList rows on secrets.html and configmaps.html). Each
   // "add" trigger points at a <template> (its markup has literal

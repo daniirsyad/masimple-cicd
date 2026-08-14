@@ -1,5 +1,5 @@
 from flask_wtf import FlaskForm
-from wtforms import FieldList, Form, FormField, IntegerField, SelectField, StringField, SubmitField
+from wtforms import BooleanField, FieldList, Form, FormField, IntegerField, SelectField, StringField, SubmitField
 from wtforms.validators import DataRequired, Length, NumberRange, Optional, Regexp
 
 from app.blueprints.deployment_pods.forms import DNS1123_LABEL_RE, DNS1123_MESSAGE
@@ -132,4 +132,44 @@ class IngressForm(FlaskForm):
         "Backend Service Port", validators=[DataRequired(), NumberRange(min=1, max=65535)]
     )
     tls_secret_name = StringField("TLS Secret Name (optional)", validators=[Optional(), Length(max=253)])
+    submit = SubmitField("Generate")
+
+
+# Field names (peer_type/value, protocol/port) deliberately match
+# app/blueprints/deployment_pods/forms.py's own NetworkPolicy peer/port
+# rows — both are handed straight through (via .data) to the shared
+# app/services/yaml_generator/network_policy.py's build().
+class NetworkPolicyPeerRowForm(Form):
+    peer_type = SelectField(
+        "Peer Type",
+        choices=[("pod", "Pod Selector"), ("namespace", "Namespace Selector"), ("ip_block", "IP Block (CIDR)")],
+        default="pod",
+    )
+    value = StringField("Labels (key=value,key2=value2) or CIDR", validators=[Optional(), Length(max=500)])
+
+
+class NetworkPolicyPortRowForm(Form):
+    protocol = SelectField("Protocol", choices=[("TCP", "TCP"), ("UDP", "UDP"), ("SCTP", "SCTP")], default="TCP")
+    port = IntegerField("Port", validators=[Optional(), NumberRange(min=1, max=65535)])
+
+
+class NetworkPolicyForm(FlaskForm):
+    name = StringField(
+        "Name", validators=[DataRequired(), Length(max=253), Regexp(DNS1123_LABEL_RE, message=DNS1123_MESSAGE)]
+    )
+    namespace = StringField(
+        "Namespace",
+        validators=[Optional(), Length(max=63), Regexp(DNS1123_LABEL_RE, message=DNS1123_MESSAGE)],
+        default="default",
+    )
+    # Same FieldList(FormField(KeyValueRowForm)) shape as Deployment's
+    # labels / Service's selector on this same page — network_policy.build()
+    # normalizes it via rows_to_dict() the same way those do.
+    pod_selector = FieldList(FormField(KeyValueRowForm), min_entries=0)
+    enable_ingress_rules = BooleanField("Restrict Incoming Traffic (Ingress)")
+    enable_egress_rules = BooleanField("Restrict Outgoing Traffic (Egress)")
+    ingress_peers = FieldList(FormField(NetworkPolicyPeerRowForm), min_entries=0)
+    ingress_ports = FieldList(FormField(NetworkPolicyPortRowForm), min_entries=0)
+    egress_peers = FieldList(FormField(NetworkPolicyPeerRowForm), min_entries=0)
+    egress_ports = FieldList(FormField(NetworkPolicyPortRowForm), min_entries=0)
     submit = SubmitField("Generate")

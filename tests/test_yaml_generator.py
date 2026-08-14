@@ -6,7 +6,7 @@ from werkzeug.security import generate_password_hash
 
 from app.extensions import db
 from app.models import Permission, Role, User
-from app.services.yaml_generator import configmap, deployment, ingress, secret, service
+from app.services.yaml_generator import configmap, deployment, ingress, network_policy, secret, service
 from app.services.yaml_generator.render import to_yaml
 
 GENERATOR_PASSWORD = "GeneratorPass123!"
@@ -193,6 +193,127 @@ class TestIngressBuild:
         resource = ingress.build(fields)
         assert resource["spec"]["tls"] == [{"hosts": ["example.com"], "secretName": "my-tls-secret"}]
 
+    def test_multiple_paths_all_land_under_the_one_host_rule(self):
+        # The `paths` list is the deployment_pods Ingress CRUD's own input
+        # shape (one host, one-or-more paths) — a second, shared consumer
+        # of this same builder alongside the flat single-path fields above.
+        fields = {
+            "name": "myingress",
+            "namespace": "prod",
+            "host": "example.com",
+            "paths": [
+                {"path": "/api", "path_type": "Prefix", "backend_service_name": "api-svc", "backend_service_port": 8080},
+                {"path": "/app", "path_type": "Exact", "backend_service_name": "app-svc", "backend_service_port": 80},
+            ],
+        }
+        resource = ingress.build(fields)
+
+        rule = resource["spec"]["rules"][0]
+        assert rule["host"] == "example.com"
+        paths = rule["http"]["paths"]
+        assert len(paths) == 2
+        assert paths[0]["path"] == "/api"
+        assert paths[0]["backend"]["service"] == {"name": "api-svc", "port": {"number": 8080}}
+        assert paths[1]["path"] == "/app"
+        assert paths[1]["pathType"] == "Exact"
+
+    def test_ingress_class_name_set_only_when_provided(self):
+        fields = {
+            "name": "myingress",
+            "host": "example.com",
+            "backend_service_name": "myapp",
+            "backend_service_port": 80,
+            "ingress_class_name": "nginx",
+        }
+        resource = ingress.build(fields)
+        assert resource["spec"]["ingressClassName"] == "nginx"
+
+        fields.pop("ingress_class_name")
+        resource = ingress.build(fields)
+        assert "ingressClassName" not in resource["spec"]
+
+
+class TestNetworkPolicyBuild:
+    def test_ingress_only_with_pod_and_ip_block_peers(self):
+        # pod_selector as a raw {key: value} dict (deployment_pods' own
+        # shape) — the alternate FieldList-rows shape is covered by
+        # test_pod_selector_accepts_raw_fieldlist_rows below.
+        fields = {
+            "name": "backend-policy",
+            "namespace": "prod",
+            "pod_selector": {"app": "backend"},
+            "enable_ingress_rules": True,
+            "ingress_peers": [
+                {"peer_type": "pod", "value": "app=frontend"},
+                {"peer_type": "ip_block", "value": "10.0.0.0/8"},
+            ],
+            "ingress_ports": [{"protocol": "TCP", "port": 8080}],
+        }
+        resource = network_policy.build(fields)
+
+        assert resource["kind"] == "NetworkPolicy"
+        spec = resource["spec"]
+        assert spec["podSelector"]["matchLabels"] == {"app": "backend"}
+        assert spec["policyTypes"] == ["Ingress"]
+        assert spec["ingress"][0]["from"] == [
+            {"podSelector": {"matchLabels": {"app": "frontend"}}},
+            {"ipBlock": {"cidr": "10.0.0.0/8"}},
+        ]
+        assert spec["ingress"][0]["ports"] == [{"protocol": "TCP", "port": 8080}]
+        assert "egress" not in spec
+
+    def test_egress_only_with_namespace_selector_peer(self):
+        fields = {
+            "name": "egress-policy",
+            "pod_selector": {},
+            "enable_egress_rules": True,
+            "egress_peers": [{"peer_type": "namespace", "value": "team=platform"}],
+            "egress_ports": [{"protocol": "UDP", "port": 53}],
+        }
+        resource = network_policy.build(fields)
+
+        spec = resource["spec"]
+        assert spec["podSelector"] == {}
+        assert spec["policyTypes"] == ["Egress"]
+        assert spec["egress"][0]["to"] == [{"namespaceSelector": {"matchLabels": {"team": "platform"}}}]
+        assert "ingress" not in spec
+
+    def test_empty_rule_means_allow_all_for_that_direction(self):
+        # No peers/ports at all for Ingress — a deliberate "allow all
+        # ingress traffic to these pods" policy, valid Kubernetes.
+        fields = {"name": "allow-all-ingress", "pod_selector": {"app": "x"}, "enable_ingress_rules": True}
+        resource = network_policy.build(fields)
+        assert resource["spec"]["ingress"] == [{}]
+
+    def test_blank_peer_value_is_dropped(self):
+        fields = {
+            "name": "backend-policy",
+            "pod_selector": {},
+            "enable_ingress_rules": True,
+            "ingress_peers": [{"peer_type": "pod", "value": ""}],
+            "ingress_ports": [],
+        }
+        resource = network_policy.build(fields)
+        assert resource["spec"]["ingress"] == [{}]
+
+    def test_pod_selector_accepts_raw_fieldlist_rows(self):
+        # The YAML Generator page's own shape: FieldList(FormField(KeyValueRowForm)).data
+        fields = {
+            "name": "backend-policy",
+            "pod_selector": [{"key": "app", "value": "backend"}, {"key": "", "value": ""}],
+            "enable_ingress_rules": True,
+        }
+        resource = network_policy.build(fields)
+        assert resource["spec"]["podSelector"]["matchLabels"] == {"app": "backend"}
+
+    def test_no_direction_enabled_omits_policy_types_and_rules(self):
+        fields = {"name": "noop-policy", "pod_selector": {}}
+        resource = network_policy.build(fields)
+        spec = resource["spec"]
+        assert "policyTypes" not in spec
+        assert "ingress" not in spec
+        assert "egress" not in spec
+
 
 class TestToYaml:
     def test_round_trips_through_yaml_safe_load(self):
@@ -253,6 +374,25 @@ class TestGenerateRoute:
         response = generator_client.post("/yaml-generator/generate/bogus", data={})
         assert response.status_code == 400
 
+    def test_valid_network_policy_submission_returns_yaml(self, generator_client):
+        response = generator_client.post(
+            "/yaml-generator/generate/network_policy",
+            data={
+                "name": "backend-policy",
+                "namespace": "default",
+                "pod_selector-0-key": "app",
+                "pod_selector-0-value": "backend",
+                "enable_ingress_rules": "y",
+                "ingress_peers-0-peer_type": "pod",
+                "ingress_peers-0-value": "app=frontend",
+                "ingress_ports-0-protocol": "TCP",
+                "ingress_ports-0-port": "8080",
+            },
+        )
+        assert response.status_code == 200
+        assert "kind: NetworkPolicy" in response.json["yaml"]
+        assert "podSelector" in response.json["yaml"]
+
     def test_blank_optional_integer_field_does_not_error(self, generator_client):
         """Regression coverage for the WTForms blank-optional-IntegerField
         gotcha (see OptionalIntegerField in forms.py) — container_port left
@@ -270,6 +410,14 @@ class TestGenerateRoute:
         )
         assert response.status_code == 200
         assert "containerPort" not in response.json["yaml"]
+
+
+class TestIndexPage:
+    def test_renders_including_the_network_policy_panel(self, generator_client):
+        response = generator_client.get("/yaml-generator/")
+        assert response.status_code == 200
+        assert b"NetworkPolicy" in response.data
+        assert b'data-kind="network_policy"' in response.data
 
 
 class TestPermissionGating:

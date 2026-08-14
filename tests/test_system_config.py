@@ -198,6 +198,139 @@ class TestIndexPage:
         with app.app_context():
             assert get_system_config().commit_log_limit != 0
 
+    def test_post_updates_max_login_attempts(self, config_client, app):
+        response = config_client.post(
+            "/config/",
+            data={
+                "timezone": "UTC",
+                "session_timeout_minutes": "60",
+                "build_engine": "docker",
+                "max_login_attempts": "10",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        with app.app_context():
+            assert get_system_config().max_login_attempts == 10
+
+    def test_post_can_enable_telegram_notifications(self, config_client, app):
+        response = config_client.post(
+            "/config/",
+            data={
+                "timezone": "UTC",
+                "session_timeout_minutes": "60",
+                "build_engine": "docker",
+                "max_login_attempts": "5",
+                "telegram_notifications_enabled": "y",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        with app.app_context():
+            assert get_system_config().telegram_notifications_enabled is True
+
+    def test_post_with_bot_token_stores_it_encrypted(self, config_client, app):
+        config_client.post(
+            "/config/",
+            data={
+                "timezone": "UTC",
+                "session_timeout_minutes": "60",
+                "build_engine": "docker",
+                "max_login_attempts": "5",
+                "telegram_bot_token": "123456:ABC-DEF",
+            },
+            follow_redirects=True,
+        )
+        with app.app_context():
+            from app.utils.crypto import decrypt
+
+            config = get_system_config()
+            assert config.encrypted_telegram_bot_token is not None
+            assert config.encrypted_telegram_bot_token != "123456:ABC-DEF"
+            assert decrypt(config.encrypted_telegram_bot_token) == "123456:ABC-DEF"
+
+    def test_post_with_blank_bot_token_keeps_the_existing_one(self, config_client, app):
+        with app.app_context():
+            from app.utils.crypto import encrypt
+
+            config = get_system_config()
+            config.encrypted_telegram_bot_token = encrypt("original-token")
+            db.session.commit()
+
+        config_client.post(
+            "/config/",
+            data={
+                "timezone": "UTC",
+                "session_timeout_minutes": "60",
+                "build_engine": "docker",
+                "max_login_attempts": "5",
+                "telegram_bot_token": "",
+            },
+            follow_redirects=True,
+        )
+
+        with app.app_context():
+            from app.utils.crypto import decrypt
+
+            assert decrypt(get_system_config().encrypted_telegram_bot_token) == "original-token"
+
+    def test_bot_token_is_never_rendered_back_into_the_page(self, config_client, app):
+        with app.app_context():
+            from app.utils.crypto import encrypt
+
+            config = get_system_config()
+            config.encrypted_telegram_bot_token = encrypt("super-secret-token")
+            db.session.commit()
+
+        response = config_client.get("/config/")
+        assert b"super-secret-token" not in response.data
+
+    def test_post_sets_the_security_notification_recipient(self, config_client, app, config_user):
+        response = config_client.post(
+            "/config/",
+            data={
+                "timezone": "UTC",
+                "session_timeout_minutes": "60",
+                "build_engine": "docker",
+                "max_login_attempts": "5",
+                "security_notification_user_id": str(config_user),
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        with app.app_context():
+            assert get_system_config().security_notification_user_id == config_user
+
+    def test_post_can_clear_the_security_notification_recipient(self, config_client, app, config_user):
+        with app.app_context():
+            config = get_system_config()
+            config.security_notification_user_id = config_user
+            db.session.commit()
+
+        config_client.post(
+            "/config/",
+            data={
+                "timezone": "UTC",
+                "session_timeout_minutes": "60",
+                "build_engine": "docker",
+                "max_login_attempts": "5",
+                "security_notification_user_id": "",
+            },
+            follow_redirects=True,
+        )
+        with app.app_context():
+            assert get_system_config().security_notification_user_id is None
+
+    def test_get_shows_the_current_recipient_selected(self, config_client, app, config_user):
+        with app.app_context():
+            config = get_system_config()
+            config.security_notification_user_id = config_user
+            db.session.commit()
+
+        response = config_client.get("/config/")
+        assert response.status_code == 200
+        assert f'selected value="{config_user}"'.encode() in response.data
+
     def test_post_logs_activity(self, config_client, app):
         config_client.post(
             "/config/",

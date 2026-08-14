@@ -19,6 +19,25 @@ class User(UserMixin, db.Model):
     created_by = db.Column(UUID(as_uuid=True), db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     last_login_at = db.Column(db.DateTime, nullable=True)
+    # Login-lockout tracking (app/blueprints/auth/routes.py's login()):
+    # incremented on every wrong-password attempt against this user, reset
+    # to 0 on a successful login or a completed password reset. The account
+    # is considered locked once this reaches SystemConfig.max_login_attempts
+    # — locked_at is set the moment that happens (audit/UI display only, not
+    # itself the lock condition) and cleared alongside the counter. Only a
+    # user.unlock permission holder (or a successful forgot-password reset)
+    # can clear it — there is no auto-expiry.
+    failed_login_attempts = db.Column(db.Integer, nullable=False, default=0)
+    locked_at = db.Column(db.DateTime, nullable=True)
+    # Numeric Telegram chat ID — see app/services/telegram/. Two distinct
+    # uses: (1) a forgot-password reset link for THIS user is always sent
+    # here, since only this user can act on it; (2) if this user is the
+    # SystemConfig.security_notification_user_id, wrong-password/lockout/
+    # login alerts for EVERY account are also sent here. Admin-entered
+    # (obtained by the user messaging the configured bot, or a helper like
+    # @userinfobot) since this app has no self-service account page and no
+    # public signup.
+    telegram_chat_id = db.Column(db.String, nullable=True)
 
     role = db.relationship("Role", back_populates="users")
     creator = db.relationship("User", remote_side=[id])

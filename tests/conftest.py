@@ -8,7 +8,7 @@ from app.models import Permission, Role, User
 ADMIN_PASSWORD = "AdminPass123!"
 NOPERM_PASSWORD = "NoPermPass123!"
 
-USER_PERMISSION_CODES = ["user.view", "user.create", "user.edit", "user.delete"]
+USER_PERMISSION_CODES = ["user.view", "user.create", "user.edit", "user.delete", "user.unlock"]
 
 
 @pytest.fixture(scope="session")

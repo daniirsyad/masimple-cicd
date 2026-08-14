@@ -12,7 +12,13 @@ MASIMPLE CICD is an internal Flask web app with four halves:
 
 1. A general-purpose **admin/RBAC foundation** — users, roles, granular
    permissions, a database-driven sidebar/navbar menu, activity logging, and
-   error logging.
+   error logging. Login is protected by a configurable failed-attempt
+   lockout (only clearable by a `user.unlock` permission holder or a
+   completed password reset), and a Telegram integration sends
+   wrong-password/lockout/login security alerts for *every* account to one
+   designated security-contact user, plus lets any user request a
+   forgot-password reset link and self-service-edit their own Full
+   Name/Telegram Chat ID/password from a "My Account" page.
 2. A **Docker Image Builder module** built on top of it — register Git repos
    and container registries, define reusable "Builder" configs, trigger
    versioned builds (single or batched), push images, and auto-generate
@@ -26,15 +32,18 @@ MASIMPLE CICD is an internal Flask web app with four halves:
    servers, define YAML manifests with placeholders that resolve against an
    Image Builder Builder's latest (or a pinned) successful build, then
    deploy/update/stop/restart them (individually or as an ordered group),
-   view deploy history, and browse live cluster state (pods + logs/describe,
-   namespaces, nodes, services, ingresses, PVs/PVCs) for any registered
-   Kubernetes server. Pod logs stream live over Server-Sent Events
+   view deploy history, and browse/manage live cluster state for any
+   registered Kubernetes server: full add/edit/delete for Namespaces,
+   Secrets, ConfigMaps, Ingress, and Network Policies (the last two via a
+   Form-or-raw-YAML dual-mode editor), read-only list+describe for Nodes,
+   Services, PVs, and PVCs. Pod logs stream live over Server-Sent Events
    (`kubectl logs -f` under the hood); everything else "live" in this app is
    still plain interval polling. A standalone **YAML Generator**
-   (`/yaml-generator`) builds Deployment/Service/ConfigMap/Secret/Ingress
-   YAML from form fields with a live preview, independent of any manifest —
-   its "Save as Manifest" action hands the result into this module's own
-   manifest-creation flow rather than persisting anything itself.
+   (`/yaml-generator`) builds Deployment/Service/ConfigMap/Secret/Ingress/
+   NetworkPolicy YAML from form fields with a live preview, independent of
+   any manifest — its "Save as Manifest" action hands the result into this
+   module's own manifest-creation flow rather than persisting anything
+   itself.
 4. A **Workflow module** on top of both of the above — chain existing
    Builders and DeploymentManifests into an ordered, reusable sequence (e.g.
    build → deploy to staging → deploy to prod) without re-entering any
@@ -65,7 +74,8 @@ different roles) — not a SaaS product with per-customer isolation.
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
 | AWS SDK | `boto3` — ECR `RegistryProvider` only (SigV4-signed calls, doesn't fit the generic Docker Registry v2 bearer-token flow the other registry providers share) |
 | YAML generation | `PyYAML` — YAML Generator page only; everywhere else in this app deliberately avoids it in favor of dict→`json.dumps()` (JSON is valid YAML) since that output only ever feeds `kubectl apply -f -`, never a human — see `app/services/yaml_generator/render.py` |
-| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 733 tests |
+| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 829 tests |
+| Telegram integration | `requests` against the Bot API's `sendMessage` endpoint (`app/services/telegram/`) — security notifications and forgot-password reset links only; no incoming webhook/command listener exists yet |
 
 ## Architecture conventions
 
@@ -143,7 +153,15 @@ different roles) — not a SaaS product with per-customer isolation.
 (self-referential parent/child, `permission_code`, `show_in_navbar`/`show_in_sidebar`);
 `ActivityLog`; `ErrorLog` (source, message, traceback, request context — fed
 by a global `got_request_exception` handler plus explicit `log_error()` calls
-in exception-swallowing code paths).
+in exception-swallowing code paths). `User` also carries `failed_login_attempts`/
+`locked_at` (login lockout — locked once the counter reaches
+`SystemConfig.max_login_attempts`, cleared only by a `user.unlock` permission
+holder or a completed password reset) and `telegram_chat_id` (used both for a
+forgot-password reset link addressed to that user, and — if that user is
+`SystemConfig.security_notification_user_id` — as the destination for
+security alerts about every account). `PasswordResetToken` (user_id,
+`token_hash` — only a sha256 hash is ever stored, `expires_at`, `used_at`)
+backs the forgot-password flow: single-use, 15-minute expiry.
 
 **Image Builder module:**
 - `GitSource` (a saved token connection, e.g. one GitHub PAT) → `Repository`
@@ -227,7 +245,12 @@ in exception-swallowing code paths).
   prior build to diff against — first build on a branch, or the prior
   build's commit no longer reachable after a force-push/rebase — read fresh
   on every call via `app.utils.system_config.get_system_config()`, no
-  restart needed, same pattern as the poll interval).
+  restart needed, same pattern as the poll interval). Also: `max_login_attempts`
+  (login lockout threshold), `telegram_notifications_enabled` +
+  `encrypted_telegram_bot_token` (Fernet-encrypted, same convention as every
+  other stored credential), and `security_notification_user_id` (the one
+  `User` who receives Telegram security alerts for every account — see the
+  RBAC/core section above).
 
 **Deployment module:**
 - `DeploymentServer` — a registered target: `connection_type` (`kube` or
@@ -306,11 +329,20 @@ in exception-swallowing code paths).
   indicator; a recent-errors count; a recent-builds table; recent activity
   log.
 - **`/users`, `/roles`, `/permissions`** — standard RBAC CRUD. The Roles
-  page's permission picker groups the ~41 permissions under friendly
+  page's permission picker groups the ~48 permissions under friendly
   resource headings (Users, Builders, AI Providers, …) with human
   descriptions, not raw codes. Users support both soft-delete
   (`is_active=False`) and hard delete (blocks self-deletion, reassigns
-  `activity_logs.user_id`/`created_by` references first).
+  `activity_logs.user_id`/`created_by` references first). Each row also
+  shows a Telegram Chat ID field (admin-set) and, once a user's
+  `failed_login_attempts` reaches the configured max, a "Locked" badge plus
+  an Unlock button gated by a separate `user.unlock` permission.
+- **`/account`** (any logged-in user, no permission gate — linked from the
+  navbar's user dropdown as "My Account") — self-service editor for the
+  current user's own Full Name, Telegram Chat ID, and password (changing
+  the password requires re-entering the current one). Username, role, and
+  active status are deliberately not on this form — those stay admin-only
+  via `/users`.
 - **`/menus`** — sidebar/navbar tree management, drag-and-drop reorder
   (SortableJS), depth-1 enforcement.
 - **`/logs`** (Activity) and **`/logs/errors`** (Error) — filterable
@@ -382,7 +414,12 @@ in exception-swallowing code paths).
   for a build that predates commit tracking ("not tracked" shown instead).
 - **`/config`** — System Configuration (`system.manage`): timezone, session
   timeout, build engine, duplicate-title toggle, deploy live-status poll
-  interval, commit log limit (see the data model section above).
+  interval, commit log limit (see the data model section above), plus two
+  newer sections — **Security** (max failed login attempts before
+  lockout) and **Telegram Integration** (enable toggle, bot token —
+  write-only, blank on submit keeps the current one — and the Security
+  Notification Recipient dropdown, see the RBAC/core data model section
+  above).
 - **`/deployment-servers`** — register/edit target servers (kubeconfig or
   custom-agent credentials, never re-shown after save), per-server "Test
   Connection", `allowed_roles` picker, per-row "Kubernetes" link into that
@@ -402,7 +439,7 @@ in exception-swallowing code paths).
   (`deployment.deploy`/`update`/`stop`/`restart`).
 - **`/yaml-generator`** (`yaml_generator.view`, nested under the Deployment
   sidebar group) — a standalone Kubernetes YAML builder: pick a resource
-  kind (Deployment/Service/ConfigMap/Secret/Ingress), fill in form fields
+  kind (Deployment/Service/ConfigMap/Secret/Ingress/NetworkPolicy), fill in form fields
   (key/value rows for labels/env/data, port rows for Services), and get a
   live-updating YAML preview (debounced, re-generated server-side on every
   field change so the preview always matches what a save would actually
@@ -451,9 +488,26 @@ in exception-swallowing code paths).
     (`deployment_workload.restart`) that does a true `kubectl rollout
     restart deployment/<name>` — a zero-downtime rolling recycle, unlike
     `DeploymentManifest`'s own Restart action (see Known Gaps).
-  - **Nodes, Services, Ingress, PersistentVolumes,
-    PersistentVolumeClaims** — read-only, list + Describe modal only,
-    deliberate scope choice (unlike the four sections above).
+  - **Ingress** — full CRUD (`deployment_ingress.manage`), with a
+    Form-or-raw-YAML toggle per create/edit dialog. Form mode: host,
+    optional ingress class, optional TLS secret name, one-or-more paths
+    (path/pathType/backend service+port). An Ingress with more than one
+    rule or TLS entry forces YAML-only editing (Form mode only ever
+    shows/edits the first rule, so this stops an edit from silently
+    dropping the rest). Describe is still available via the same
+    generic mechanism the read-only kinds below use. Shares its
+    manifest-building logic with `/yaml-generator`'s own Ingress
+    generator (`app/services/yaml_generator/ingress.py`).
+  - **Network Policies** — full CRUD (`deployment_network_policy.manage`),
+    same Form-or-raw-YAML pattern and same multi-rule-forces-YAML guard as
+    Ingress. Form mode: pod selector (blank = applies to all pods),
+    independent Ingress/Egress checkboxes each revealing their own peer
+    list (Pod Selector labels / Namespace Selector labels / IP Block CIDR)
+    and port list. Shares logic with `/yaml-generator`'s NetworkPolicy
+    generator (`app/services/yaml_generator/network_policy.py`).
+  - **Nodes, Services, PersistentVolumes, PersistentVolumeClaims** —
+    read-only, list + Describe modal only, deliberate scope choice (unlike
+    the sections above).
 
   `"api"`-type servers aren't supported anywhere in this whole section (no
   pod/namespace/etc. concept for a generic agent endpoint) and 404 if tried.
@@ -598,6 +652,23 @@ in exception-swallowing code paths).
   focus/re-render bug) based on user-reported behavior rather than something
   caught by the test suite — worth an extra-careful manual pass on
   `/documentation` and the Builders "Build Selected" modal specifically.
+- **Ingress/NetworkPolicy CRUD, the login-lockout flow, the Telegram
+  integration, and the self-service `/account` page are all also
+  unverified in a live browser** — same sandbox constraint, Flask test
+  client (and, for Telegram, a mocked `requests.post`) only. Worth an
+  especially careful manual pass on the Form↔YAML toggles and their
+  several independent add/remove-row widgets (Ingress paths; NetworkPolicy
+  peers and ports, ×2 for Ingress/Egress), and on actually receiving a
+  Telegram message end-to-end against a real bot.
+- The Telegram integration (`app/services/telegram/`) only ever sends
+  outbound notifications — there's no incoming webhook or command listener,
+  so it can't yet be used to *trigger* anything (e.g. a Workflow run via a
+  Telegram command). A parallel Discord integration for the same purpose
+  has also not been started. Both were explicitly scoped out ("not for
+  now") when the Telegram notification feature was built; the
+  `SystemConfig`/`User` fields it added (bot token, per-user chat ID) are
+  meant to be reusable for that later rather than needing a parallel set of
+  fields.
 - Everything runs through a single in-process worker thread per queue (one
   each for builds and deploys, plus the workflow orchestrator, which only
   ever enqueues into those same two queues) — there is no distributed/

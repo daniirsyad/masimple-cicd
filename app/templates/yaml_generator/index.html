@@ -66,6 +66,68 @@ MASIMPLE CICD{% endblock %}
 </template>
 {% endmacro %}
 
+{% macro peer_rows(fieldlist, field_name, container_id) %}
+<div id="{{ container_id }}" class="peer-rows flex flex-col gap-2" data-next-index="{{ fieldlist|length }}">
+  {% for subform in fieldlist %}
+  <div class="peer-row flex gap-2 items-center">
+    {{ subform.peer_type(class="select select-bordered select-xs w-1/3") }}
+    {{ subform.value(class="input input-bordered input-xs w-2/3 font-mono", placeholder="key=value or CIDR") }}
+    <button type="button" class="remove-row-btn btn btn-xs btn-circle btn-ghost text-error">✕</button>
+  </div>
+  {% endfor %}
+</div>
+<button
+  type="button"
+  class="add-row-btn btn btn-xs btn-outline border-dashed mt-1"
+  data-container="{{ container_id }}"
+  data-template="{{ container_id }}-template"
+>
+  + Add Peer
+</button>
+<template id="{{ container_id }}-template">
+  <div class="peer-row flex gap-2 items-center">
+    <select name="{{ field_name }}-__INDEX__-peer_type" class="select select-bordered select-xs w-1/3">
+      <option value="pod">Pod Selector</option>
+      <option value="namespace">Namespace Selector</option>
+      <option value="ip_block">IP Block (CIDR)</option>
+    </select>
+    <input type="text" name="{{ field_name }}-__INDEX__-value" placeholder="key=value or CIDR" class="input input-bordered input-xs w-2/3 font-mono" />
+    <button type="button" class="remove-row-btn btn btn-xs btn-circle btn-ghost text-error">✕</button>
+  </div>
+</template>
+{% endmacro %}
+
+{% macro netpol_port_rows(fieldlist, field_name, container_id) %}
+<div id="{{ container_id }}" class="port-rows flex flex-col gap-2" data-next-index="{{ fieldlist|length }}">
+  {% for subform in fieldlist %}
+  <div class="port-row flex gap-2 items-center">
+    {{ subform.protocol(class="select select-bordered select-xs w-1/3") }}
+    {{ subform.port(class="input input-bordered input-xs w-2/3", placeholder="port") }}
+    <button type="button" class="remove-row-btn btn btn-xs btn-circle btn-ghost text-error">✕</button>
+  </div>
+  {% endfor %}
+</div>
+<button
+  type="button"
+  class="add-row-btn btn btn-xs btn-outline border-dashed mt-1"
+  data-container="{{ container_id }}"
+  data-template="{{ container_id }}-template"
+>
+  + Add Port
+</button>
+<template id="{{ container_id }}-template">
+  <div class="port-row flex gap-2 items-center">
+    <select name="{{ field_name }}-__INDEX__-protocol" class="select select-bordered select-xs w-1/3">
+      <option value="TCP">TCP</option>
+      <option value="UDP">UDP</option>
+      <option value="SCTP">SCTP</option>
+    </select>
+    <input type="number" name="{{ field_name }}-__INDEX__-port" placeholder="port" class="input input-bordered input-xs w-2/3" />
+    <button type="button" class="remove-row-btn btn btn-xs btn-circle btn-ghost text-error">✕</button>
+  </div>
+</template>
+{% endmacro %}
+
 <div class="flex items-center justify-between">
   <h1 class="text-2xl font-bold">YAML Generator</h1>
 </div>
@@ -146,6 +208,41 @@ MASIMPLE CICD{% endblock %}
       <div>{{ forms.ingress.backend_service_name.label(class="label text-sm") }} {{ forms.ingress.backend_service_name(class="input input-bordered input-sm w-full") }}</div>
       <div>{{ forms.ingress.backend_service_port.label(class="label text-sm") }} {{ forms.ingress.backend_service_port(class="input input-bordered input-sm w-full") }}</div>
       <div>{{ forms.ingress.tls_secret_name.label(class="label text-sm") }} {{ forms.ingress.tls_secret_name(class="input input-bordered input-sm w-full") }}</div>
+    </form>
+
+    <form id="generator-form-network_policy" class="generator-form hidden flex flex-col gap-3" data-kind="network_policy">
+      <div>{{ forms.network_policy.name.label(class="label text-sm") }} {{ forms.network_policy.name(class="input input-bordered input-sm w-full") }}</div>
+      <div>{{ forms.network_policy.namespace.label(class="label text-sm") }} {{ forms.network_policy.namespace(class="input input-bordered input-sm w-full") }}</div>
+      <div>
+        <label class="label text-sm">Applies To — Pod Selector Labels (blank = all pods)</label>
+        {{ key_value_rows(forms.network_policy.pod_selector, "pod_selector", "netpol-pod-selector") }}
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="label cursor-pointer justify-start gap-2 text-sm">
+          {{ forms.network_policy.enable_ingress_rules(class="checkbox checkbox-sm") }}
+          {{ forms.network_policy.enable_ingress_rules.label.text }}
+        </label>
+        <label class="label cursor-pointer justify-start gap-2 text-sm">
+          {{ forms.network_policy.enable_egress_rules(class="checkbox checkbox-sm") }}
+          {{ forms.network_policy.enable_egress_rules.label.text }}
+        </label>
+      </div>
+      <div>
+        <label class="label text-sm">Ingress — Allowed From (blank = allow all)</label>
+        {{ peer_rows(forms.network_policy.ingress_peers, "ingress_peers", "netpol-ingress-peers") }}
+      </div>
+      <div>
+        <label class="label text-sm">Ingress — Ports (blank = all ports)</label>
+        {{ netpol_port_rows(forms.network_policy.ingress_ports, "ingress_ports", "netpol-ingress-ports") }}
+      </div>
+      <div>
+        <label class="label text-sm">Egress — Allowed To (blank = allow all)</label>
+        {{ peer_rows(forms.network_policy.egress_peers, "egress_peers", "netpol-egress-peers") }}
+      </div>
+      <div>
+        <label class="label text-sm">Egress — Ports (blank = all ports)</label>
+        {{ netpol_port_rows(forms.network_policy.egress_ports, "egress_ports", "netpol-egress-ports") }}
+      </div>
     </form>
   </div>
 

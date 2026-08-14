@@ -1,6 +1,6 @@
 from flask_wtf import FlaskForm
 from wtforms import BooleanField, PasswordField, SelectField, StringField, SubmitField
-from wtforms.validators import DataRequired, Length, Optional, ValidationError
+from wtforms.validators import DataRequired, Length, Optional, Regexp, ValidationError
 
 from app.models import User
 
@@ -10,6 +10,12 @@ class CreateUserForm(FlaskForm):
     password = PasswordField("Initial Password", validators=[DataRequired(), Length(min=8)])
     full_name = StringField("Full Name", validators=[Optional(), Length(max=120)])
     role_id = SelectField("Role", validators=[DataRequired()])
+    # Numeric Telegram chat ID — see app/services/telegram/. Not validated
+    # against Telegram itself (that would mean an outbound API call just to
+    # save a user), only that it's plausibly numeric.
+    telegram_chat_id = StringField(
+        "Telegram Chat ID (optional)", validators=[Optional(), Length(max=64), Regexp(r"^-?\d+$", message="Must be a numeric Telegram chat ID.")]
+    )
     submit = SubmitField("Create User")
 
     def validate_username(self, field):
@@ -22,4 +28,7 @@ class EditUserForm(FlaskForm):
     role_id = SelectField("Role", validators=[DataRequired()])
     is_active = BooleanField("Active")
     new_password = PasswordField("Reset Password", validators=[Optional(), Length(min=8)])
+    telegram_chat_id = StringField(
+        "Telegram Chat ID (optional)", validators=[Optional(), Length(max=64), Regexp(r"^-?\d+$", message="Must be a numeric Telegram chat ID.")]
+    )
     submit = SubmitField("Save Changes")

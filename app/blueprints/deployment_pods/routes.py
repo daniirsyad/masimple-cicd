@@ -1,5 +1,6 @@
 import json
 
+import yaml
 from flask import Response, abort, flash, jsonify, redirect, render_template, request, stream_with_context, url_for
 from flask_login import current_user
 
@@ -9,14 +10,23 @@ from app.blueprints.deployment_pods.forms import (
     ConfigMapEditForm,
     ImagePullSecretCreateForm,
     ImagePullSecretEditForm,
+    IngressCreateForm,
+    IngressEditForm,
+    IngressYamlForm,
     NamespaceCreateForm,
     NamespaceEditForm,
+    NetworkPolicyCreateForm,
+    NetworkPolicyEditForm,
+    NetworkPolicyYamlForm,
     OpaqueSecretCreateForm,
     OpaqueSecretEditForm,
     parse_labels,
 )
 from app.models import DeploymentServer
 from app.services.deployment.helpers import KUBE_CONNECTION_TYPE, provider_for_server
+from app.services.yaml_generator import ingress as ingress_generator
+from app.services.yaml_generator import network_policy as network_policy_generator
+from app.services.yaml_generator.render import to_yaml
 from app.utils.decorators import permission_required
 from app.utils.error_logger import error_detail_link, log_error
 from app.utils.logger import log_activity
@@ -88,7 +98,12 @@ def _summarize_persistentvolumeclaim(item):
 # kinds (nodes, PVs) never pass -n/-A at all. Namespaces themselves have
 # their own dedicated CRUD pages/routes below (namespaces()/create_namespace()/
 # etc.) instead of living in this read-only registry — same reasoning for
-# Secrets (secrets()/create_secret()/etc.), which never appears here at all.
+# Secrets/ConfigMaps, which never appear here at all. Ingress now also has
+# its own dedicated CRUD page/routes below (ingresses()/create_ingress()/
+# etc.) and is no longer linked from the generic tab loop in _nav.html —
+# its entry here is kept anyway (unlike Namespaces/Secrets/ConfigMaps,
+# fully removed) purely so the existing generic describe_resource() route
+# can keep serving its Describe button without a redundant dedicated one.
 RESOURCE_KINDS = {
     "nodes": {
         "kubectl_kind": "node", "namespaced": False, "label": "Nodes", "summarize": _summarize_node,
@@ -915,6 +930,667 @@ def delete_configmap(server_id, namespace, name):
         str(server.id),
         f"Deleted configmap '{name}' in namespace '{namespace}' on server '{server.name}'",
         f"ConfigMap '{name}' deleted.",
+    )
+
+
+def _ingress_form_prefix(namespace, name):
+    return f"ingress-{namespace}-{name}-form-"
+
+
+def _ingress_yaml_prefix(namespace, name):
+    return f"ingress-{namespace}-{name}-yaml-"
+
+
+def _ingress_manifest_for_yaml(namespace, name, spec):
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "Ingress",
+        "metadata": {"name": name, "namespace": namespace},
+        "spec": spec,
+    }
+
+
+def _ingress_spec_to_form_fields(spec):
+    """The Form editor only ever shows/edits the *first* rule (single
+    host) — see `form_supported` in _render_ingresses, which hides the Form
+    option entirely for an Ingress that already has more than one rule or
+    TLS entry so this never silently drops data on save.
+    """
+    rules = spec.get("rules") or []
+    rule = rules[0] if rules else {}
+    http_paths = ((rule.get("http") or {}).get("paths")) or []
+    paths = [
+        {
+            "path": path.get("path") or "/",
+            "path_type": path.get("pathType") or "Prefix",
+            "backend_service_name": ((path.get("backend") or {}).get("service") or {}).get("name") or "",
+            "backend_service_port": (((path.get("backend") or {}).get("service") or {}).get("port") or {}).get(
+                "number"
+            ),
+        }
+        for path in http_paths
+    ]
+    tls_entries = spec.get("tls") or []
+    return {
+        "host": rule.get("host") or "",
+        "ingress_class_name": spec.get("ingressClassName") or "",
+        "tls_secret_name": tls_entries[0].get("secretName") if tls_entries else "",
+        "paths": paths or [{"path": "/", "path_type": "Prefix", "backend_service_name": "", "backend_service_port": None}],
+    }
+
+
+def _validate_ingress_yaml_kind(yaml_text):
+    """The raw-YAML editing mode still only carries the
+    deployment_ingress.manage permission — parsing here (not in
+    KubernetesProvider, which never parses YAML — see its create_namespace
+    docstring) just confirms the pasted text actually declares `kind:
+    Ingress` before it's applied, so this box can't be used to slip in an
+    arbitrary manifest under a narrower permission than that would need.
+    """
+    try:
+        parsed = yaml.safe_load(yaml_text)
+    except yaml.YAMLError as exc:
+        return f"Invalid YAML: {exc}"
+    if not isinstance(parsed, dict) or str(parsed.get("kind") or "").lower() != "ingress":
+        return "The YAML must define a single resource with kind: Ingress."
+    return None
+
+
+def _render_ingresses(
+    server, namespace_filter="", create_form=None, create_yaml_form=None, create_mode="form",
+    open_modal=None, invalid_edit=None,
+):
+    choice_pairs = [(name, name) for name in _namespace_choices(server)]
+
+    if create_form is None:
+        create_form = IngressCreateForm(prefix="create-ingress-form-")
+    create_form.namespace.choices = choice_pairs
+    if create_yaml_form is None:
+        create_yaml_form = IngressYamlForm(prefix="create-ingress-yaml-")
+
+    items = []
+    error = None
+    try:
+        items = provider_for_server(server).list_ingresses(namespace_filter or None)
+    except Exception as exc:
+        entry = log_error(
+            source="deployment_pods.ingresses",
+            exc=exc,
+            description=(
+                f"Could not list ingresses for server '{server.name}' "
+                f"(namespace={namespace_filter or 'all'}): {exc}"
+            ),
+        )
+        error = error_detail_link("Could not list ingresses.", entry)
+
+    invalid_key, invalid_kind, invalid_form = invalid_edit or (None, None, None)
+    rows = []
+    for item in items:
+        name = item["name"]
+        item_namespace = item["namespace"]
+        spec = item["spec"]
+        row_key = (item_namespace, name)
+        form_supported = len(spec.get("rules") or []) <= 1 and len(spec.get("tls") or []) <= 1
+
+        if row_key == invalid_key and invalid_kind == "form":
+            edit_form = invalid_form
+        else:
+            fields = _ingress_spec_to_form_fields(spec)
+            edit_form = IngressEditForm(prefix=_ingress_form_prefix(item_namespace, name))
+            edit_form.host.data = fields["host"]
+            edit_form.ingress_class_name.data = fields["ingress_class_name"]
+            edit_form.tls_secret_name.data = fields["tls_secret_name"]
+            for path in fields["paths"]:
+                edit_form.paths.append_entry(path)
+
+        if row_key == invalid_key and invalid_kind == "yaml":
+            edit_yaml_form = invalid_form
+        else:
+            edit_yaml_form = IngressYamlForm(prefix=_ingress_yaml_prefix(item_namespace, name))
+            edit_yaml_form.yaml_content.data = to_yaml(_ingress_manifest_for_yaml(item_namespace, name, spec))
+
+        rows.append(
+            {
+                "name": name,
+                "namespace": item_namespace,
+                "hosts": item["hosts"],
+                "rule_count": item["rule_count"],
+                "tls_secret_names": item["tls_secret_names"],
+                "ingress_class_name": item["ingress_class_name"],
+                "created_at": item["created_at"],
+                "edit_form": edit_form,
+                "edit_yaml_form": edit_yaml_form,
+                "form_supported": form_supported,
+                "default_mode": invalid_kind if row_key == invalid_key else ("form" if form_supported else "yaml"),
+            }
+        )
+
+    return render_template(
+        "deployment_pods/ingresses.html",
+        server=server,
+        rows=rows,
+        namespace_filter=namespace_filter,
+        create_form=create_form,
+        create_yaml_form=create_yaml_form,
+        create_mode=create_mode,
+        error=error,
+        open_modal=open_modal,
+        resource_kinds=RESOURCE_KINDS,
+    )
+
+
+@deployment_pods_bp.route("/<uuid:server_id>/ingresses")
+@permission_required("deployment_pod.view")
+def ingresses(server_id):
+    server = _kube_server_or_404(server_id)
+    namespace_filter = request.args.get("namespace") or ""
+    return _render_ingresses(server, namespace_filter=namespace_filter)
+
+
+@deployment_pods_bp.route("/<uuid:server_id>/ingresses/create", methods=["POST"])
+@permission_required("deployment_ingress.manage")
+def create_ingress(server_id):
+    server = _kube_server_or_404(server_id)
+    create_mode = request.form.get("ingress_mode") or "form"
+
+    form = IngressCreateForm(prefix="create-ingress-form-")
+    form.namespace.choices = [(name, name) for name in _namespace_choices(server)]
+    yaml_form = IngressYamlForm(prefix="create-ingress-yaml-")
+
+    if create_mode == "yaml":
+        if not yaml_form.validate_on_submit():
+            return _render_ingresses(
+                server, create_form=form, create_yaml_form=yaml_form,
+                open_modal="create-ingress-modal", create_mode="yaml",
+            )
+
+        yaml_text = yaml_form.yaml_content.data
+        kind_error = _validate_ingress_yaml_kind(yaml_text)
+        if kind_error:
+            flash(kind_error, "error")
+            return _render_ingresses(
+                server, create_form=form, create_yaml_form=yaml_form,
+                open_modal="create-ingress-modal", create_mode="yaml",
+            )
+
+        return _apply_and_respond(
+            server,
+            "deployment_pods.ingresses",
+            lambda: provider_for_server(server).apply(yaml_text),
+            "deployment_pods.create_ingress",
+            f"Could not create ingress on server '{server.name}'",
+            "CREATE_INGRESS",
+            str(server.id),
+            f"Created ingress from raw YAML on server '{server.name}'",
+            "Ingress created.",
+        )
+
+    if not form.validate_on_submit():
+        return _render_ingresses(
+            server, create_form=form, create_yaml_form=yaml_form,
+            open_modal="create-ingress-modal", create_mode="form",
+        )
+
+    name, namespace = form.name.data, form.namespace.data
+    manifest = ingress_generator.build(
+        {
+            "name": name,
+            "namespace": namespace,
+            "host": form.host.data,
+            "ingress_class_name": form.ingress_class_name.data or None,
+            "tls_secret_name": form.tls_secret_name.data or None,
+            "paths": [
+                {
+                    "path": entry.form.path.data,
+                    "path_type": entry.form.path_type.data,
+                    "backend_service_name": entry.form.backend_service_name.data,
+                    "backend_service_port": entry.form.backend_service_port.data,
+                }
+                for entry in form.paths.entries
+            ],
+        }
+    )
+
+    return _apply_and_respond(
+        server,
+        "deployment_pods.ingresses",
+        lambda: provider_for_server(server).apply(json.dumps(manifest)),
+        "deployment_pods.create_ingress",
+        f"Could not create ingress '{name}' in namespace '{namespace}' on server '{server.name}'",
+        "CREATE_INGRESS",
+        str(server.id),
+        f"Created ingress '{name}' (host: {form.host.data}) in namespace '{namespace}' on server '{server.name}'",
+        f"Ingress '{name}' created.",
+    )
+
+
+@deployment_pods_bp.route("/<uuid:server_id>/ingresses/<namespace>/<name>/edit", methods=["POST"])
+@permission_required("deployment_ingress.manage")
+def edit_ingress(server_id, namespace, name):
+    server = _kube_server_or_404(server_id)
+    edit_mode = request.form.get("ingress_mode") or "form"
+
+    if edit_mode == "yaml":
+        form = IngressYamlForm(prefix=_ingress_yaml_prefix(namespace, name))
+        if not form.validate_on_submit():
+            return _render_ingresses(
+                server, open_modal=f"edit-ingress-modal-{namespace}-{name}",
+                invalid_edit=((namespace, name), "yaml", form),
+            )
+
+        yaml_text = form.yaml_content.data
+        kind_error = _validate_ingress_yaml_kind(yaml_text)
+        if kind_error:
+            flash(kind_error, "error")
+            return _render_ingresses(
+                server, open_modal=f"edit-ingress-modal-{namespace}-{name}",
+                invalid_edit=((namespace, name), "yaml", form),
+            )
+
+        return _apply_and_respond(
+            server,
+            "deployment_pods.ingresses",
+            lambda: provider_for_server(server).apply(yaml_text),
+            "deployment_pods.edit_ingress",
+            f"Could not update ingress '{name}' in namespace '{namespace}' on server '{server.name}'",
+            "UPDATE_INGRESS",
+            str(server.id),
+            f"Updated ingress '{name}' from raw YAML in namespace '{namespace}' on server '{server.name}'",
+            f"Ingress '{name}' updated.",
+        )
+
+    form = IngressEditForm(prefix=_ingress_form_prefix(namespace, name))
+    if not form.validate_on_submit():
+        return _render_ingresses(
+            server, open_modal=f"edit-ingress-modal-{namespace}-{name}",
+            invalid_edit=((namespace, name), "form", form),
+        )
+
+    manifest = ingress_generator.build(
+        {
+            "name": name,
+            "namespace": namespace,
+            "host": form.host.data,
+            "ingress_class_name": form.ingress_class_name.data or None,
+            "tls_secret_name": form.tls_secret_name.data or None,
+            "paths": [
+                {
+                    "path": entry.form.path.data,
+                    "path_type": entry.form.path_type.data,
+                    "backend_service_name": entry.form.backend_service_name.data,
+                    "backend_service_port": entry.form.backend_service_port.data,
+                }
+                for entry in form.paths.entries
+            ],
+        }
+    )
+
+    return _apply_and_respond(
+        server,
+        "deployment_pods.ingresses",
+        lambda: provider_for_server(server).apply(json.dumps(manifest)),
+        "deployment_pods.edit_ingress",
+        f"Could not update ingress '{name}' in namespace '{namespace}' on server '{server.name}'",
+        "UPDATE_INGRESS",
+        str(server.id),
+        f"Updated ingress '{name}' (host: {form.host.data}) in namespace '{namespace}' on server '{server.name}'",
+        f"Ingress '{name}' updated.",
+    )
+
+
+@deployment_pods_bp.route("/<uuid:server_id>/ingresses/<namespace>/<name>/delete", methods=["POST"])
+@permission_required("deployment_ingress.manage")
+def delete_ingress(server_id, namespace, name):
+    server = _kube_server_or_404(server_id)
+
+    return _apply_and_respond(
+        server,
+        "deployment_pods.ingresses",
+        lambda: provider_for_server(server).delete_ingress(namespace, name),
+        "deployment_pods.delete_ingress",
+        f"Could not delete ingress '{name}' in namespace '{namespace}' on server '{server.name}'",
+        "DELETE_INGRESS",
+        str(server.id),
+        f"Deleted ingress '{name}' in namespace '{namespace}' on server '{server.name}'",
+        f"Ingress '{name}' deleted.",
+    )
+
+
+def _netpol_form_prefix(namespace, name):
+    return f"netpol-{namespace}-{name}-form-"
+
+
+def _netpol_yaml_prefix(namespace, name):
+    return f"netpol-{namespace}-{name}-yaml-"
+
+
+def _netpol_manifest_for_yaml(namespace, name, spec, annotations=None):
+    metadata = {"name": name, "namespace": namespace}
+    if annotations:
+        metadata["annotations"] = annotations
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": metadata,
+        "spec": spec,
+    }
+
+
+def _netpol_peer_dict_to_row(peer):
+    if "podSelector" in peer:
+        labels = (peer["podSelector"] or {}).get("matchLabels") or {}
+        return {"peer_type": "pod", "value": ",".join(f"{k}={v}" for k, v in labels.items())}
+    if "namespaceSelector" in peer:
+        labels = (peer["namespaceSelector"] or {}).get("matchLabels") or {}
+        return {"peer_type": "namespace", "value": ",".join(f"{k}={v}" for k, v in labels.items())}
+    if "ipBlock" in peer:
+        return {"peer_type": "ip_block", "value": (peer["ipBlock"] or {}).get("cidr") or ""}
+    return None
+
+
+def _netpol_spec_to_form_fields(spec):
+    """The Form editor only ever shows/edits the *first* ingress rule and
+    the *first* egress rule — see `form_supported` in
+    _render_network_policies, which hides the Form option entirely for a
+    policy that already has more than one ingress or egress rule so this
+    never silently drops data on save.
+    """
+    policy_types = spec.get("policyTypes") or []
+    ingress_rules = spec.get("ingress") or []
+    egress_rules = spec.get("egress") or []
+    ingress_rule = ingress_rules[0] if ingress_rules else {}
+    egress_rule = egress_rules[0] if egress_rules else {}
+    pod_selector = (spec.get("podSelector") or {}).get("matchLabels") or {}
+
+    return {
+        "pod_selector": "\n".join(f"{key}={value}" for key, value in pod_selector.items()),
+        "enable_ingress_rules": "Ingress" in policy_types or bool(ingress_rules),
+        "enable_egress_rules": "Egress" in policy_types or bool(egress_rules),
+        "ingress_peers": [
+            row for row in (_netpol_peer_dict_to_row(peer) for peer in (ingress_rule.get("from") or [])) if row
+        ],
+        "ingress_ports": [
+            {"protocol": port.get("protocol") or "TCP", "port": port.get("port")}
+            for port in (ingress_rule.get("ports") or [])
+        ],
+        "egress_peers": [
+            row for row in (_netpol_peer_dict_to_row(peer) for peer in (egress_rule.get("to") or [])) if row
+        ],
+        "egress_ports": [
+            {"protocol": port.get("protocol") or "TCP", "port": port.get("port")}
+            for port in (egress_rule.get("ports") or [])
+        ],
+    }
+
+
+def _validate_network_policy_yaml_kind(yaml_text):
+    try:
+        parsed = yaml.safe_load(yaml_text)
+    except yaml.YAMLError as exc:
+        return f"Invalid YAML: {exc}"
+    if not isinstance(parsed, dict) or str(parsed.get("kind") or "").lower() != "networkpolicy":
+        return "The YAML must define a single resource with kind: NetworkPolicy."
+    return None
+
+
+def _render_network_policies(
+    server, namespace_filter="", create_form=None, create_yaml_form=None, create_mode="form",
+    open_modal=None, invalid_edit=None,
+):
+    choice_pairs = [(name, name) for name in _namespace_choices(server)]
+
+    if create_form is None:
+        create_form = NetworkPolicyCreateForm(prefix="create-netpol-form-")
+    create_form.namespace.choices = choice_pairs
+    if create_yaml_form is None:
+        create_yaml_form = NetworkPolicyYamlForm(prefix="create-netpol-yaml-")
+
+    items = []
+    error = None
+    try:
+        items = provider_for_server(server).list_network_policies(namespace_filter or None)
+    except Exception as exc:
+        entry = log_error(
+            source="deployment_pods.network_policies",
+            exc=exc,
+            description=(
+                f"Could not list network policies for server '{server.name}' "
+                f"(namespace={namespace_filter or 'all'}): {exc}"
+            ),
+        )
+        error = error_detail_link("Could not list network policies.", entry)
+
+    invalid_key, invalid_kind, invalid_form = invalid_edit or (None, None, None)
+    rows = []
+    for item in items:
+        name = item["name"]
+        item_namespace = item["namespace"]
+        spec = item["spec"]
+        annotations = item.get("annotations") or {}
+        row_key = (item_namespace, name)
+        form_supported = len(spec.get("ingress") or []) <= 1 and len(spec.get("egress") or []) <= 1
+
+        if row_key == invalid_key and invalid_kind == "form":
+            edit_form = invalid_form
+        else:
+            fields = _netpol_spec_to_form_fields(spec)
+            edit_form = NetworkPolicyEditForm(prefix=_netpol_form_prefix(item_namespace, name))
+            edit_form.pod_selector.data = fields["pod_selector"]
+            edit_form.enable_ingress_rules.data = fields["enable_ingress_rules"]
+            edit_form.enable_egress_rules.data = fields["enable_egress_rules"]
+            for peer in fields["ingress_peers"]:
+                edit_form.ingress_peers.append_entry(peer)
+            for port in fields["ingress_ports"]:
+                edit_form.ingress_ports.append_entry(port)
+            for peer in fields["egress_peers"]:
+                edit_form.egress_peers.append_entry(peer)
+            for port in fields["egress_ports"]:
+                edit_form.egress_ports.append_entry(port)
+
+        if row_key == invalid_key and invalid_kind == "yaml":
+            edit_yaml_form = invalid_form
+        else:
+            edit_yaml_form = NetworkPolicyYamlForm(prefix=_netpol_yaml_prefix(item_namespace, name))
+            edit_yaml_form.yaml_content.data = to_yaml(
+                _netpol_manifest_for_yaml(item_namespace, name, spec, annotations=annotations)
+            )
+
+        rows.append(
+            {
+                "name": name,
+                "namespace": item_namespace,
+                "pod_selector": item["pod_selector"],
+                "policy_types": item["policy_types"],
+                "ingress_rule_count": item["ingress_rule_count"],
+                "egress_rule_count": item["egress_rule_count"],
+                "created_at": item["created_at"],
+                "edit_form": edit_form,
+                "edit_yaml_form": edit_yaml_form,
+                "form_supported": form_supported,
+                "default_mode": invalid_kind if row_key == invalid_key else ("form" if form_supported else "yaml"),
+            }
+        )
+
+    return render_template(
+        "deployment_pods/network_policies.html",
+        server=server,
+        rows=rows,
+        namespace_filter=namespace_filter,
+        create_form=create_form,
+        create_yaml_form=create_yaml_form,
+        create_mode=create_mode,
+        error=error,
+        open_modal=open_modal,
+        resource_kinds=RESOURCE_KINDS,
+    )
+
+
+@deployment_pods_bp.route("/<uuid:server_id>/network-policies")
+@permission_required("deployment_pod.view")
+def network_policies(server_id):
+    server = _kube_server_or_404(server_id)
+    namespace_filter = request.args.get("namespace") or ""
+    return _render_network_policies(server, namespace_filter=namespace_filter)
+
+
+def _netpol_fields_from_form(name, namespace, form):
+    return {
+        "name": name,
+        "namespace": namespace,
+        "pod_selector": parse_labels(form.pod_selector.data),
+        "enable_ingress_rules": form.enable_ingress_rules.data,
+        "enable_egress_rules": form.enable_egress_rules.data,
+        "ingress_peers": form.ingress_peers.data,
+        "ingress_ports": form.ingress_ports.data,
+        "egress_peers": form.egress_peers.data,
+        "egress_ports": form.egress_ports.data,
+    }
+
+
+@deployment_pods_bp.route("/<uuid:server_id>/network-policies/create", methods=["POST"])
+@permission_required("deployment_network_policy.manage")
+def create_network_policy(server_id):
+    server = _kube_server_or_404(server_id)
+    create_mode = request.form.get("netpol_mode") or "form"
+
+    form = NetworkPolicyCreateForm(prefix="create-netpol-form-")
+    form.namespace.choices = [(name, name) for name in _namespace_choices(server)]
+    yaml_form = NetworkPolicyYamlForm(prefix="create-netpol-yaml-")
+
+    if create_mode == "yaml":
+        if not yaml_form.validate_on_submit():
+            return _render_network_policies(
+                server, create_form=form, create_yaml_form=yaml_form,
+                open_modal="create-netpol-modal", create_mode="yaml",
+            )
+
+        yaml_text = yaml_form.yaml_content.data
+        kind_error = _validate_network_policy_yaml_kind(yaml_text)
+        if kind_error:
+            flash(kind_error, "error")
+            return _render_network_policies(
+                server, create_form=form, create_yaml_form=yaml_form,
+                open_modal="create-netpol-modal", create_mode="yaml",
+            )
+
+        return _apply_and_respond(
+            server,
+            "deployment_pods.network_policies",
+            lambda: provider_for_server(server).apply(yaml_text),
+            "deployment_pods.create_network_policy",
+            f"Could not create network policy on server '{server.name}'",
+            "CREATE_NETWORK_POLICY",
+            str(server.id),
+            f"Created network policy from raw YAML on server '{server.name}'",
+            "Network policy created.",
+        )
+
+    if not form.validate_on_submit():
+        return _render_network_policies(
+            server, create_form=form, create_yaml_form=yaml_form,
+            open_modal="create-netpol-modal", create_mode="form",
+        )
+    if not (form.enable_ingress_rules.data or form.enable_egress_rules.data):
+        flash("Select at least one traffic direction (Ingress and/or Egress) to restrict.", "error")
+        return _render_network_policies(
+            server, create_form=form, create_yaml_form=yaml_form,
+            open_modal="create-netpol-modal", create_mode="form",
+        )
+
+    name, namespace = form.name.data, form.namespace.data
+    manifest = network_policy_generator.build(_netpol_fields_from_form(name, namespace, form))
+
+    return _apply_and_respond(
+        server,
+        "deployment_pods.network_policies",
+        lambda: provider_for_server(server).apply(json.dumps(manifest)),
+        "deployment_pods.create_network_policy",
+        f"Could not create network policy '{name}' in namespace '{namespace}' on server '{server.name}'",
+        "CREATE_NETWORK_POLICY",
+        str(server.id),
+        f"Created network policy '{name}' in namespace '{namespace}' on server '{server.name}'",
+        f"Network policy '{name}' created.",
+    )
+
+
+@deployment_pods_bp.route("/<uuid:server_id>/network-policies/<namespace>/<name>/edit", methods=["POST"])
+@permission_required("deployment_network_policy.manage")
+def edit_network_policy(server_id, namespace, name):
+    server = _kube_server_or_404(server_id)
+    edit_mode = request.form.get("netpol_mode") or "form"
+
+    if edit_mode == "yaml":
+        form = NetworkPolicyYamlForm(prefix=_netpol_yaml_prefix(namespace, name))
+        if not form.validate_on_submit():
+            return _render_network_policies(
+                server, open_modal=f"edit-netpol-modal-{namespace}-{name}",
+                invalid_edit=((namespace, name), "yaml", form),
+            )
+
+        yaml_text = form.yaml_content.data
+        kind_error = _validate_network_policy_yaml_kind(yaml_text)
+        if kind_error:
+            flash(kind_error, "error")
+            return _render_network_policies(
+                server, open_modal=f"edit-netpol-modal-{namespace}-{name}",
+                invalid_edit=((namespace, name), "yaml", form),
+            )
+
+        return _apply_and_respond(
+            server,
+            "deployment_pods.network_policies",
+            lambda: provider_for_server(server).apply(yaml_text),
+            "deployment_pods.edit_network_policy",
+            f"Could not update network policy '{name}' in namespace '{namespace}' on server '{server.name}'",
+            "UPDATE_NETWORK_POLICY",
+            str(server.id),
+            f"Updated network policy '{name}' from raw YAML in namespace '{namespace}' on server '{server.name}'",
+            f"Network policy '{name}' updated.",
+        )
+
+    form = NetworkPolicyEditForm(prefix=_netpol_form_prefix(namespace, name))
+    if not form.validate_on_submit():
+        return _render_network_policies(
+            server, open_modal=f"edit-netpol-modal-{namespace}-{name}",
+            invalid_edit=((namespace, name), "form", form),
+        )
+    if not (form.enable_ingress_rules.data or form.enable_egress_rules.data):
+        flash("Select at least one traffic direction (Ingress and/or Egress) to restrict.", "error")
+        return _render_network_policies(
+            server, open_modal=f"edit-netpol-modal-{namespace}-{name}",
+            invalid_edit=((namespace, name), "form", form),
+        )
+
+    manifest = network_policy_generator.build(_netpol_fields_from_form(name, namespace, form))
+
+    return _apply_and_respond(
+        server,
+        "deployment_pods.network_policies",
+        lambda: provider_for_server(server).apply(json.dumps(manifest)),
+        "deployment_pods.edit_network_policy",
+        f"Could not update network policy '{name}' in namespace '{namespace}' on server '{server.name}'",
+        "UPDATE_NETWORK_POLICY",
+        str(server.id),
+        f"Updated network policy '{name}' in namespace '{namespace}' on server '{server.name}'",
+        f"Network policy '{name}' updated.",
+    )
+
+
+@deployment_pods_bp.route("/<uuid:server_id>/network-policies/<namespace>/<name>/delete", methods=["POST"])
+@permission_required("deployment_network_policy.manage")
+def delete_network_policy(server_id, namespace, name):
+    server = _kube_server_or_404(server_id)
+
+    return _apply_and_respond(
+        server,
+        "deployment_pods.network_policies",
+        lambda: provider_for_server(server).delete_network_policy(namespace, name),
+        "deployment_pods.delete_network_policy",
+        f"Could not delete network policy '{name}' in namespace '{namespace}' on server '{server.name}'",
+        "DELETE_NETWORK_POLICY",
+        str(server.id),
+        f"Deleted network policy '{name}' in namespace '{namespace}' on server '{server.name}'",
+        f"Network policy '{name}' deleted.",
     )
 
 

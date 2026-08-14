@@ -73,6 +73,11 @@ block content %}
           >
             {{ 'Active' if user.is_active else 'Inactive' }}
           </span>
+          {% if user.failed_login_attempts >= max_login_attempts %}
+          <span class="badge badge-sm badge-warning" title="{{ user.failed_login_attempts }} failed attempts">
+            Locked
+          </span>
+          {% endif %}
         </td>
         <td>
           {{ user.last_login_at | localtime("%Y-%m-%d %H:%M") if user.last_login_at
@@ -95,6 +100,15 @@ block content %}
               {{ 'Deactivate' if user.is_active else 'Activate' }}
             </button>
           </form>
+          {% if user.failed_login_attempts >= max_login_attempts and current_user.has_permission("user.unlock") %}
+          <form
+            method="post"
+            action="{{ url_for('users.unlock_user', user_id=user.id) }}"
+          >
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+            <button type="submit" class="btn btn-sm btn-info">Unlock</button>
+          </form>
+          {% endif %}
           {% if user.id != current_user.id %}
           <button
             type="button"
@@ -156,6 +170,18 @@ block content %}
         {% endfor %}
       </div>
 
+      <div>
+        {{ create_form.telegram_chat_id.label(class="label text-sm") }}
+        {{ create_form.telegram_chat_id(class="input input-bordered input-sm w-full", placeholder="e.g. 123456789") }}
+        <p class="text-xs text-base-content/60">
+          For account-security notifications — the user finds their own chat ID by messaging the configured
+          bot and checking a helper like @userinfobot.
+        </p>
+        {% for error in create_form.telegram_chat_id.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
       <div class="modal-action">
         <button
           type="button"
@@ -210,6 +236,14 @@ block content %}
         form.new_password(class="input input-bordered input-sm w-full") }}
         <p class="text-sm opacity-70">Leave blank to keep the current password.</p>
         {% for error in form.new_password.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div>
+        {{ form.telegram_chat_id.label(class="label text-sm") }}
+        {{ form.telegram_chat_id(class="input input-bordered input-sm w-full", placeholder="e.g. 123456789") }}
+        {% for error in form.telegram_chat_id.errors %}
         <p class="text-error text-sm">{{ error }}</p>
         {% endfor %}
       </div>

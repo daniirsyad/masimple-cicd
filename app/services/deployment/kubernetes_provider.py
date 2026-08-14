@@ -484,6 +484,107 @@ class KubernetesProvider(DeploymentProvider):
             )
         return DeployResult(success=True, log=log)
 
+    def list_ingresses(self, namespace=None):
+        """[{name, namespace, hosts, rule_count, tls_secret_names,
+        ingress_class_name, spec, created_at}, ...] — like list_configmaps,
+        `spec` here is the real, full rule/backend/TLS structure (Ingress
+        data isn't sensitive), used both for the summary table and to
+        pre-fill the edit form (Form or raw-YAML mode) in one call, no
+        separate per-row kubectl round-trip needed.
+        """
+        args = ["get", "ingress", "-o", "json"]
+        args += ["-n", namespace] if namespace else ["--all-namespaces"]
+
+        try:
+            process = self._run_kubectl(args, timeout=POD_LIST_TIMEOUT_SECONDS)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"Could not list ingresses: {exc}") from None
+        if process.returncode != 0:
+            raise RuntimeError(process.stderr.strip() or "kubectl get ingress failed.")
+
+        ingresses = []
+        for item in json.loads(process.stdout).get("items", []):
+            metadata = item.get("metadata", {})
+            spec = item.get("spec", {}) or {}
+            rules = spec.get("rules", []) or []
+            ingresses.append(
+                {
+                    "name": metadata.get("name"),
+                    "namespace": metadata.get("namespace"),
+                    "created_at": metadata.get("creationTimestamp"),
+                    "hosts": [rule.get("host") or "*" for rule in rules],
+                    "rule_count": len(rules),
+                    "tls_secret_names": [
+                        tls.get("secretName") for tls in (spec.get("tls") or []) if tls.get("secretName")
+                    ],
+                    "ingress_class_name": spec.get("ingressClassName"),
+                    "spec": spec,
+                }
+            )
+        return ingresses
+
+    def delete_ingress(self, namespace, name):
+        try:
+            process = self._run_kubectl(["delete", "ingress", name, "-n", namespace, "--ignore-not-found=true"])
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return DeployResult(success=False, log="", error=str(exc))
+
+        log = process.stdout + process.stderr
+        if process.returncode != 0:
+            return DeployResult(
+                success=False, log=log, error=f"kubectl delete ingress exited with code {process.returncode}"
+            )
+        return DeployResult(success=True, log=log)
+
+    def list_network_policies(self, namespace=None):
+        """[{name, namespace, pod_selector, policy_types, ingress_rule_count,
+        egress_rule_count, spec, annotations, created_at}, ...] — same
+        one-call-powers-list-and-edit-prefill shape as list_ingresses.
+        """
+        args = ["get", "networkpolicies", "-o", "json"]
+        args += ["-n", namespace] if namespace else ["--all-namespaces"]
+
+        try:
+            process = self._run_kubectl(args, timeout=POD_LIST_TIMEOUT_SECONDS)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"Could not list network policies: {exc}") from None
+        if process.returncode != 0:
+            raise RuntimeError(process.stderr.strip() or "kubectl get networkpolicies failed.")
+
+        policies = []
+        for item in json.loads(process.stdout).get("items", []):
+            metadata = item.get("metadata", {})
+            spec = item.get("spec", {}) or {}
+            policies.append(
+                {
+                    "name": metadata.get("name"),
+                    "namespace": metadata.get("namespace"),
+                    "created_at": metadata.get("creationTimestamp"),
+                    "pod_selector": (spec.get("podSelector") or {}).get("matchLabels") or {},
+                    "policy_types": spec.get("policyTypes") or [],
+                    "ingress_rule_count": len(spec.get("ingress") or []),
+                    "egress_rule_count": len(spec.get("egress") or []),
+                    "spec": spec,
+                    "annotations": metadata.get("annotations") or {},
+                }
+            )
+        return policies
+
+    def delete_network_policy(self, namespace, name):
+        try:
+            process = self._run_kubectl(
+                ["delete", "networkpolicy", name, "-n", namespace, "--ignore-not-found=true"]
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return DeployResult(success=False, log="", error=str(exc))
+
+        log = process.stdout + process.stderr
+        if process.returncode != 0:
+            return DeployResult(
+                success=False, log=log, error=f"kubectl delete networkpolicy exited with code {process.returncode}"
+            )
+        return DeployResult(success=True, log=log)
+
     def restart_deployment(self, namespace, name):
         """A true `kubectl rollout restart` against one specific, already-
         named Deployment object — the zero-downtime rolling recycle that

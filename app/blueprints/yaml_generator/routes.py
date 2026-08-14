@@ -1,8 +1,15 @@
 from flask import abort, jsonify, redirect, render_template, request, session, url_for
 
 from app.blueprints.yaml_generator import yaml_generator_bp
-from app.blueprints.yaml_generator.forms import ConfigMapForm, DeploymentForm, IngressForm, SecretForm, ServiceForm
-from app.services.yaml_generator import configmap, deployment, ingress, secret, service
+from app.blueprints.yaml_generator.forms import (
+    ConfigMapForm,
+    DeploymentForm,
+    IngressForm,
+    NetworkPolicyForm,
+    SecretForm,
+    ServiceForm,
+)
+from app.services.yaml_generator import configmap, deployment, ingress, network_policy, secret, service
 from app.services.yaml_generator.render import to_yaml
 from app.utils.decorators import permission_required
 
@@ -19,6 +26,7 @@ _GENERATORS = {
     "configmap": (ConfigMapForm, configmap.build),
     "secret": (SecretForm, secret.build),
     "ingress": (IngressForm, ingress.build),
+    "network_policy": (NetworkPolicyForm, network_policy.build),
 }
 
 KIND_LABELS = [
@@ -27,6 +35,7 @@ KIND_LABELS = [
     ("configmap", "ConfigMap"),
     ("secret", "Secret"),
     ("ingress", "Ingress"),
+    ("network_policy", "NetworkPolicy"),
 ]
 
 

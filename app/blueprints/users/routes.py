@@ -10,6 +10,7 @@ from app.extensions import db
 from app.models import ActivityLog, Role, User
 from app.utils.decorators import permission_required
 from app.utils.logger import log_activity
+from app.utils.system_config import get_system_config
 
 
 def _role_choices():
@@ -66,6 +67,7 @@ def _render_users_list(create_form=None, open_modal=None, invalid_edit=None):
         create_form=create_form,
         edit_forms=edit_forms,
         open_modal=open_modal,
+        max_login_attempts=get_system_config().max_login_attempts,
     )
 
 
@@ -87,6 +89,7 @@ def create_user():
             password_hash=generate_password_hash(form.password.data),
             full_name=form.full_name.data or None,
             role_id=uuid.UUID(form.role_id.data),
+            telegram_chat_id=form.telegram_chat_id.data or None,
             created_by=current_user.id,
         )
         db.session.add(user)
@@ -116,6 +119,7 @@ def edit_user(user_id):
         user.full_name = form.full_name.data or None
         user.role_id = uuid.UUID(form.role_id.data)
         user.is_active = form.is_active.data
+        user.telegram_chat_id = form.telegram_chat_id.data or None
 
         if form.new_password.data:
             user.password_hash = generate_password_hash(form.new_password.data)
@@ -151,6 +155,30 @@ def toggle_active(user_id):
     )
 
     flash(f"User '{user.username}' is now {'active' if user.is_active else 'inactive'}.", "success")
+    return redirect(url_for("users.list_users"))
+
+
+@users_bp.route("/<uuid:user_id>/unlock", methods=["POST"])
+@permission_required("user.unlock")
+def unlock_user(user_id):
+    """Clears the failed-login lockout (see User.failed_login_attempts /
+    app/blueprints/auth/routes.py's login()) — the only other way an
+    account gets unlocked is the owner completing a Telegram password
+    reset themselves.
+    """
+    user = User.query.get_or_404(user_id)
+    user.failed_login_attempts = 0
+    user.locked_at = None
+    db.session.commit()
+
+    log_activity(
+        action="UNLOCK_USER",
+        target_type="user",
+        target_id=str(user.id),
+        description=f"Unlocked user '{user.username}'",
+    )
+
+    flash(f"User '{user.username}' unlocked.", "success")
     return redirect(url_for("users.list_users"))
 
 

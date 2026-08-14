@@ -28,17 +28,31 @@
     ConfigMaps
   </a>
   <a
+    href="{{ url_for('deployment_pods.ingresses', server_id=server.id) }}"
+    class="tab {{ 'tab-active' if active_kind == 'ingresses' else '' }}"
+  >
+    Ingress
+  </a>
+  <a
+    href="{{ url_for('deployment_pods.network_policies', server_id=server.id) }}"
+    class="tab {{ 'tab-active' if active_kind == 'network_policies' else '' }}"
+  >
+    Network Policies
+  </a>
+  <a
     href="{{ url_for('deployment_pods.workloads', server_id=server.id) }}"
     class="tab {{ 'tab-active' if active_kind == 'workloads' else '' }}"
   >
     Workloads
   </a>
   {% for slug, config in (resource_kinds or {}).items() %}
+  {% if slug != 'ingresses' %}
   <a
     href="{{ url_for('deployment_pods.list_resources', server_id=server.id, kind=slug) }}"
     class="tab {{ 'tab-active' if active_kind == slug else '' }}"
   >
     {{ config.label }}
   </a>
+  {% endif %}
   {% endfor %}
 </div>

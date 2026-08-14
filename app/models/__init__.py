@@ -1,4 +1,5 @@
 from app.models.user import User
+from app.models.password_reset_token import PasswordResetToken
 from app.models.role import Role, role_permissions
 from app.models.permission import Permission
 from app.models.menu import Menu
@@ -34,6 +35,7 @@ from app.models.workflow_step_run import WorkflowStepRun
 
 __all__ = [
     "User",
+    "PasswordResetToken",
     "Role",
     "role_permissions",
     "Permission",

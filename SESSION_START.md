@@ -19,230 +19,152 @@ First, read these files in full before doing anything else:
    a bug that was already found and fixed a certain way, a design tradeoff).
    Not required reading for routine work — `APP_SUMMARY.md` plus this file
    should already be enough context to start. **Note: not yet updated past
-   Part 9** — everything in the "Current state" section below (the reliability
-   fixes, the six new providers, the YAML editor fix, the YAML Generator
-   page, and the "auto-fill build metadata from git commits" feature)
-   postdates it and has no narrative write-up there yet.
+   Part 9** — everything in the "Current state" section below postdates it
+   and has no narrative write-up there yet.
 
 Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **733 tests passing** (as of the last full run).
-- **Everything is committed and pushed to `origin/main`**, most recently as
-  three batches of work:
-  1. **This same commit** — a large batch of previously-uncommitted work
-     spanning several independent features:
-     - **Dockerfile management** (`/dockerfiles`, `dockerfile.manage`): a
-       new `Dockerfile` model (name + raw content) a Builder can build from
-       instead of a path inside its own repo. `Builder.dockerfile_source`
-       (`"repo"`/`"managed"`) + `managed_dockerfile_id` pick which; the
-       worker writes the managed content out to a fixed filename inside the
-       repo clone (`.masimple_cicd_managed.Dockerfile`, rewritten fresh
-       before every build, never committed to git) right before handing the
-       build context to the build engine. Can't delete a Dockerfile still
-       referenced by any Builder.
-     - **Version-to-Version linking** (`/versions`' new "Linked Versions"
-       checkbox picker): a **one-directional** many-to-many self-link on
-       `Version` (`version_version_links` table — distinct from the
-       existing batch-to-batch `VersionLink` table) controlling which
-       *other* Versions' batches a Version's own Documentation "Linked
-       Batches" picker offers, beyond same-Version batches (always
-       offered). Linking A → B doesn't grant the reverse; that only exists
-       if B's own picker is separately edited to include A.
-     - **Commit log limit** (`SystemConfig.commit_log_limit`, editable on
-       `/config`, default 20): caps how many commits
-       `GitProvider.get_commits()`/`get_commit_messages()` reads when
-       there's no prior build to diff against (first build on a branch, or
-       a force-push/rebase made the prior commit unreachable) — threaded
-       through as a `limit` param on both `GitProvider` methods, read fresh
-       on every call, no restart needed.
-     - **Home page + sidebar redesign**: dashboard stat cards each get a
-       small Feather-style icon; the sidebar gained a logo/header, a
-       scrollable nav area, a left-border active-item highlight, and a
-       reordered menu tree — Workflows moved up near the top as the
-       cross-module orchestration layer; Image Builder's children reordered
-       into a logical setup-to-usage flow (GitHub → Registries → Versions →
-       Dockerfiles → Builders → Images → Documentation → AI Settings);
-       Dockerfiles/YAML Generator/Workflows top-level entries gained icons.
-     - **Bug fix**: the Workflow detail page's Run/Delete Workflow/Delete
-       Step `<form>`s were missing a `csrf_token` hidden input entirely —
-       never caught by the test suite since `TestingConfig` disables CSRF,
-       would have 400'd in production where it's enabled. Fixed.
-     - **AI-assist description simplification**: generating an AI draft
-       (Documentation page) now writes straight into the real Description
-       field instead of showing a separate "AI Draft" preview box with its
-       own "Use this draft" button — still fully editable there before
-       saving, just one fewer click/element (`app/static/js/ai-generate.js`).
-     - **Filter-card UI consistency**: `/images`, `/logs`, `/logs/errors`,
-       `/users`, `/versions`, `/deployment-runs` all restructured to the
-       same card + collapsible-filters pattern the Documentation page
-       established.
-     - **Documentation page's Object filter — rebuilt from scratch three
-       times over the course of this work**, worth knowing the discarded
-       paths in case this resurfaces: a native `<select multiple size="4">`
-       broke the filter bar's row alignment → a hand-rolled pills widget
-       grew too wide with several selections picked → **Choices.js was
-       tried and fully reverted** (uninstalled, vendor files deleted, CSS
-       reverted) after explicit user feedback rejecting the
-       third-party-library approach entirely → **Select2 was then tried**
-       (vendored jQuery + Select2 locally, fully restyled with daisyUI
-       tokens) and **also fully reverted** per a later explicit "back to
-       previous (not using select2)" request. What's actually in place now
-       is the hand-rolled search+pills widget, given its own full-width row
-       inside a daisyUI `collapse` — the structural fix that actually
-       solved the width problem, independent of widget technology. Two real
-       interaction bugs surfaced and were fixed along the way, worth
-       remembering if a similar widget is ever added elsewhere:
-       - The dropdown was clipped by the `.collapse`'s own `overflow:
-         hidden` (needed for its own open/close grid-animation) — fixed by
-         portaling the dropdown to `document.body` with `position: fixed`,
-         positioned from `getBoundingClientRect()`, since `overflow: hidden`
-         clips *any* descendant regardless of its `position` — only moving
-         the element out of that ancestor's DOM subtree actually escapes it.
-       - Picking a second item required clicking out and back in first —
-         caused by the outside-click listener reading `event.target`
-         *after* the click handler had already replaced that node via
-         `innerHTML` (so a later `.contains()` check against the
-         now-detached old node always failed); fixed with
-         `event.composedPath()`, which is captured at dispatch time before
-         any DOM mutation.
-       Also added Up/Down-arrow-to-highlight + Enter-to-select keyboard
-       navigation, and applied both fixes (dropdown-clipping escape +
-       composedPath-safe outside-click, plus the arrow-key nav) to the
-       **Builders "Build Selected" modal's** own Object(s) picker
-       (`setupMultiObjectPicker` in `builders.js`) for parity — there the
-       clipping culprit is the modal's `.modal-box` (`overflow-y: auto`)
-       plus the `<dialog>` itself (`overflow-y: hidden`), and the portal
-       target is the `<dialog>` element itself rather than `document.body`
-       (a `document.body` portal would render *behind* an open `<dialog>`,
-       since a shown dialog is promoted to the browser's top layer).
-     - **⚠️ None of the above has been verified in a live browser** — same
+- **829 tests passing** (as of the last full run).
+- **Everything is committed and pushed to `origin/main`**, most recently as:
+  1. **This same commit** — Kubernetes Ingress/NetworkPolicy management, login
+     security (lockout), and a Telegram security-notification integration,
+     all from one session's work:
+     - **Ingress CRUD** (`/deployment-pods`'s new "Ingress" tab,
+       `deployment_ingress.manage` permission): add/edit/delete, with two
+       editing modes toggled per create/edit dialog — **Form** (host,
+       optional ingress class, optional TLS secret name, one-or-more paths
+       each with path/pathType/backend service+port — add/remove rows) and
+       **raw YAML** (CodeMirror, same shared editor module as Deployment
+       Manifests/YAML Generator; server-side confirms `kind: Ingress`
+       before applying, so this box can't be used to slip in an arbitrary
+       manifest under a narrower permission). An Ingress that already has
+       more than one rule or TLS entry forces YAML-only editing — the Form
+       only ever shows/edits the first rule, so this stops it from
+       silently dropping the others on save. Describe (kubectl
+       describe — events/load-balancer address) is kept via the existing
+       generic `RESOURCE_KINDS`/`describe_resource()` mechanism rather than
+       a new dedicated route. The dict-building logic
+       (`app/services/yaml_generator/ingress.py`'s `build()`) is shared
+       with `/yaml-generator`, extended to accept either a single
+       path/backend (that page's existing shape, untouched) or a `paths`
+       list (the CRUD feature's one-host/multiple-paths shape) — one
+       source of truth for what an Ingress manifest dict looks like.
+       - **An "Allowed Source IPs/CIDRs" field (nginx-ingress
+         `whitelist-source-range` annotation) was added, then fully
+         reverted** a turn later per explicit request — no trace of it
+         remains in code or tests. Worth knowing in case this resurfaces;
+         nginx-ingress has no equivalent block-list annotation, only
+         allow-list, and a NetworkPolicy (see below) is a more portable
+         alternative for IP-based restriction.
+     - **NetworkPolicy CRUD** (`/deployment-pods`'s new "Network Policies"
+       tab, `deployment_network_policy.manage` permission): same
+       Form/raw-YAML dual-mode pattern as Ingress. Form mode: pod selector
+       (which pods the policy applies to, blank = all), independent
+       Ingress/Egress checkboxes each revealing their own peer list (Pod
+       Selector labels / Namespace Selector labels / IP Block CIDR —
+       add/remove rows) and port list (protocol+port). Same multi-rule
+       safety guard as Ingress (more than one ingress or egress rule
+       forces YAML-only). New shared builder
+       `app/services/yaml_generator/network_policy.py`, also added to
+       `/yaml-generator`'s resource-kind dropdown. `KubernetesProvider`
+       gained `list_ingresses`/`delete_ingress`/`list_network_policies`/
+       `delete_network_policy` (create/update reuse the existing
+       `apply()` — no new provider methods needed there).
+     - **Login lockout**: `SystemConfig.max_login_attempts` (new
+       "Security" section on `/config`, default 5) + `User.
+       failed_login_attempts`/`locked_at`. An account locks after that
+       many *consecutive* wrong-password attempts — a locked account is
+       rejected even if the next attempt's password is actually correct
+       (checked before the password itself), and the login page shows the
+       same generic "Invalid username or password" either way, so the
+       attempt that crosses the threshold doesn't reveal anything extra to
+       whoever's typing. Only clearable by a new `user.unlock` permission
+       holder (Locked badge + Unlock button on `/users`) or the account
+       owner completing a Telegram password reset (see below) — no
+       auto-expiry.
+     - **Telegram integration** (`app/services/telegram/` —
+       `TelegramNotifier.send_message()` wraps the Bot API's
+       `sendMessage`, `notify_user()`/`notify_security_contact()` are
+       best-effort wrappers that never raise, only log-and-return-False on
+       any failure). `SystemConfig.telegram_notifications_enabled` +
+       `encrypted_telegram_bot_token` (Fernet, same convention as every
+       other stored credential) live in a new "Telegram Integration"
+       section on `/config`. **Deliberate design, reached after an explicit
+       follow-up correction**: wrong-password/lockout/login security
+       alerts do **not** go to the affected account's own Telegram chat —
+       they all go to the single user configured as `SystemConfig.
+       security_notification_user_id` (a dropdown of every user, also on
+       `/config`), so one security contact watches every account rather
+       than each user getting pinged about their own activity. The
+       forgot-password flow is the one exception and is *not* routed
+       through the security contact: a reset link can only be acted on by
+       the account owner, so it always goes straight to that user's own
+       `User.telegram_chat_id` (admin-set on `/users`, along with the
+       security contact's own chat ID if they're the one configured).
+       - **Forgot/reset password**: `/forgot-password` (username →
+         Telegram link, only if that account has a chat ID configured) →
+         `/reset-password/<token>`. New `PasswordResetToken` model — only
+         a sha256 hash of the token is ever stored, 15-minute expiry,
+         single-use. The flash message is identical whether or not the
+         submitted username/Telegram setup actually exists, so this can't
+         be used to enumerate valid usernames. A successful reset also
+         clears any existing lockout (same trust level as a `user.unlock`
+         holder resetting it by hand).
+     - **Self-service `/account` page** (new `account` blueprint, no
+       permission gate beyond being logged in; linked from the navbar's
+       user dropdown as "My Account"): lets any user edit their own Full
+       Name, Telegram Chat ID, and password (current password required to
+       set a new one). Username/role/active status are deliberately absent
+       from this form — those stay admin-only via `/users`.
+     - New migrations (already applied to the dev DB via
+       `flask db upgrade`): `5c9ba2cb302e` (login lockout columns,
+       Telegram columns, `password_reset_tokens` table — the three
+       `NOT NULL` columns got `server_default` added by hand after
+       autogenerate, same as every prior batch that added a NOT NULL
+       column to a table with existing rows), `168112da5b63`
+       (`security_notification_user_id`). Chain is now `2a347cde1361` →
+       `5c9ba2cb302e` → `168112da5b63` (head).
+     - New permissions (seeded, applied to the dev DB, granted to Super
+       Admin): `deployment_ingress.manage`, `deployment_network_policy.
+       manage`, `user.unlock`.
+     - **⚠️ None of this has been verified in a live browser** — same
        sandbox constraint as everything else in this file (no working
-       headless Chromium here), only exercised via the Flask test client
-       and, for the JS-only interaction fixes, manual reasoning about event
-       ordering/CSS containment. Worth an especially careful manual pass on
-       `/documentation` and the Builders build-trigger modal specifically,
-       given how many rounds of interaction bugs those went through.
-     - New migrations (all already applied to the dev DB via
-       `flask db upgrade`): `039bae7c2bbf` (Dockerfile model + Builder
-       fields), `4bec0353b1f9` (Version-to-Version linking), `2a347cde1361`
-       (commit log limit) — chain is now `8467dc0ac6b0` → `039bae7c2bbf` →
-       `4bec0353b1f9` → `2a347cde1361` (head).
-     - The `dockerfile.manage` permission and a "Dockerfiles" `Menu` row are
-       already applied to the dev DB and confirmed clean (no duplicate
-       labels) as of this update.
-  2. **`6e8eede`** — a YAML-editor cursor-position bug fix (shared
-     `app/static/js/yaml_editor.js`, replacing two independently duplicated
-     CodeMirror-init blocks in `deployment_manifests.js`/
-     `deployment_servers.js`) plus a new `/yaml-generator` page/blueprint
-     (`app/blueprints/yaml_generator/`, `app/services/yaml_generator/`) that
-     builds Deployment/Service/ConfigMap/Secret/Ingress YAML from form
-     fields with a live preview, Copy/Download, and a "Save as Manifest"
-     hand-off into the existing Deployment Manifest creation flow.
-     `requirements.txt` gained `boto3` (ECR) and `PyYAML` (YAML Generator, a
-     deliberate exception to this codebase's usual dict→`json.dumps()`
-     anti-PyYAML convention — see the code comment in
-     `app/services/yaml_generator/render.py` for why). The `yaml_generator.view`
-     permission and a "YAML Generator" `Menu` row are already applied to the
-     dev DB (permission via `seeds/seed_admin.py`, safe/idempotent; the menu
-     row via a direct `Menu(...)` insert, **not** `seeds/seed_menu.py` — see
-     the warning below).
-     - **⚠️ The cursor-bug fix itself is still not confirmed working in a
-       live browser.** It went through two prior live round-trips with the
-       user before this final version was applied (see git history /
-       `AI_CONTEXT.md` Part 9 if this resurfaces): attempt 1 (disable
-       `lineWrapping` + deferred `cm.refresh()`) didn't fix it; attempt 2
-       (a `ResizeObserver`-triggered refresh + scroll nudge + **resize
-       nudge**) briefly broke the editor entirely via a feedback loop; the
-       version now committed removed the resize nudge, keeping only
-       `cm.refresh()` + a scroll-position nudge on the same
-       `ResizeObserver` trigger. Confirm with the user before treating this
-       as fixed.
-  3. **`41f0777`** — build-trigger inputs (Bump Type, Object(s), Change
-     Type, Additional Description) can now be auto-filled from git commit
-     history instead of typed in from scratch every time:
-     - `ImageBuild.commit_sha` + a new `ImageBuildCommit` table record, per
-       build, the commit it ran against and every commit since that
-       (builder, branch) pair's last successful build
-       (`worker._record_commit_history` — best-effort, a git-log failure
-       never fails the build itself).
-     - `Object` is now a first-class extensible lookup table (like
-       `ChangeType`/`VersionType`), many-to-many with both `BuildBatch` and
-       `VersionDocumentation`, replacing the old single free-text `object`
-       string column on both (migration `8467dc0ac6b0` backfilled the 6
-       pre-existing free-text values into real rows). A batch/documentation
-       entry can reference several Objects now — picked via a
-       search-and-add-new multi-picker (pills) on both the Builder trigger
-       modal and the Documentation page, backed by
-       `Object.resolve(object_ids, new_names)` (get-or-create, shared by
-       every call site — reuse this rather than writing another
-       get-or-create for Object).
-     - `app/services/build/prefill.py`'s `compute_build_prefill()` is the
-       one shared service behind every surface below: syncs the relevant
-       repo(s), reads commits since last build, guesses Bump Type via
-       deterministic Conventional Commits parsing
-       (`app/services/build/bump_heuristic.py`), and asks the configured AI
-       provider for an Object/Change Type/Description draft
-       (`app/services/ai/build_prefill.py` — its own small structured-JSON
-       prompt, not the `PromptTemplate` singleton, which is scoped to the
-       single free-text `ai_description` field). Reuse `compute_build_prefill()`
-       for any future "auto-fill from git" surface rather than
-       reimplementing this.
-       - **Image Builder** (`/builders`): explicit "Preview from Git"
-         button in the trigger modal (`POST /builders/build/preview`).
-       - **Workflow** (`/workflows/<id>`): the Add Build Step modal's
-         group/builder checkboxes auto-fire the same prefill instead
-         (debounced, no button — `POST /workflows/<id>/steps/build/preview`),
-         since the target selection happens inside that modal rather than
-         beforehand. **Deliberate, not-yet-resolved scope decision**:
-         `WorkflowStep.bump_type`/`object`/`change_type_id`/
-         `additional_description` are still captured once at authoring
-         time and replayed unchanged on every run — the same
-         already-documented behavior as before this feature, not changed
-         by it. They are **not** re-resolved against fresh commits each
-         time the workflow actually runs, so a workflow that runs
-         repeatedly keeps reusing whatever the prefill produced when the
-         step was first added. Moving this to true run-time resolution
-         (the orchestrator calling `compute_build_prefill()` itself right
-         before enqueueing, instead of `WorkflowStep`'s frozen columns)
-         would be a real behavior change to a previously-documented design
-         decision — flagged for the user, not decided unilaterally. Revisit
-         if this comes up again.
-     - **Documentation page** (`/documentation/<batch_id>`): each image's
-       row in "Images in this Batch" now shows a `from → to` short-SHA
-       commit range (from = the previous successful build's commit for
-       that builder/branch *as of when this build ran*, not "current
-       latest") with a commit-count badge, opening a modal with the full
-       per-commit SHA/author/message/date list.
-     - Also fixes a bug where reopening the Image Builder trigger modal for
-       a *different* builder/group kept showing stale Bump
-       Type/Object/Change Type/Description/preview-status left over from
-       whatever was last previewed — `openBuildModal()` now resets the form
-       on every open.
-     - **⚠️ None of this new UI has been verified in a live browser** — same
-       sandbox constraint as the YAML editor fix above, only exercised via
-       the Flask test client so far.
-     - New migrations: `526c1cd02a77` (commit tracking), `8467dc0ac6b0`
-       (Object lookup table + m2m) — both already applied to the dev DB.
-- **Migration head is `2a347cde1361`** — already applied to the dev DB via
+       headless Chromium here): the Ingress/NetworkPolicy Form↔YAML
+       toggles and their several independent add/remove-row widgets, the
+       new `/config` Security/Telegram sections, the actual lockout UX,
+       Telegram message delivery/formatting (only exercised against a
+       mocked `requests.post`, never a real bot), and the `/account` page.
+     - **Explicitly not built** (told "not for now"): using this same
+       Telegram integration (plus a future Discord one) to *trigger*
+       Workflow runs, not just notify about login/security events. The
+       bot-token/chat-ID plumbing here is meant to be reused for that
+       later, but no command-listening/webhook surface exists yet.
+  2. **`ec9d727`** — Dockerfile management (`/dockerfiles`, a `Builder` can
+     build from a managed Dockerfile instead of a path in its own repo),
+     one-directional Version-to-Version linking (widens a Version's
+     "Linked Batches" picker on Documentation), a configurable commit log
+     limit (`SystemConfig.commit_log_limit`), a home page/sidebar redesign,
+     and a rebuilt Documentation-page Object filter/picker (several rounds
+     of dropdown-clipping and re-render interaction-bug fixes along the
+     way — see this commit or `AI_CONTEXT.md` Part 9 if a similar
+     dropdown-in-a-`.collapse`-or-`<dialog>` widget is added elsewhere).
+  3. **`6e8eede`** — a shared `app/static/js/yaml_editor.js` CodeMirror
+     module (fixing a cursor-position bug that existed as two duplicated
+     init blocks) plus the original `/yaml-generator` page (Deployment/
+     Service/ConfigMap/Secret/Ingress — Ingress and the shared editor are
+     both now extended further by this session's work above).
+  Anything older is covered by `git log`/`AI_CONTEXT.md`, not repeated here.
+- **Migration head is `168112da5b63`** — already applied to the dev DB via
   `flask db upgrade` (confirmed via `flask db current`).
-- **`seeds/seed_menu.py`'s label-drift risk is dormant right now, not
-  fixed** — the dev DB's menu tree was confirmed clean (26 rows, zero
-  duplicate labels) as of this update, so its current content matches the
-  script's `get_or_create()` exact-`label`+`parent_id` matching. The
-  underlying fragility is unchanged though: `get_or_create()` still matches
-  by exact `label` (not e.g. `url`, which wouldn't drift on a rename), so if
-  the dev DB's menu labels ever get hand-edited again (as they did
-  before — see Part 7 in `AI_CONTEXT.md` and the `seed_menu_label_mismatch`
-  memory, which is now stale and should be treated as historical, not
-  current), re-running the full script would silently create duplicates
-  again. `seeds/seed_admin.py` doesn't have this problem (it matches by
-  permission `code`, which hasn't drifted) and is safe to re-run as usual.
-  If a new feature needs exactly one new sidebar entry and there's any doubt
-  about drift, insert that single `Menu` row directly (matching by its **parent's**
-  label, which hasn't drifted, the way the YAML Generator row above was
-  added) rather than running the whole script.
+- **`seeds/seed_menu.py`'s label-drift risk is dormant, not fixed** — see
+  `AI_CONTEXT.md` Part 7 and the `seed_menu_label_mismatch` memory (stale/
+  historical) if this resurfaces. None of this session's new permissions
+  needed a new `Menu` row (Ingress/NetworkPolicy are tabs under the
+  existing `/deployment-pods` pages; Security/Telegram are sections on the
+  existing `/config` page; `/account` is reached from the navbar dropdown,
+  not the sidebar menu tree) — this risk is unchanged from before.
 - Run tests via:
   ```bash
   source .venv/bin/activate && set -a && source .env && set +a
@@ -252,15 +174,13 @@ Then ask me what to work on next rather than assuming.
   gateway IP `172.29.16.1` directly, not the `db` Docker Compose hostname —
   no `sed` swap needed from inside the sandbox.)
 - CSS changes need a rebuild to actually show up: `npm run build:css`
-  (already run as of the YAML Generator page's new templates — new
-  daisyUI `-xs` size-variant classes weren't previously compiled).
+  (already run as of this session's work — new daisyUI classes pulled in
+  along the way, e.g. `.divider`, weren't previously compiled).
 - **gunicorn now runs `--worker-class gthread --threads 4 --timeout 120`**
   (`entrypoint.sh`), not plain sync workers — changed to support the pod-logs
-  SSE stream (Part 8), which needs a long-lived connection that a sync
-  worker can't hold without blocking the whole app. Keep this in mind before
-  adding any other long-lived-connection feature: worker/thread capacity is
-  now a real, finite budget (3 workers × 4 threads), not "one request per
-  worker, always fine."
+  SSE stream. Keep this in mind before adding any other long-lived-connection
+  feature: worker/thread capacity is a real, finite budget (3 workers × 4
+  threads), not "one request per worker, always fine."
 - **TEBET-APP-3's client certificate expired 2026-08-09** — a real, live
   dev-DB `DeploymentServer` row. "Test Connection"/deploys/pod browsing
   against it will fail with "the server has asked for the client to provide
@@ -286,32 +206,23 @@ Then ask me what to work on next rather than assuming.
     host's own `docker` CLI over the mounted socket); "kaniko" runs
     containerized/daemonless. `buildx` needed on the host for local
     "docker"-engine builds regardless of the Dockerfile's own copy.
-  - `REPO_CLONE_ROOT` (`<app>/data/repos`) **now has a persistent named
-    Docker volume** (`repo_clones`, `docker-compose.yml`) — registered
-    repos' local clones survive container restarts as of the "Persist repo
-    clones..." commit. (Previously did not; if working from a checkout
-    older than `81c1895`, this volume won't exist yet.) **Important:** this
-    is a Docker-*managed* named volume (`repo_clones:/app/data/repos` in
-    `docker-compose.yml`), **not** a bind mount to the project's own
-    `./data/repos` folder on the host — editing/adding a file under the
-    project checkout's `data/repos` does nothing; the container's actual
-    clone lives in Docker's own volume storage. Reach it via
-    `docker compose exec web ls /app/data/repos`, not the host filesystem.
-    Also: `sync_repo()` re-`fetch`/`checkout`/`pull`s from the git remote
-    right before every build, so even a file dropped directly into the real
-    clone (bypassing git) is just untracked cruft the next sync won't
-    remove but the Dockerfile's build context was never meant to rely on —
-    commit and push to the Builder's configured branch instead.
+  - `REPO_CLONE_ROOT` (`<app>/data/repos`) has a persistent named Docker
+    volume (`repo_clones`, `docker-compose.yml`) — registered repos' local
+    clones survive container restarts. This is a Docker-*managed* named
+    volume, **not** a bind mount to the project's own `./data/repos` folder
+    on the host — editing/adding a file under the project checkout's
+    `data/repos` does nothing; reach the real clone via
+    `docker compose exec web ls /app/data/repos`.
   - The app now runs **four** independent background poll threads (build
-    worker, deploy worker, deploy live-status poller, and the workflow
-    orchestrator), each with its own DB-queue and its own concurrency
-    story — none of them execute each other's work; the workflow
-    orchestrator only ever enqueues into the build/deploy workers' existing
-    queues and watches for terminal status, see AI_CONTEXT.md Part 9. Both
-    the build and deploy workers additionally now run a **heartbeat**
-    thread each (see `cac7252`): every claimed job's `heartbeat_at` is
-    ticked every 15s while it runs, and a stale/missing heartbeat (>60s) on
-    the single `status='running'` row is auto-reaped as a failure — this
-    closes what used to be a real gap where a process crash mid-build/
-    mid-deploy would leave that row wedged forever, silently blocking the
-    entire pipeline until someone fixed it by hand.
+    worker, deploy worker, deploy live-status poller, workflow
+    orchestrator), each with its own DB-queue; none execute each other's
+    work. Both the build and deploy workers additionally run a
+    **heartbeat** thread each: every claimed job's `heartbeat_at` is ticked
+    every 15s while it runs, and a stale/missing heartbeat (>60s) on the
+    single `status='running'` row is auto-reaped as a failure.
+  - **If `SystemConfig.telegram_notifications_enabled` is turned on**,
+    whatever host runs this app needs outbound HTTPS access to
+    `api.telegram.org` — the Bot API call is a plain `requests.post` with a
+    10s timeout and no retry; a network-level block just makes every
+    notification silently fail (logged to Error Logs, never raised into
+    the login/reset flow calling it).

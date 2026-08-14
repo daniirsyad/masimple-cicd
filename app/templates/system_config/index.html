@@ -7,13 +7,14 @@ MASIMPLE CICD{% endblock %} {% block content %}
   without activity.
 </p>
 
-<div class="card mt-4 max-w-lg bg-base-100 shadow-sm">
-  <div class="card-body p-4">
-    <h2 class="card-title text-base">General</h2>
+<form method="post" novalidate class="mt-4 flex max-w-lg flex-col gap-4">
+  {{ form.hidden_tag() }}
 
-    <form method="post" novalidate class="mt-2 flex flex-col gap-4">
-      {{ form.hidden_tag() }}
+  <div class="card bg-base-100 shadow-sm">
+    <div class="card-body p-4">
+      <h2 class="card-title text-base">General</h2>
 
+      <div class="mt-2 flex flex-col gap-4">
       <div class="form-control">
         <label class="label" for="{{ form.timezone.id }}">
           <span class="label-text">Timezone</span>
@@ -92,9 +93,89 @@ MASIMPLE CICD{% endblock %} {% block content %}
         <p class="text-error text-sm">{{ error }}</p>
         {% endfor %}
       </div>
-
-      <div>{{ form.submit(class="btn btn-primary btn-sm") }}</div>
-    </form>
+      </div>
+    </div>
   </div>
-</div>
+
+  <div class="card bg-base-100 shadow-sm">
+    <div class="card-body p-4">
+      <h2 class="card-title text-base">Security</h2>
+
+      <div class="mt-2 flex flex-col gap-4">
+        <div class="form-control">
+          <label class="label" for="{{ form.max_login_attempts.id }}">
+            <span class="label-text">Max Failed Login Attempts</span>
+          </label>
+          {{ form.max_login_attempts(class="input input-bordered input-sm w-full") }}
+          <p class="mt-1 text-xs text-base-content/60">
+            An account is locked once this many consecutive wrong-password attempts are made against it —
+            locking stops guessing outright rather than just slowing it down. A locked account can only be
+            unlocked by a <code>user.unlock</code> permission holder on the Users page (or by the account
+            owner completing a Telegram password reset, if configured below).
+          </p>
+          {% for error in form.max_login_attempts.errors %}
+          <p class="text-error text-sm">{{ error }}</p>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card bg-base-100 shadow-sm">
+    <div class="card-body p-4">
+      <h2 class="card-title text-base">Telegram Integration</h2>
+      <p class="text-xs text-base-content/60">
+        Powers security alerts (wrong-password/lockout/login events, for every account — not just the one
+        involved) and forgot-password reset links. Create a bot via
+        <a href="https://core.telegram.org/bots#botfather" target="_blank" class="link link-primary">@BotFather</a>
+        to get a bot token; each relevant user then messages that bot once and uses a helper like
+        <span class="font-mono">@userinfobot</span> to find their own numeric chat ID, which is set on their
+        row on the Users page.
+      </p>
+
+      <div class="mt-2 flex flex-col gap-4">
+        <div class="form-control">
+          <label class="label cursor-pointer justify-start gap-2" for="{{ form.telegram_notifications_enabled.id }}">
+            {{ form.telegram_notifications_enabled(class="checkbox checkbox-sm") }}
+            <span class="label-text">Enable Telegram Notifications</span>
+          </label>
+          <p class="mt-1 text-xs text-base-content/60">
+            Off by default so adding a bot token alone doesn't start sending messages.
+          </p>
+        </div>
+
+        <div class="form-control">
+          <label class="label" for="{{ form.telegram_bot_token.id }}">
+            <span class="label-text">Telegram Bot Token</span>
+          </label>
+          {{ form.telegram_bot_token(class="input input-bordered input-sm w-full font-mono", placeholder="leave blank to keep the current one") }}
+          <p class="mt-1 text-xs text-base-content/60">
+            Write-only — never shown again once saved, same as an AI provider's API key.
+          </p>
+          {% for error in form.telegram_bot_token.errors %}
+          <p class="text-error text-sm">{{ error }}</p>
+          {% endfor %}
+        </div>
+
+        <div class="form-control">
+          <label class="label" for="{{ form.security_notification_user_id.id }}">
+            <span class="label-text">Security Notification Recipient</span>
+          </label>
+          {{ form.security_notification_user_id(class="select select-bordered select-sm w-full") }}
+          <p class="mt-1 text-xs text-base-content/60">
+            The one user who receives wrong-password/lockout/login alerts for <em>every</em> account, not
+            just their own — needs their own Telegram Chat ID set on the Users page to actually receive
+            them. Forgot-password reset links are separate and always go straight to the account owner
+            requesting one.
+          </p>
+          {% for error in form.security_notification_user_id.errors %}
+          <p class="text-error text-sm">{{ error }}</p>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div>{{ form.submit(class="btn btn-primary btn-sm") }}</div>
+</form>
 {% endblock %}
