@@ -141,7 +141,20 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   copyBtn?.addEventListener("click", () => {
-    navigator.clipboard.writeText(currentYamlText());
+    // navigator.clipboard only exists in a secure context (HTTPS, or the
+    // literal hostname `localhost`) — plain HTTP via any other hostname/IP
+    // leaves it undefined entirely, not just erroring on use.
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(currentYamlText());
+      return;
+    }
+
+    // document.execCommand("copy") was tried here as a fallback, but on an
+    // insecure origin some Chromium builds report success while silently
+    // never reaching the OS clipboard. window.prompt()'s text field is
+    // real browser-native UI, so a manual Ctrl+C/Cmd+C out of it always
+    // works, unlike a scripted copy on an insecure origin.
+    window.prompt("Copy with Ctrl+C / Cmd+C, then press Enter:", currentYamlText());
   });
 
   downloadBtn?.addEventListener("click", () => {
