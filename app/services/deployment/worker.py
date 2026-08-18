@@ -6,7 +6,6 @@ execution runs at a time system-wide" via DeploymentExecution's own partial
 unique index (ix_deployment_executions_single_running), not the build
 worker's ImageBuild one.
 """
-import os
 import threading
 import time
 from datetime import datetime, timedelta
@@ -18,6 +17,7 @@ from app.models import DeploymentExecution, DeploymentRun
 from app.services.deployment.helpers import provider_for_server
 from app.services.deployment.resolver import UnresolvedPlaceholderError, resolve_manifest
 from app.utils.error_logger import log_error
+from app.utils.runtime import is_werkzeug_reloader_parent
 from app.utils.system_config import get_system_config
 
 POLL_INTERVAL_SECONDS = 2
@@ -423,10 +423,25 @@ def _run_deployment(app, execution_id):
 def _poll_loop(app):
     global _current_execution_id
     while True:
-        with app.app_context():
-            _reap_stale_running_job()
-            execution_id = _claim_next_job()
-            db.session.remove()
+        try:
+            with app.app_context():
+                _reap_stale_running_job()
+                execution_id = _claim_next_job()
+                db.session.remove()
+        except Exception as exc:
+            # Same reasoning as app/services/build/worker.py's _poll_loop: a
+            # bad tick here must not kill this thread, or the entire deploy
+            # pipeline silently stops claiming queued deployments forever.
+            with app.app_context():
+                db.session.rollback()
+                db.session.remove()
+                log_error(
+                    source="deployment.worker.poll_loop",
+                    exc=exc,
+                    description=f"Deploy worker poll loop iteration failed: {exc}",
+                )
+            time.sleep(POLL_INTERVAL_SECONDS)
+            continue
 
         if execution_id is not None:
             with _current_execution_lock:
@@ -512,7 +527,7 @@ def start_worker(app):
     if app.config.get("TESTING"):
         return
 
-    if app.debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+    if is_werkzeug_reloader_parent(app):
         return
 
     with _worker_lock:
@@ -541,7 +556,7 @@ def start_status_poller(app):
     if app.config.get("TESTING"):
         return
 
-    if app.debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+    if is_werkzeug_reloader_parent(app):
         return
 
     with _poller_lock:

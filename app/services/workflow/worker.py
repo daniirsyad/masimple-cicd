@@ -8,7 +8,6 @@ reaches a terminal state, decides whether to advance to the WorkflowStep's
 next step or stop the run — so a WorkflowRun never competes with a manual
 trigger or another workflow for either queue's single-flight slot.
 """
-import os
 import threading
 import time
 from datetime import datetime
@@ -19,6 +18,7 @@ from app.services.build.worker import enqueue_build_batch
 from app.services.deployment.worker import enqueue_deployment_run
 from app.services.workflow.resolver import resolve_step_builders, resolve_step_manifests
 from app.utils.error_logger import log_error
+from app.utils.runtime import is_werkzeug_reloader_parent
 
 POLL_INTERVAL_SECONDS = 2
 
@@ -240,7 +240,7 @@ def start_worker(app):
     if app.config.get("TESTING"):
         return
 
-    if app.debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+    if is_werkzeug_reloader_parent(app):
         return
 
     with _worker_lock:
