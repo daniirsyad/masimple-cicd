@@ -1,0 +1,23 @@
+services:
+  web:
+    build: .
+    env_file:
+      - .env
+    environment:
+      # Points straight at the existing external Postgres server (not a
+      # compose-managed db service), dbname "postgres" — see
+      # PODMAN_DATABASE_URL in .env. No `db` service / db_data volume here.
+      DATABASE_URL: ${PODMAN_DATABASE_URL}
+    ports:
+      - "8000:8000"
+    volumes:
+      # Podman's rootless API socket, Docker-API-compatible, mounted at the
+      # same /var/run/docker.sock path the image builder's `docker` CLI
+      # looks for by default (see Dockerfile / app/services/build/engine.py)
+      # — enable with `systemctl --user enable --now podman.socket` first.
+      - ${XDG_RUNTIME_DIR}/podman/podman.sock:/var/run/docker.sock
+      - repo_clones:/app/data/repos
+    restart: unless-stopped
+
+volumes:
+  repo_clones:

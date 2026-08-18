@@ -1,0 +1,91 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: masimple-cicd
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: masimple-cicd-secrets
+  namespace: masimple-cicd
+type: Opaque
+stringData:
+  DATABASE_URL: "postgresql://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:5432/<DB_NAME>"
+  SECRET_KEY: "<GENERATE_A_RANDOM_SECRET_KEY>"
+  CREDENTIAL_ENCRYPTION_KEY: "<GENERATE_A_FERNET_KEY>"
+  ADMIN_USERNAME: "admin"
+  ADMIN_PASSWORD: "<CHOOSE_A_FIRST_LOGIN_PASSWORD>"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: masimple-cicd-web
+  namespace: masimple-cicd
+  labels:
+    app: masimple-cicd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: masimple-cicd
+  template:
+    metadata:
+      labels:
+        app: masimple-cicd
+    spec:
+      containers:
+        - name: web
+          image: "<YOUR_REGISTRY>/masimple-cicd:<TAG>"
+          ports:
+            - containerPort: 8000
+          env:
+            - name: FLASK_ENV
+              value: "production"
+          envFrom:
+            - secretRef:
+                name: masimple-cicd-secrets
+          volumeMounts:
+            - name: app-data
+              mountPath: /app/data
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /login
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+      volumes:
+        # hostPath ties this pod to whichever node has this directory —
+        # add nodeSelector/nodeName below if the cluster has more than one
+        # node, or this pod will fail to start (or silently use an empty
+        # directory) if scheduled elsewhere.
+        - name: app-data
+          hostPath:
+            path: "<NODE_LOCAL_PATH_FOR_APP_DATA>"
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: masimple-cicd-web
+  namespace: masimple-cicd
+spec:
+  selector:
+    app: masimple-cicd
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP
