@@ -12,10 +12,19 @@ class RegistryProvider(ABC):
     @property
     @abstractmethod
     def registry_host(self):
-        """The registry's API hostname (e.g. `registry-1.docker.io`) — the key a
-        `~/.docker/config.json`-style auth entry needs, for build engines
-        (Kaniko) that authenticate via that file instead of a docker-py client.
+        """The registry's real API hostname (e.g. `registry-1.docker.io`) —
+        used for this provider's own pull/push/list_tags calls.
         """
+
+    @property
+    def docker_config_auth_key(self):
+        """The key a `~/.docker/config.json`-style `auths` map needs for this
+        registry, used by build engines (Kaniko) that authenticate via that
+        file instead of a docker-py client. Defaults to registry_host, true
+        for every provider except Docker Hub — see DockerHubProvider's
+        override for why that one differs.
+        """
+        return self.registry_host
 
     @abstractmethod
     def full_repository_name(self, repository):

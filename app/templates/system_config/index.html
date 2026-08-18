@@ -42,8 +42,11 @@ MASIMPLE CICD{% endblock %} {% block content %}
         {{ form.build_engine(class="select select-bordered select-sm") }}
         <p class="mt-1 text-xs text-base-content/60">
           Used by the Image Builder to build and push triggered batches. Docker
-          needs the host's Docker socket mounted into this container; Kaniko
-          builds and pushes without a daemon or socket access.
+          needs the host's Docker socket mounted into this container.
+          Kaniko is temporarily unavailable — it corrupted a running app
+          container's own filesystem mid-build, since it currently runs as a
+          subprocess sharing this app's filesystem rather than in its own
+          isolated container.
         </p>
         {% for error in form.build_engine.errors %}
         <p class="text-error text-sm">{{ error }}</p>

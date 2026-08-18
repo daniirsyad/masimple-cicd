@@ -5,6 +5,7 @@ from app.extensions import db
 from app.models import (
     Builder,
     BuildBatch,
+    ErrorLog,
     GitSource,
     ImageBuild,
     Permission,
@@ -45,6 +46,38 @@ def image_user(app):
 def image_client(client, image_user):
     client.post(
         "/login", data={"username": "image_test", "password": IMAGE_PASSWORD}, follow_redirects=True
+    )
+    return client
+
+
+@pytest.fixture
+def image_and_logs_user(app):
+    with app.app_context():
+        permissions = [
+            Permission(code="image.view", description="View images"),
+            Permission(code="logs.view", description="View activity logs"),
+        ]
+        db.session.add_all(permissions)
+        role = Role(name="ImageAndLogsViewer", description="Test image+logs viewer role")
+        role.permissions = permissions
+        db.session.add(role)
+        db.session.flush()
+
+        user = User(
+            username="image_logs_test",
+            password_hash=generate_password_hash(IMAGE_PASSWORD),
+            is_active=True,
+            role_id=role.id,
+        )
+        db.session.add(user)
+        db.session.commit()
+        return user.id
+
+
+@pytest.fixture
+def image_and_logs_client(client, image_and_logs_user):
+    client.post(
+        "/login", data={"username": "image_logs_test", "password": IMAGE_PASSWORD}, follow_redirects=True
     )
     return client
 
@@ -96,9 +129,13 @@ def _make_batch(base_entities, status="success", bump_type="patch", full_version
     return batch
 
 
-def _make_image_build(batch, base_entities, status="success", branch_used="main"):
+def _make_image_build(batch, base_entities, status="success", branch_used="main", error_log_id=None):
     image_build = ImageBuild(
-        batch_id=batch.id, builder_id=base_entities["builder_id"], branch_used=branch_used, status=status
+        batch_id=batch.id,
+        builder_id=base_entities["builder_id"],
+        branch_used=branch_used,
+        status=status,
+        error_log_id=error_log_id,
     )
     db.session.add(image_build)
     db.session.flush()
@@ -157,6 +194,39 @@ class TestListImages:
         assert response.status_code == 200
         assert b"DEV.0.0.2.020202020202" in response.data
         assert b"DEV.0.0.1.010101010101" not in response.data
+
+    def test_failed_build_links_to_its_error_log_for_a_user_with_logs_permission(
+        self, image_and_logs_client, app, base_entities
+    ):
+        with app.app_context():
+            error_log = ErrorLog(source="worker.run_build", message="boom")
+            db.session.add(error_log)
+            db.session.flush()
+            batch = _make_batch(base_entities, status="failed")
+            image_build = _make_image_build(batch, base_entities, status="failed", error_log_id=error_log.id)
+            db.session.commit()
+            error_log_id = error_log.id
+            image_build_id = image_build.id
+
+        response = image_and_logs_client.get("/images/")
+        assert response.status_code == 200
+        assert f"/logs/errors/{error_log_id}".encode() in response.data
+
+    def test_failed_build_hides_the_error_log_link_without_logs_permission(
+        self, image_client, app, base_entities
+    ):
+        with app.app_context():
+            error_log = ErrorLog(source="worker.run_build", message="boom")
+            db.session.add(error_log)
+            db.session.flush()
+            batch = _make_batch(base_entities, status="failed")
+            _make_image_build(batch, base_entities, status="failed", error_log_id=error_log.id)
+            db.session.commit()
+            error_log_id = error_log.id
+
+        response = image_client.get("/images/")
+        assert response.status_code == 200
+        assert f"/logs/errors/{error_log_id}".encode() not in response.data
 
 
 class TestStatusEndpoint:

@@ -20,12 +20,18 @@ class FakeImagesCollection:
         self._size = size
         self._raise_not_found = raise_not_found
         self.get_calls = []
+        self.remove_calls = []
 
     def get(self, ref):
         self.get_calls.append(ref)
         if self._raise_not_found:
             raise docker.errors.ImageNotFound("not found")
         return FakeImage(self._image_id, self._size)
+
+    def remove(self, image, force=False):
+        self.remove_calls.append((image, force))
+        if self._raise_not_found:
+            raise docker.errors.ImageNotFound("not found")
 
 
 class FakeDockerClient:
@@ -192,16 +198,63 @@ def test_missing_docker_binary_returns_failure_without_raising(monkeypatch):
 
 def test_lazy_client_uses_docker_from_env_when_not_injected(monkeypatch):
     sentinel = object()
-    monkeypatch.setattr("docker.from_env", lambda: sentinel)
+    captured = {}
+
+    def fake_from_env(**kwargs):
+        captured.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr("docker.from_env", fake_from_env)
     engine = DockerBuildEngine()
     assert engine.client is sentinel
 
+    # docker-py's own default (60s) is a per-read timeout too short for
+    # pushing a real image through Podman's Docker-API-compatible socket —
+    # confirmed in practice raising a bare ReadTimeout mid-push. Must be
+    # passed explicitly, not left at the client library's own default.
+    assert captured["timeout"] == DockerBuildEngine.CLIENT_TIMEOUT_SECONDS
+
+
+class TestCleanupLocalImage:
+    def test_removes_the_local_image_by_tag(self):
+        client = FakeDockerClient()
+        engine = DockerBuildEngine(client=client)
+
+        engine.cleanup_local_image("myapp:1.0.0")
+
+        assert client.images.remove_calls == [("myapp:1.0.0", True)]
+
+    def test_already_gone_image_does_not_raise(self):
+        client = FakeDockerClient(raise_not_found=True)
+        engine = DockerBuildEngine(client=client)
+
+        engine.cleanup_local_image("myapp:1.0.0")  # must not raise
+
+    def test_kaniko_engine_cleanup_is_a_no_op(self):
+        """Kaniko pushes as part of build_image itself (BuildResult.pushed)
+        and never loads anything into local daemon storage — nothing to
+        clean up, and no docker client to even do it with.
+        """
+        engine = KanikoBuildEngine()
+        engine.cleanup_local_image("myapp:1.0.0")  # must not raise
+
 
 class _FakeRegistryProvider:
-    def __init__(self, username="myuser", password="mypass", registry_host="registry-1.docker.io"):
+    def __init__(
+        self,
+        username="myuser",
+        password="mypass",
+        registry_host="registry-1.docker.io",
+        docker_config_auth_key=None,
+    ):
         self.username = username
         self.password = password
         self.registry_host = registry_host
+        # Mirrors RegistryProvider.docker_config_auth_key's real default
+        # (falls back to registry_host) — Kaniko's config.json is keyed by
+        # this, not registry_host directly; see DockerHubProvider's override
+        # for why those two differ for Docker Hub specifically.
+        self.docker_config_auth_key = docker_config_auth_key or registry_host
 
 
 class FakeKanikoProcess:
@@ -257,6 +310,37 @@ class TestKanikoBuildEngine:
         auth_entry = captured["config"]["auths"]["registry-1.docker.io"]
         decoded = base64.b64decode(auth_entry["auth"]).decode()
         assert decoded == "myuser:mypass"
+
+    def test_writes_docker_config_keyed_by_docker_config_auth_key_not_registry_host(self, monkeypatch):
+        """A real DockerHubProvider's docker_config_auth_key differs from its
+        registry_host — this is the actual bug that left Kaniko unable to
+        find credentials for an unqualified Docker Hub push (see
+        test_registry_provider.py::TestDockerConfigAuthKey).
+        """
+        captured = {}
+
+        def fake_popen(argv, stdout=None, stderr=None, text=None, env=None):
+            with open(os.path.join(env["DOCKER_CONFIG"], "config.json")) as config_file:
+                captured["config"] = json.load(config_file)
+            return FakeKanikoProcess(["Pushed image\n"], returncode=0)
+
+        monkeypatch.setattr("app.services.build.engine.subprocess.Popen", fake_popen)
+
+        provider = _FakeRegistryProvider(
+            registry_host="registry-1.docker.io",
+            docker_config_auth_key="https://index.docker.io/v1/",
+        )
+        engine = KanikoBuildEngine()
+        engine.build_image(
+            context_dir="/ctx",
+            dockerfile_path="Dockerfile",
+            tags=["myapp:1.0.0"],
+            registry_provider=provider,
+            push_repository="myuser/myapp",
+        )
+
+        assert "https://index.docker.io/v1/" in captured["config"]["auths"]
+        assert "registry-1.docker.io" not in captured["config"]["auths"]
 
     def test_build_args_are_forwarded_as_flags(self, monkeypatch):
         captured = {}

@@ -732,10 +732,12 @@ class _FakeBuildResult:
 
 
 class _FakeBuildEngine:
-    def __init__(self, result):
+    def __init__(self, result, cleanup_error=None):
         self._result = result
+        self._cleanup_error = cleanup_error
         self.client = object()
         self.build_calls = []
+        self.cleanup_calls = []
 
     def build_image(
         self,
@@ -751,6 +753,11 @@ class _FakeBuildEngine:
         if on_log_line:
             on_log_line("building...\n")
         return self._result
+
+    def cleanup_local_image(self, tag):
+        self.cleanup_calls.append(tag)
+        if self._cleanup_error:
+            raise self._cleanup_error
 
 
 class _FakeRegistryProvider:
@@ -800,6 +807,63 @@ class TestRunBuild:
         assert fake_git.synced == ("/tmp/myapp", "main")
         assert fake_git.synced_repo_name == "owner/myapp"
         assert fake_registry.pushed == ("myapp", full_version_string)
+
+    def test_cleans_up_the_local_image_after_a_successful_push(self, app, monkeypatch):
+        """A pushed build's local image (Docker engine's --load) must not be
+        left behind — see BuildEngine.cleanup_local_image. Confirmed in
+        practice this otherwise grows local daemon storage by a full image
+        on every single build, forever.
+        """
+        entities = _make_entities(app)
+        build_id = _make_queued_build(app, entities)
+        with app.app_context():
+            _claim(build_id)
+
+        fake_engine = _FakeBuildEngine(_FakeBuildResult(success=True))
+        monkeypatch.setattr(
+            "app.services.build.worker.provider_for_git_source", lambda source: _FakeGitProvider()
+        )
+        monkeypatch.setattr("app.services.build.worker.get_build_engine", lambda: fake_engine)
+        monkeypatch.setattr(
+            "app.services.build.worker.get_registry_provider",
+            lambda provider_type, username, password, registry_url=None: _FakeRegistryProvider(),
+        )
+
+        _run_build(app, build_id)
+
+        with app.app_context():
+            build = ImageBuild.query.get(build_id)
+            assert build.status == "success"
+            assert fake_engine.cleanup_calls == [build.image_tag]
+
+    def test_a_failed_cleanup_does_not_fail_an_otherwise_successful_build(self, app, monkeypatch):
+        entities = _make_entities(app)
+        build_id = _make_queued_build(app, entities)
+        with app.app_context():
+            _claim(build_id)
+
+        fake_engine = _FakeBuildEngine(
+            _FakeBuildResult(success=True), cleanup_error=RuntimeError("daemon busy")
+        )
+        monkeypatch.setattr(
+            "app.services.build.worker.provider_for_git_source", lambda source: _FakeGitProvider()
+        )
+        monkeypatch.setattr("app.services.build.worker.get_build_engine", lambda: fake_engine)
+        monkeypatch.setattr(
+            "app.services.build.worker.get_registry_provider",
+            lambda provider_type, username, password, registry_url=None: _FakeRegistryProvider(),
+        )
+
+        _run_build(app, build_id)  # must not raise
+
+        with app.app_context():
+            build = ImageBuild.query.get(build_id)
+            assert build.status == "success"
+            assert "cleanup failed" in build.build_log
+
+            error_log = ErrorLog.query.filter_by(source="worker.cleanup_local_image").first()
+            assert error_log is not None
+            assert "daemon busy" in error_log.message
 
     def test_builds_under_the_full_repository_tag_not_just_the_bare_image_name(self, app, monkeypatch):
         """Regression test: the engine must build under the exact tag that
@@ -1154,6 +1218,7 @@ class TestRunBuildFailureModes:
             assert error_log is not None
             assert "Dockerfile syntax error" in error_log.message
             assert error_log.traceback == "log output\n"  # build log, standing in for a traceback
+            assert build.error_log_id == error_log.id
 
         assert fake_registry.pushed is None
 
@@ -1218,3 +1283,4 @@ class TestRunBuildFailureModes:
             assert "network is unreachable" in error_log.message
             assert error_log.traceback is not None
             assert "RuntimeError" in error_log.traceback
+            assert build.error_log_id == error_log.id

@@ -17,6 +17,7 @@ from app.services.git.helpers import provider_for_git_source
 from app.services.registry.factory import get_registry_provider
 from app.utils.crypto import decrypt
 from app.utils.error_logger import log_error
+from app.utils.runtime import is_werkzeug_reloader_parent
 from app.utils.system_config import get_system_config
 
 POLL_INTERVAL_SECONDS = 2
@@ -390,6 +391,26 @@ def _record_commit_history(git_provider, repository, build):
         )
 
 
+def _cleanup_local_image(engine, tag, log_buffer):
+    """Best-effort: removes the just-pushed image from local daemon storage
+    (see BuildEngine.cleanup_local_image — a no-op for engines like Kaniko
+    that never load one there in the first place). Never fails the build
+    over this — the build and push already succeeded by the time this
+    runs; a stray leftover local image is a disk-usage nuisance, not a
+    build failure, so a cleanup error is logged and swallowed instead.
+    """
+    try:
+        engine.cleanup_local_image(tag)
+        log_buffer.append("Cleaned up local image.\n")
+    except Exception as exc:
+        log_buffer.append(f"\nWARNING: local image cleanup failed: {exc}\n")
+        log_error(
+            source="worker.cleanup_local_image",
+            exc=exc,
+            description=f"Failed to clean up local image {tag} after push: {exc}",
+        )
+
+
 def _derive_image_name(full_name):
     """myapp from org/myapp — there's no separate "image name" field anywhere
     in the schema, so the built image is named after the repository itself.
@@ -508,11 +529,12 @@ def _run_build(app, build_id):
                 build.status = "failed"
                 build.build_log = result.log
                 log_buffer[:] = [result.log, f"\nBuild failed: {result.error}\n"]
-                log_error(
+                entry = log_error(
                     source="worker.run_build",
                     description=f"Build {build.id} (batch {build.batch_id}) failed: {result.error}",
                     detail=result.log,
                 )
+                build.error_log_id = entry.id
                 return
 
             build.image_size = result.image_size
@@ -525,6 +547,8 @@ def _run_build(app, build_id):
                 registry_provider.push_image(engine.client, image_name, batch.full_version_string)
                 log_buffer.append("Push complete.\n")
 
+            _cleanup_local_image(engine, full_tag, log_buffer)
+
             build.registry_name = registry_target.provider_type
             build.image_tag = f"{full_repository}:{batch.full_version_string}"
             build.status = "success"
@@ -532,11 +556,12 @@ def _run_build(app, build_id):
         except Exception as exc:  # a bad build must not kill the worker thread
             log_buffer.append(f"\nERROR: {exc}\n")
             build.status = "failed"
-            log_error(
+            entry = log_error(
                 source="worker.run_build",
                 exc=exc,
                 description=f"Build {build.id} (batch {build.batch_id}) failed: {exc}",
             )
+            build.error_log_id = entry.id
         finally:
             flush_log()
             build.finished_at = datetime.utcnow()
@@ -548,10 +573,28 @@ def _run_build(app, build_id):
 def _poll_loop(app):
     global _current_build_id
     while True:
-        with app.app_context():
-            _reap_stale_running_job()
-            build_id = _claim_next_job()
-            db.session.remove()
+        try:
+            with app.app_context():
+                _reap_stale_running_job()
+                build_id = _claim_next_job()
+                db.session.remove()
+        except Exception as exc:
+            # A bad tick here (e.g. a transient DB error, or a schema
+            # briefly out of sync mid-deploy) must not kill this thread —
+            # unlike _run_build below, nothing else in the poll loop wraps
+            # this, so an uncaught exception here would silently stop the
+            # entire build pipeline from ever claiming another queued build
+            # again until the process restarts.
+            with app.app_context():
+                db.session.rollback()
+                db.session.remove()
+                log_error(
+                    source="worker.poll_loop",
+                    exc=exc,
+                    description=f"Build worker poll loop iteration failed: {exc}",
+                )
+            time.sleep(POLL_INTERVAL_SECONDS)
+            continue
 
         if build_id is not None:
             with _current_build_lock:
@@ -571,14 +614,14 @@ def start_worker(app):
     Skipped entirely under TESTING — a live thread claiming and running real
     builds against the test DB would make the test suite non-deterministic.
     Also guarded against double-starting in the Flask debug reloader's parent
-    watcher process (WERKZEUG_RUN_MAIN is only set in the actual serving child).
+    watcher process — see is_werkzeug_reloader_parent.
     """
     global _worker_started
 
     if app.config.get("TESTING"):
         return
 
-    if app.debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+    if is_werkzeug_reloader_parent(app):
         return
 
     with _worker_lock:

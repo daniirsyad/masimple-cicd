@@ -100,6 +100,30 @@ class TestIndexPage:
             assert config.session_timeout_minutes == 120
 
     def test_post_updates_build_engine(self, config_client, app):
+        with app.app_context():
+            config = get_system_config()
+            config.build_engine = "kaniko"  # pre-existing value, bypassing the form's choices
+            db.session.commit()
+
+        response = config_client.post(
+            "/config/",
+            data={"timezone": "UTC", "session_timeout_minutes": "60", "build_engine": "docker"},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+
+        with app.app_context():
+            assert get_system_config().build_engine == "docker"
+
+    def test_post_rejects_kaniko_as_not_a_valid_choice(self, config_client, app):
+        """"kaniko" was removed from BUILD_ENGINE_CHOICES after it corrupted
+        a live app container's filesystem mid-build — see
+        app/blueprints/system_config/forms.py. Submitting it should fail
+        validation, not silently save it.
+        """
+        with app.app_context():
+            assert get_system_config().build_engine == "docker"
+
         response = config_client.post(
             "/config/",
             data={"timezone": "UTC", "session_timeout_minutes": "60", "build_engine": "kaniko"},
@@ -108,7 +132,7 @@ class TestIndexPage:
         assert response.status_code == 200
 
         with app.app_context():
-            assert get_system_config().build_engine == "kaniko"
+            assert get_system_config().build_engine == "docker"
 
     def test_post_can_enable_hide_navbar_title(self, config_client, app):
         response = config_client.post(

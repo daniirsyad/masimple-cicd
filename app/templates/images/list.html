@@ -105,6 +105,16 @@ MASIMPLE CICD{% endblock %} {% block content %}
                   >
                     {{ image.status }}
                   </span>
+                  {% if image.status == 'failed' and image.error_log_id and current_user.has_permission("logs.view") %}
+                  <a
+                    href="{{ url_for('logs.error_detail', error_id=image.error_log_id) }}"
+                    target="_blank"
+                    class="link link-error text-xs"
+                    title="View error log"
+                  >
+                    View error
+                  </a>
+                  {% endif %}
                 </span>
               </td>
               <td>

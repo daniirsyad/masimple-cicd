@@ -6,9 +6,17 @@ from wtforms.validators import DataRequired, Length, NumberRange, Optional
 
 TIMEZONE_CHOICES = [(tz, tz) for tz in sorted(zoneinfo.available_timezones())]
 
+# "kaniko" deliberately left out of the selectable choices — see
+# app/services/build/factory.py's _ENGINES for why (kaniko-executor has no
+# daemon/chroot of its own; running it as a raw subprocess of this app, like
+# KanikoBuildEngine currently does, extracts each FROM image's layers
+# directly onto *this app's own* running container filesystem, corrupting
+# it — confirmed in practice: a Kaniko build overwrote /etc/os-release and
+# dropped Alpine binaries into a live app container). The KanikoBuildEngine
+# implementation itself is untouched, just not reachable through this form,
+# pending a rewrite that runs it in its own throwaway container instead.
 BUILD_ENGINE_CHOICES = [
     ("docker", "Docker"),
-    ("kaniko", "Kaniko (daemonless, no docker.sock needed)"),
 ]
 
 

@@ -27,6 +27,21 @@ class DockerHubProvider(RegistryProvider):
     def registry_host(self):
         return REGISTRY_HOST
 
+    @property
+    def docker_config_auth_key(self):
+        # Docker Hub is special-cased in the Docker/OCI credential-resolution
+        # convention: an unqualified reference (no host prefix, e.g.
+        # "hamiltondev/hamilton-ai" — see full_repository_name below) resolves
+        # to the default registry "index.docker.io", not registry_host above
+        # (that's the real pull/push API host, registry-1.docker.io). Both
+        # Docker CLI's own `docker login` and go-containerregistry (what
+        # Kaniko uses for its credential-file lookup) key that default
+        # registry's auth entry under this exact legacy string instead —
+        # writing the entry under registry_host here left Kaniko unable to
+        # find any matching credentials for an unqualified push, so it fell
+        # back to an anonymous, unauthenticated push and got a 401.
+        return "https://index.docker.io/v1/"
+
     def full_repository_name(self, repository):
         return repository if "/" in repository else f"{self.username}/{repository}"
 
@@ -35,7 +50,16 @@ class DockerHubProvider(RegistryProvider):
             raise RuntimeError(
                 "Docker Hub credentials are not configured (DOCKERHUB_USERNAME/DOCKERHUB_TOKEN)."
             )
-        return docker_client.login(username=self.username, password=self.password)
+        # registry=... matters here in a way it doesn't for GHCR/Harbor/ECR's
+        # own authenticate(): a real dockerd defaults an omitted registry to
+        # Docker Hub's legacy identity internally, but Podman's Docker-API-
+        # compatible /auth endpoint doesn't have that fallback — it 500s
+        # trying to ping "https:///v2/" with no host at all. docker_config_
+        # auth_key (not registry_host, the real API host — see its docstring)
+        # is the same legacy identity Kaniko's credential file needed too.
+        return docker_client.login(
+            username=self.username, password=self.password, registry=self.docker_config_auth_key
+        )
 
     def push_image(self, docker_client, repository, tag):
         self.authenticate(docker_client)

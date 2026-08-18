@@ -54,6 +54,16 @@ class BuildEngine(ABC):
         afterward via `RegistryProvider.push_image()`.
         """
 
+    def cleanup_local_image(self, tag):
+        """Remove a build's locally-loaded image after it's been pushed, so
+        this app's own container/daemon storage doesn't grow by a full image
+        on every single build forever — confirmed in practice reaching
+        several GB after normal day-to-day use. Default no-op: an engine
+        that pushes as part of build_image itself (Kaniko — see
+        BuildResult.pushed) never loads anything into local daemon storage
+        in the first place, so there's nothing here to remove.
+        """
+
 
 class DockerBuildEngine(BuildEngine):
     """Shells out to `docker buildx build` (BuildKit) rather than docker-py's
@@ -68,13 +78,23 @@ class DockerBuildEngine(BuildEngine):
     unchanged.
     """
 
+    # docker-py's own default (60s) is a per-read socket timeout, not a
+    # total-request one — it applies to the streaming push/pull/remove calls
+    # below just as much as to quick ones. 60s is comfortably enough over a
+    # native dockerd, but confirmed in practice too tight pushing a few
+    # hundred MB through Podman's Docker-API-compatible socket (slower than
+    # a native push), which raised a bare ReadTimeout mid-push with no
+    # retry. Generous rather than tuned to a specific image size, since
+    # there's no way to know that up front.
+    CLIENT_TIMEOUT_SECONDS = 600
+
     def __init__(self, client=None):
         self._client = client
 
     @property
     def client(self):
         if self._client is None:
-            self._client = docker.from_env()
+            self._client = docker.from_env(timeout=self.CLIENT_TIMEOUT_SECONDS)
         return self._client
 
     def build_image(
@@ -130,6 +150,13 @@ class DockerBuildEngine(BuildEngine):
         return BuildResult(
             success=True, image_id=image_id, tags=tags, log="".join(log_lines), image_size=image_size
         )
+
+    def cleanup_local_image(self, tag):
+        try:
+            self.client.images.remove(image=tag, force=True)
+        except docker.errors.ImageNotFound:
+            # Already gone (e.g. a concurrent prune) — nothing left to do.
+            pass
 
     def _inspect_image(self, image_ref):
         try:
@@ -214,6 +241,6 @@ class KanikoBuildEngine(BuildEngine):
         auth = b64encode(
             f"{registry_provider.username}:{registry_provider.password}".encode()
         ).decode()
-        config = {"auths": {registry_provider.registry_host: {"auth": auth}}}
+        config = {"auths": {registry_provider.docker_config_auth_key: {"auth": auth}}}
         with open(os.path.join(config_dir, "config.json"), "w") as config_file:
             json.dump(config, config_file)
