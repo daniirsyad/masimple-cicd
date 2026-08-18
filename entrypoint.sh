@@ -20,16 +20,13 @@ else:
     sys.exit("Database not reachable after 30 attempts, giving up.")
 PY
 
-echo "Running database migrations..."
-flask db upgrade
 
-echo "Seeding initial data..."
-python seeds/seed_admin.py
-python seeds/seed_menu.py
-python seeds/seed_change_types.py
-python seeds/seed_version_types.py
-python seeds/seed_ai_provider.py
-python seeds/seed_system_config.py
+# Migrations + seeding used to run unconditionally right here. They're now
+# triggered from the app itself instead — GET / (any route) redirects to
+# /setup until the DB is confirmed at migration head and seeded (see
+# app/utils/setup_status.py, app/blueprints/setup/) — so a fresh or
+# behind-head DB no longer gets silently migrated on every boot; a human
+# has to click through it once.
 
 echo "Starting application..."
 # --worker-class gthread + --threads: plain sync workers (the previous

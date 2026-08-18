@@ -3,7 +3,7 @@ import uuid
 from datetime import timedelta
 
 from dotenv import load_dotenv
-from flask import Flask, got_request_exception, request
+from flask import Flask, got_request_exception, redirect, request, url_for
 from flask_login import current_user
 
 load_dotenv()
@@ -12,6 +12,7 @@ from config import config  # noqa: E402  must load after dotenv so env vars are 
 from app.extensions import csrf, db, login_manager, migrate  # noqa: E402
 from app.utils.error_logger import log_error  # noqa: E402
 from app.utils.menu_builder import menu_builder  # noqa: E402
+from app.utils.setup_status import is_setup_complete  # noqa: E402
 from app.utils.system_config import get_system_config  # noqa: E402
 from app.utils.timezone import format_local  # noqa: E402
 
@@ -34,10 +35,26 @@ def create_app(config_name=None):
 
     @login_manager.user_loader
     def load_user(user_id):
-        return models.User.query.get(uuid.UUID(user_id))
+        try:
+            return models.User.query.get(uuid.UUID(user_id))
+        except Exception:
+            # A stale session cookie combined with a DB that's since lost its
+            # users table (e.g. mid-/setup, see app/utils/setup_status.py)
+            # would otherwise raise here and leave db.session's transaction
+            # aborted for the rest of the request. Roll back and treat the
+            # request as anonymous instead — Flask-Login already handles
+            # user_loader returning None as "not logged in".
+            db.session.rollback()
+            return None
 
     @app.context_processor
     def inject_menus():
+        # Pre-setup, menus/system_config tables may not even exist yet — the
+        # setup wizard's own template doesn't use these, but Flask calls
+        # every context processor on every render regardless, so this still
+        # needs to short-circuit rather than let the query raise.
+        if not app.testing and not is_setup_complete():
+            return {"sidebar_menu": [], "navbar_menu": [], "system_config": None}
         context = menu_builder(current_user)
         context["system_config"] = get_system_config()
         return context
@@ -45,13 +62,31 @@ def create_app(config_name=None):
     app.jinja_env.filters["localtime"] = format_local
 
     @app.before_request
+    def _require_setup():
+        # Skipped entirely under TestingConfig (app.testing) — the test DB is
+        # built via db.create_all(), not `flask db upgrade`, so it has no
+        # alembic_version row and would otherwise never look "set up".
+        if app.testing:
+            return
+        endpoint = request.endpoint or ""
+        if endpoint in ("static",) or endpoint.startswith("setup."):
+            return
+        if not is_setup_complete():
+            return redirect(url_for("setup.index"))
+
+    @app.before_request
     def _apply_session_timeout():
         # Skip static assets — no point querying SystemConfig on every CSS/JS/
-        # image request. PERMANENT_SESSION_LIFETIME is read fresh by Flask
-        # each time the response's session cookie is written, so refreshing it
-        # here (before the view runs) keeps it in sync with the DB-configured
-        # value without needing a restart when an admin changes it.
-        if request.endpoint != "static" and current_user.is_authenticated:
+        # image request. Also skip /setup: it's exempt from _require_setup
+        # above (it has to be reachable *before* the DB is set up), so it can
+        # still be hit with a stale login-session cookie and no SystemConfig
+        # table yet — this avoids querying it in that case. PERMANENT_
+        # SESSION_LIFETIME is read fresh by Flask each time the response's
+        # session cookie is written, so refreshing it here (before the view
+        # runs) keeps it in sync with the DB-configured value without needing
+        # a restart when an admin changes it.
+        endpoint = request.endpoint or ""
+        if endpoint not in ("static",) and not endpoint.startswith("setup.") and current_user.is_authenticated:
             app.permanent_session_lifetime = timedelta(
                 minutes=get_system_config().session_timeout_minutes
             )
@@ -71,6 +106,7 @@ def create_app(config_name=None):
     from app.blueprints.account import account_bp
     from app.blueprints.auth import auth_bp
     from app.blueprints.main import main_bp
+    from app.blueprints.setup import setup_bp
     from app.blueprints.users import users_bp
     from app.blueprints.roles import roles_bp
     from app.blueprints.logs import logs_bp
@@ -98,6 +134,7 @@ def create_app(config_name=None):
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
+    app.register_blueprint(setup_bp)
     app.register_blueprint(account_bp, url_prefix="/account")
     app.register_blueprint(users_bp, url_prefix="/users")
     app.register_blueprint(roles_bp, url_prefix="/roles")

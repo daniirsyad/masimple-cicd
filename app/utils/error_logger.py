@@ -28,8 +28,17 @@ def log_error(source, exc=None, description=None, detail=None):
     user_id = None
     method = path = ip_address = None
     if has_request_context():
-        if current_user.is_authenticated:
-            user_id = current_user.id
+        try:
+            if current_user.is_authenticated:
+                user_id = current_user.id
+        except Exception:
+            # current_user triggers a DB lookup (Flask-Login's user_loader).
+            # If the exception being logged here already left the shared ORM
+            # session's transaction aborted (e.g. a table went missing
+            # mid-request), that lookup would fail too — roll back so it
+            # doesn't, and so log_error itself never raises out of what's
+            # supposed to be the last-resort error handler.
+            db.session.rollback()
         method = request.method
         path = request.path
         ip_address = request.remote_addr
