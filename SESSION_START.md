@@ -19,202 +19,203 @@ First, read these files in full before doing anything else:
    a bug that was already found and fixed a certain way, a design tradeoff).
    Not required reading for routine work — `APP_SUMMARY.md` plus this file
    should already be enough context to start. **Note: not yet updated past
-   Part 9** — everything in the "Current state" section below postdates it
-   and has no narrative write-up there yet.
+   Part 9** — everything in the "Current state" section below (both this
+   session's and the prior session's work) postdates it and has no
+   narrative write-up there yet.
 
 Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **829 tests passing** (as of the last full run).
-- **Everything is committed and pushed to `origin/main`**, most recently as:
-  1. **This same commit** — a responsive-design pass across the whole app,
-     prompted by the user noticing the Kubernetes management pages' tab bar
-     didn't fit on narrow screens:
-     - **28 templates touched**, all pure Tailwind/daisyUI class changes, no
-       markup restructuring, no new JS, no model/route changes, no new
-       tests (the existing 829 still cover behavior; nothing here is
-       behavior).
-     - **Header rows** (title + action button, ~19 pages across nearly
-       every blueprint): `flex items-center justify-between` →
-       `flex flex-wrap items-center justify-between gap-2`, so the button
-       drops below the title instead of getting clipped/squeezed on a
-       narrow screen.
-     - **Form-field grids inside modals** (role/permission/version-link
-       checkbox pickers, Ingress path rows, NetworkPolicy peer/port rows,
-       the Error Log detail grid — 19 occurrences): fixed `grid-cols-2`/
-       `grid-cols-3` → `grid-cols-1 sm:grid-cols-2`/`sm:grid-cols-3`, so
-       they stack into one column on a phone-width modal instead of
-       cramming.
-     - **`documentation/view.html`'s per-batch commit-list modal table**:
-       was `overflow-y-auto` only, missing horizontal scroll — changed to
-       `overflow-auto`.
-     - **The actual bug that prompted this** (`deployment_pods/_nav.html`,
-       the shared tab bar included on all 8 Kubernetes-management pages —
-       Pods/Namespaces/Secrets/ConfigMaps/Ingress/Network Policies/
-       Workloads/the four read-only kinds): daisyUI's `.tabs` class is
-       `display: grid`, **not flex** — so the `flex-wrap` utility a first
-       pass had added onto it was a silent no-op (`flex-wrap` only affects
-       a flex container) and all 11 tabs stayed on one unwrapped grid row,
-       overflowing the page on narrow viewports. Fixed by forcing
-       `flex flex-nowrap` (Tailwind's utility layer loads after daisyUI's
-       component layer in the compiled CSS, so the override wins) plus
-       `overflow-x-auto` so the bar becomes one horizontally-scrollable row
-       instead of wrapping into several — chosen over wrapping since
-       wrapping 11 tabs of uneven label length onto 3-4 rows looked worse
-       than a scrollable single row (same pattern most apps use for wide
-       tab bars). Each `<a class="tab">` also got `whitespace-nowrap` so a
-       label can't wrap mid-word while the bar scrolls. **Worth remembering
-       if another daisyUI `.tabs`/`.tabs-boxed` bar is added anywhere
-       else**: `flex-wrap` alone does nothing on it; you need `flex
-       flex-nowrap overflow-x-auto` (or `flex flex-wrap` if wrapping to
-       multiple rows is actually wanted instead of scrolling).
-     - Verified: `npm run build:css` rebuilt clean with the new utility
-       classes present in the compiled output, and the full test suite
-       (829/829) plus the `deployment_pods`-specific subset were both
-       re-run after the fix and pass.
-     - **Not verified in a live browser** — same sandbox constraint as
-       everything else in this file (no working headless Chromium here).
-       Worth an actual mobile-width visual pass, especially the
-       Ingress/NetworkPolicy modals' multi-row pickers and the
-       now-horizontally-scrollable Kubernetes tab bar.
-  2. **`a2e1703`** — Kubernetes Ingress/NetworkPolicy management, login
-     security (lockout), and a Telegram security-notification integration,
-     all from one session's work:
-     - **Ingress CRUD** (`/deployment-pods`'s new "Ingress" tab,
-       `deployment_ingress.manage` permission): add/edit/delete, with two
-       editing modes toggled per create/edit dialog — **Form** (host,
-       optional ingress class, optional TLS secret name, one-or-more paths
-       each with path/pathType/backend service+port — add/remove rows) and
-       **raw YAML** (CodeMirror, same shared editor module as Deployment
-       Manifests/YAML Generator; server-side confirms `kind: Ingress`
-       before applying, so this box can't be used to slip in an arbitrary
-       manifest under a narrower permission). An Ingress that already has
-       more than one rule or TLS entry forces YAML-only editing — the Form
-       only ever shows/edits the first rule, so this stops it from
-       silently dropping the others on save. Describe (kubectl
-       describe — events/load-balancer address) is kept via the existing
-       generic `RESOURCE_KINDS`/`describe_resource()` mechanism rather than
-       a new dedicated route. The dict-building logic
-       (`app/services/yaml_generator/ingress.py`'s `build()`) is shared
-       with `/yaml-generator`, extended to accept either a single
-       path/backend (that page's existing shape, untouched) or a `paths`
-       list (the CRUD feature's one-host/multiple-paths shape) — one
-       source of truth for what an Ingress manifest dict looks like.
-       - **An "Allowed Source IPs/CIDRs" field (nginx-ingress
-         `whitelist-source-range` annotation) was added, then fully
-         reverted** a turn later per explicit request — no trace of it
-         remains in code or tests. Worth knowing in case this resurfaces;
-         nginx-ingress has no equivalent block-list annotation, only
-         allow-list, and a NetworkPolicy (see below) is a more portable
-         alternative for IP-based restriction.
-     - **NetworkPolicy CRUD** (`/deployment-pods`'s new "Network Policies"
-       tab, `deployment_network_policy.manage` permission): same
-       Form/raw-YAML dual-mode pattern as Ingress. Form mode: pod selector
-       (which pods the policy applies to, blank = all), independent
-       Ingress/Egress checkboxes each revealing their own peer list (Pod
-       Selector labels / Namespace Selector labels / IP Block CIDR —
-       add/remove rows) and port list (protocol+port). Same multi-rule
-       safety guard as Ingress (more than one ingress or egress rule
-       forces YAML-only). New shared builder
-       `app/services/yaml_generator/network_policy.py`, also added to
-       `/yaml-generator`'s resource-kind dropdown. `KubernetesProvider`
-       gained `list_ingresses`/`delete_ingress`/`list_network_policies`/
-       `delete_network_policy` (create/update reuse the existing
-       `apply()` — no new provider methods needed there).
-     - **Login lockout**: `SystemConfig.max_login_attempts` (new
-       "Security" section on `/config`, default 5) + `User.
-       failed_login_attempts`/`locked_at`. An account locks after that
-       many *consecutive* wrong-password attempts — a locked account is
-       rejected even if the next attempt's password is actually correct
-       (checked before the password itself), and the login page shows the
-       same generic "Invalid username or password" either way, so the
-       attempt that crosses the threshold doesn't reveal anything extra to
-       whoever's typing. Only clearable by a new `user.unlock` permission
-       holder (Locked badge + Unlock button on `/users`) or the account
-       owner completing a Telegram password reset (see below) — no
-       auto-expiry.
-     - **Telegram integration** (`app/services/telegram/` —
-       `TelegramNotifier.send_message()` wraps the Bot API's
-       `sendMessage`, `notify_user()`/`notify_security_contact()` are
-       best-effort wrappers that never raise, only log-and-return-False on
-       any failure). `SystemConfig.telegram_notifications_enabled` +
-       `encrypted_telegram_bot_token` (Fernet, same convention as every
-       other stored credential) live in a new "Telegram Integration"
-       section on `/config`. **Deliberate design, reached after an explicit
-       follow-up correction**: wrong-password/lockout/login security
-       alerts do **not** go to the affected account's own Telegram chat —
-       they all go to the single user configured as `SystemConfig.
-       security_notification_user_id` (a dropdown of every user, also on
-       `/config`), so one security contact watches every account rather
-       than each user getting pinged about their own activity. The
-       forgot-password flow is the one exception and is *not* routed
-       through the security contact: a reset link can only be acted on by
-       the account owner, so it always goes straight to that user's own
-       `User.telegram_chat_id` (admin-set on `/users`, along with the
-       security contact's own chat ID if they're the one configured).
-       - **Forgot/reset password**: `/forgot-password` (username →
-         Telegram link, only if that account has a chat ID configured) →
-         `/reset-password/<token>`. New `PasswordResetToken` model — only
-         a sha256 hash of the token is ever stored, 15-minute expiry,
-         single-use. The flash message is identical whether or not the
-         submitted username/Telegram setup actually exists, so this can't
-         be used to enumerate valid usernames. A successful reset also
-         clears any existing lockout (same trust level as a `user.unlock`
-         holder resetting it by hand).
-     - **Self-service `/account` page** (new `account` blueprint, no
-       permission gate beyond being logged in; linked from the navbar's
-       user dropdown as "My Account"): lets any user edit their own Full
-       Name, Telegram Chat ID, and password (current password required to
-       set a new one). Username/role/active status are deliberately absent
-       from this form — those stay admin-only via `/users`.
-     - New migrations (already applied to the dev DB via
-       `flask db upgrade`): `5c9ba2cb302e` (login lockout columns,
-       Telegram columns, `password_reset_tokens` table — the three
-       `NOT NULL` columns got `server_default` added by hand after
-       autogenerate, same as every prior batch that added a NOT NULL
-       column to a table with existing rows), `168112da5b63`
-       (`security_notification_user_id`). Chain is now `2a347cde1361` →
-       `5c9ba2cb302e` → `168112da5b63` (head).
-     - New permissions (seeded, applied to the dev DB, granted to Super
-       Admin): `deployment_ingress.manage`, `deployment_network_policy.
-       manage`, `user.unlock`.
-     - **⚠️ None of this has been verified in a live browser** — same
-       sandbox constraint as everything else in this file (no working
-       headless Chromium here): the Ingress/NetworkPolicy Form↔YAML
-       toggles and their several independent add/remove-row widgets, the
-       new `/config` Security/Telegram sections, the actual lockout UX,
-       Telegram message delivery/formatting (only exercised against a
-       mocked `requests.post`, never a real bot), and the `/account` page.
-     - **Explicitly not built** (told "not for now"): using this same
-       Telegram integration (plus a future Discord one) to *trigger*
-       Workflow runs, not just notify about login/security events. The
-       bot-token/chat-ID plumbing here is meant to be reused for that
-       later, but no command-listening/webhook surface exists yet.
-  3. **`ec9d727`** — Dockerfile management (`/dockerfiles`, a `Builder` can
-     build from a managed Dockerfile instead of a path in its own repo),
-     one-directional Version-to-Version linking (widens a Version's
-     "Linked Batches" picker on Documentation), a configurable commit log
-     limit (`SystemConfig.commit_log_limit`), a home page/sidebar redesign,
-     and a rebuilt Documentation-page Object filter/picker (several rounds
-     of dropdown-clipping and re-render interaction-bug fixes along the
-     way — see this commit or `AI_CONTEXT.md` Part 9 if a similar
-     dropdown-in-a-`.collapse`-or-`<dialog>` widget is added elsewhere).
-  4. **`6e8eede`** — a shared `app/static/js/yaml_editor.js` CodeMirror
-     module (fixing a cursor-position bug that existed as two duplicated
-     init blocks) plus the original `/yaml-generator` page (Deployment/
-     Service/ConfigMap/Secret/Ingress — Ingress and the shared editor are
-     both now extended further by this session's work above).
+- **840 tests passing** (as of the last full run).
+- **Everything is committed and pushed to `origin/main`**, most recently as
+  six commits from one session — all found and fixed by actually trying to
+  *run* this app for the first time, via a new Podman-based trial deploy
+  (`docker-compose.podman.yml`, see below) rather than only the usual
+  bare-metal `.venv` dev flow. None of it was caught by the test suite alone:
+  1. **Kubernetes manifests + the Podman trial-deploy compose file** —
+     `k8s/deployment.yaml` (Namespace/Secret/Deployment/Service) +
+     `k8s/network-policy.yaml`, a starting point for an actual cluster
+     deploy; every per-environment value (registry/image, DB credentials,
+     NetworkPolicy IP whitelist, the `hostPath` for `/app/data`) is an
+     obvious `<PLACEHOLDER>` — none of it is real yet.
+     `docker-compose.podman.yml` is the web-only (no `db` service) compose
+     file actually used this session — points straight at an existing
+     external Postgres server (`PODMAN_DATABASE_URL` in `.env`, separate
+     from bare-metal dev's own `DATABASE_URL`) rather than a
+     compose-managed one, and mounts Podman's rootless API socket
+     (`systemctl --user enable --now podman.socket`) at the same
+     `/var/run/docker.sock` path the image builder's `docker` CLI expects.
+  2. **Clipboard copy buttons fixed on insecure (non-`localhost`) origins**
+     — `navigator.clipboard` only exists in a secure context (HTTPS, or
+     literally the hostname `localhost`); opening the app via any other
+     hostname/IP over plain HTTP left every copy button throwing
+     (`Cannot read properties of undefined (reading 'writeText')`). A
+     `document.execCommand("copy")` fallback was tried first but confirmed
+     in practice to sometimes report success on an insecure origin while
+     silently never reaching the real OS clipboard (a Chromium quirk, not
+     something page script can reliably detect). Both copy buttons
+     (`copy-to-clipboard.js`, `yaml_generator.js`) now fall back to
+     `window.prompt()` instead — real browser-native UI, not page-scripted,
+     so a manual Ctrl+C/Cmd+C out of it always actually works.
+  3. **Build/push pipeline hardened; Kaniko disabled app-wide** — several
+     fixes discovered trying to actually trigger a build against the
+     Podman trial deploy:
+     - **Kaniko is no longer selectable** as a build engine — removed from
+       `SystemConfig.build_engine`'s choices
+       (`app/blueprints/system_config/forms.py`) and
+       `app/services/build/factory.py`'s `_ENGINES` map.
+       `KanikoBuildEngine` itself (`app/services/build/engine.py`) is left
+       intact for later, just unreachable. **Why**: it runs
+       `kaniko-executor` as a bare subprocess of this app, with no
+       container/chroot of its own — confirmed in practice that building
+       this repo's *own* multi-stage Dockerfile extracted
+       `node:20-alpine`'s layers straight onto the **running app
+       container's own filesystem** (overwrote `/etc/os-release` to
+       report Alpine instead of Debian, dropped Alpine's `node`/`npm`
+       binaries into `/usr/local/bin`). The real fix is running kaniko in
+       its own throwaway container per build (e.g. `docker run` over the
+       same socket `DockerBuildEngine` already uses) — this change just
+       stops it from being triggerable until that's built. If this
+       resurfaces: the live app container had to be recreated
+       (`podman-compose down && up --build`) to clear the contamination:
+       a plain restart wouldn't have, since it was in the container's own
+       writable layer, not a volume.
+     - **`DockerHubProvider.docker_config_auth_key`** (new property on
+       `RegistryProvider`, defaults to `registry_host`) — Docker Hub is
+       special-cased in the Docker/OCI credential convention: an
+       unqualified reference (no host prefix, e.g. `myuser/myapp`)
+       resolves to the default registry `index.docker.io`, and both
+       `docker login` and go-containerregistry (Kaniko's credential-file
+       lookup) key that default's auth entry under the legacy string
+       `"https://index.docker.io/v1/"` — **not** `registry_host`
+       (`registry-1.docker.io`, the real pull/push API host). This bit
+       twice: Kaniko's generated `~/.docker/config.json` was keyed by
+       `registry_host`, so it found no matching credentials and pushed
+       anonymously (401); and `docker_client.login()` omitted `registry=`
+       entirely, which a real `dockerd` defaults internally but Podman's
+       Docker-API-compatible `/auth` endpoint does not, and 500'd trying
+       to ping `https:///v2/` with no host at all. Both now use
+       `docker_config_auth_key`.
+     - **`DockerBuildEngine.CLIENT_TIMEOUT_SECONDS = 600`** — docker-py's
+       default 60s is a **per-read** socket timeout, too tight pushing a
+       real several-hundred-MB image through Podman's Docker-API socket
+       (slower than a native `dockerd` push); raised a bare `ReadTimeout`
+       mid-push with no retry.
+     - **`BuildEngine.cleanup_local_image()`** — a Docker-engine build's
+       locally-loaded image (buildx's `--load`) was never removed after a
+       successful push, growing local daemon storage by a full image on
+       *every single build, forever* — confirmed reaching 9.4GB / 105
+       images (69% reclaimable) on the trial-deploy host from ordinary use
+       plus this session's own repeated rebuilds. Default no-op on the
+       base class for engines that push as part of `build_image()` itself
+       (Kaniko), since those never load anything locally to begin with;
+       `DockerBuildEngine` overrides it to actually remove the image.
+       Called by the worker right after a successful push, best-effort —
+       a cleanup failure is logged (`ErrorLog`, source
+       `worker.cleanup_local_image`) but never flips the build to
+       `failed`.
+     - **`ImageBuild.error_log_id`** (new nullable FK, migration
+       `7d79f7acc529`) — links a failed build to the `ErrorLog` row its
+       own failure created (both `log_error()` call sites in
+       `_run_build` now capture the returned entry), so `/images` shows a
+       direct "View error" link per failed row instead of making someone
+       go search Error Logs for the matching entry — gated behind
+       `logs.view`, same permission the Error Logs page itself requires.
+       Pre-existing failed builds (from before this migration) were
+       backfilled by hand, matching each `ImageBuild.id` embedded
+       verbatim in its `ErrorLog.message` text (`log_error`'s
+       `description=f"Build {build.id} ..."`) — no script for this was
+       kept, it was a one-off run directly against the DB.
+  4. **Fixed background worker threads silently not starting, or dying,
+     under gunicorn** — two separate bugs found chasing a build stuck
+     permanently in `queued`:
+     - All four background poll threads (build worker, deploy worker,
+       deploy status poller, workflow orchestrator) shared this guard,
+       meant to stop Flask's *own* dev-server reloader from
+       double-starting them in its doomed parent watcher process:
+       `if app.debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true": return`.
+       `app.debug` is just a config flag with no bearing on which WSGI
+       server is actually running the app — gunicorn never sets
+       `WERKZEUG_RUN_MAIN` either, so **any** deployment with
+       `FLASK_ENV=development` (this repo's own `.env`, reused directly
+       as `docker-compose`'s `env_file`) silently never started *any* of
+       these threads at all under gunicorn: nothing was ever polling the
+       build/deploy queues, triggered work just sat "queued" forever with
+       no error anywhere. New `app/utils/runtime.py`'s
+       `is_werkzeug_reloader_parent()` also checks `"gunicorn" in
+       sys.modules` — only a real gunicorn worker process has that
+       loaded — to tell it apart from Werkzeug's reloader parent, which
+       does not.
+     - Separately (and this is what actually caused the "stuck in
+       queued" incident, once the guard bug above was already fixed):
+       the build and deploy workers' `_poll_loop`s had **no
+       per-iteration error handling at all**, unlike the heartbeat and
+       status-poll loops, which already did. One uncaught exception (a
+       schema briefly out of sync mid-deploy — the `error_log_id` column
+       above didn't exist yet on this trial-deploy DB for a few minutes
+       between deploying the code and running the migration against it)
+       permanently killed the thread, with no way to recover short of
+       restarting the whole process — the DB fix alone didn't help,
+       since the thread was already dead. Both now wrap the claim/reap
+       step in try/except: log-and-retry instead of dying.
+  5. **First-time database setup wizard** — `entrypoint.sh` no longer runs
+     `flask db upgrade` + the seed scripts unconditionally on every
+     container start (still waits for DB connectivity first). A new
+     `/setup` page (`app/blueprints/setup/`, `app/utils/setup_status.py`)
+     now gates every other route — via a `before_request` hook in
+     `app/__init__.py` — until the DB is confirmed at migration head
+     *and* seeded (Alembic's current-vs-head revision, plus whether a
+     `User` row exists). Shows DB connectivity and empty/non-empty status
+     either way; a button always lets you run the same migrate+seed steps
+     `entrypoint.sh` used to, regardless of which state it's in. Skipped
+     entirely under `TestingConfig` (`app.testing`), since the test DB is
+     built via `db.create_all()`, not Alembic, and would otherwise never
+     look "set up" to this check. **Note**: this means a future deploy
+     shipping new migrations will now show `/setup` again too, not just a
+     brand-new install — routine upgrades are no longer silently
+     auto-migrated on boot. Ask if you'd rather restore auto-migration for
+     upgrades and keep `/setup` as a fresh-install-only fallback instead.
+     - Follow-on fix, found the hard way (a bare 500 on `/setup` itself):
+       hitting any route before/while the DB isn't fully set up could
+       poison the shared SQLAlchemy session — a failed query leaves its
+       transaction aborted until explicitly rolled back — which then made
+       *every other* query in that same request fail too, including the
+       error-logging path itself trying to look up `current_user` to
+       attribute the error, turning what should've been a clean redirect
+       into a raw, unstyled "Internal Server Error". `load_user()`
+       (`app/__init__.py`) and `log_error()`
+       (`app/utils/error_logger.py`) now catch and roll back instead of
+       letting it propagate. `is_setup_complete()` also stopped caching
+       "complete" forever in-process — it re-checks every time — since a
+       permanent cache meant a DB that lost its tables *after* first
+       being confirmed complete (e.g. someone manually dropped them) was
+       never re-detected as needing setup again.
+  6. **Default sidebar icons for menus that were missing one** — only
+     Dockerfiles/YAML Generator/Workflows had an `icon` set; every other
+     menu item (Home, Users, Roles, Deployment, System, ...) rendered
+     with no icon at all, next to the ones that did. Added a matching
+     Lucide icon (`seeds/seed_menu.py`) for each remaining item, plus a
+     one-off backfill (`migrate_add_missing_icons`) so already-seeded
+     databases pick them up too, not just fresh installs.
   Anything older is covered by `git log`/`AI_CONTEXT.md`, not repeated here.
-- **Migration head is `168112da5b63`** — already applied to the dev DB via
-  `flask db upgrade` (confirmed via `flask db current`).
+- **Migration head is `7d79f7acc529`** — already applied to both the
+  bare-metal `.venv` dev DB (`masimple_cicd`) and the Podman trial-deploy
+  DB (an external Postgres server, dbname `postgres` — see
+  `docker-compose.podman.yml`'s `PODMAN_DATABASE_URL` in `.env`; deployed
+  there via the new `/setup` wizard, not `flask db upgrade` directly,
+  though both end up at the same state).
+- **This session's Podman trial deploy is worth repeating after any future
+  change to the build/deploy pipeline** — every fix in commit 3/4 above was
+  found only by actually running the app end-to-end this way; none of it
+  was (or realistically could be, without a live daemon/socket) caught by
+  the test suite. `podman-compose -f docker-compose.podman.yml up -d
+  --build` from a shell with `podman.socket` enabled
+  (`systemctl --user enable --now podman.socket`) is enough to stand it
+  back up.
 - **`seeds/seed_menu.py`'s label-drift risk is dormant, not fixed** — see
   `AI_CONTEXT.md` Part 7 and the `seed_menu_label_mismatch` memory (stale/
-  historical) if this resurfaces. None of this session's new permissions
-  needed a new `Menu` row (Ingress/NetworkPolicy are tabs under the
-  existing `/deployment-pods` pages; Security/Telegram are sections on the
-  existing `/config` page; `/account` is reached from the navbar dropdown,
-  not the sidebar menu tree) — this risk is unchanged from before.
+  historical) if this resurfaces.
 - Run tests via:
   ```bash
   source .venv/bin/activate && set -a && source .env && set +a
@@ -223,15 +224,16 @@ Then ask me what to work on next rather than assuming.
   (`.env`'s `DATABASE_URL`/`TEST_DATABASE_URL` already point at the WSL2
   gateway IP `172.29.16.1` directly, not the `db` Docker Compose hostname —
   no `sed` swap needed from inside the sandbox.)
-- CSS changes need a rebuild to actually show up: `npm run build:css`
-  (already run as of this session's work — the responsive pass above pulled
-  in new utility classes, e.g. `flex-nowrap`/`overflow-x-auto` on the
-  Kubernetes tab bar, that weren't previously compiled).
-- **gunicorn now runs `--worker-class gthread --threads 4 --timeout 120`**
+- CSS changes need a rebuild to actually show up: `npm run build:css`.
+- **gunicorn runs `--worker-class gthread --threads 4 --timeout 120`**
   (`entrypoint.sh`), not plain sync workers — changed to support the pod-logs
   SSE stream. Keep this in mind before adding any other long-lived-connection
   feature: worker/thread capacity is a real, finite budget (3 workers × 4
-  threads), not "one request per worker, always fine."
+  threads), not "one request per worker, always fine." All four background
+  poll threads (build/deploy/status/workflow) now correctly start in *every*
+  one of these worker processes even with `FLASK_ENV=development` — see
+  commit 4 above; this was silently broken before this session, with no
+  error anywhere to indicate it.
 - **TEBET-APP-3's client certificate expired 2026-08-09** — a real, live
   dev-DB `DeploymentServer` row. "Test Connection"/deploys/pod browsing
   against it will fail with "the server has asked for the client to provide
@@ -253,24 +255,43 @@ Then ask me what to work on next rather than assuming.
     header automatically, and the form itself is instantiated with
     `meta={"csrf": False}` so its own embedded `csrf_token` field
     (which the AJAX body never includes) doesn't also get checked and fail.
+  - **Kaniko is disabled, not just "an alternative to docker"** — see
+    commit 3 above. Only `"docker"` is a selectable `SystemConfig.
+    build_engine` right now. `DockerBuildEngine` shells out to `docker
+    buildx build`; against Podman's socket specifically (no native
+    BuildKit support server-side), buildx's `docker-container` driver
+    transparently spins up its own `moby/buildkit` container to do the
+    real work instead — confirmed working end-to-end (build, run, correct
+    output) — rather than needing the daemon itself to support BuildKit.
   - The "docker" build engine runs bare-metal on the host (shells out to the
-    host's own `docker` CLI over the mounted socket); "kaniko" runs
-    containerized/daemonless. `buildx` needed on the host for local
-    "docker"-engine builds regardless of the Dockerfile's own copy.
+    host's own `docker` CLI over the mounted socket, real `dockerd` or
+    Podman's Docker-API-compatible socket alike); "kaniko" is currently
+    disabled (see above) rather than "runs containerized/daemonless" as
+    previously — its actual problem is the *opposite* of daemonless
+    isolation: no isolation from *this app's own* container at all.
+    `buildx` needed on the host (or in this app's image, which already has
+    it) for local "docker"-engine builds regardless of the Dockerfile's own
+    copy.
   - `REPO_CLONE_ROOT` (`<app>/data/repos`) has a persistent named Docker
     volume (`repo_clones`, `docker-compose.yml`) — registered repos' local
     clones survive container restarts. This is a Docker-*managed* named
     volume, **not** a bind mount to the project's own `./data/repos` folder
     on the host — editing/adding a file under the project checkout's
     `data/repos` does nothing; reach the real clone via
-    `docker compose exec web ls /app/data/repos`.
+    `docker compose exec web ls /app/data/repos`. The new `k8s/deployment.yaml`
+    takes a different approach for an actual cluster deploy: a `hostPath`
+    volume mounted at `/app/data` (not a PVC) with a placeholder node path,
+    per explicit request — ties the pod to whichever node has that
+    directory unless a `nodeSelector`/`nodeName` is also added.
   - The app now runs **four** independent background poll threads (build
     worker, deploy worker, deploy live-status poller, workflow
     orchestrator), each with its own DB-queue; none execute each other's
     work. Both the build and deploy workers additionally run a
     **heartbeat** thread each: every claimed job's `heartbeat_at` is ticked
     every 15s while it runs, and a stale/missing heartbeat (>60s) on the
-    single `status='running'` row is auto-reaped as a failure.
+    single `status='running'` row is auto-reaped as a failure. All four
+    (and both heartbeat threads) now reliably start under gunicorn — see
+    commit 4 above.
   - **If `SystemConfig.telegram_notifications_enabled` is turned on**,
     whatever host runs this app needs outbound HTTPS access to
     `api.telegram.org` — the Bot API call is a plain `requests.post` with a

@@ -68,7 +68,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | Deployment (of MASIMPLE CICD itself) | Docker (multi-stage: Node build for CSS, then Python/gunicorn `--worker-class gthread --threads 4`), Docker Compose (`web` + `db`) |
 | Git integration | GitPython, provider-abstracted (`GitProvider` → `GitHubProvider`) |
 | Registry integration | docker-py, provider-abstracted (`RegistryProvider` → `DockerHubProvider`/`GHCRProvider`/`HarborProvider`/`ECRProvider`, all implemented) |
-| Image builds | shells out to `docker buildx build` or a `kaniko-executor` binary, provider-abstracted (`BuildEngine`) |
+| Image builds | shells out to `docker buildx build`, provider-abstracted (`BuildEngine`). A `kaniko-executor`-based engine also exists but is currently **disabled** (not selectable) — it ran as a bare subprocess of this app with no container/chroot of its own, and a real build was confirmed to extract the target image's layers onto *this app's own* running container filesystem instead of an isolated one |
 | Kubernetes integration | shells out to the `kubectl` CLI (no `kubernetes` client library), provider-abstracted (`DeploymentProvider` → `KubernetesProvider`/`CustomAPIProvider`) — `kubectl` must be installed wherever MASIMPLE CICD itself runs; pod logs stream via `kubectl logs -f` over Server-Sent Events |
 | AI description generation | provider-abstracted (`AIProvider` → `QwenProvider`/`ClaudeProvider`/`GeminiProvider`/`CustomAPIProvider`, all implemented) |
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
@@ -205,11 +205,13 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   `additional_description` fields captured at trigger time.
 - `ImageBuild` — one `Builder`'s execution inside a `BuildBatch`: branch
   used, status, image tag/size, build log, timestamps, `commit_sha` (the
-  commit this build ran against) → `ImageBuildCommit` (one row per commit
-  since this `(builder, branch)` pair's previous successful build — sha,
-  author, message, committed-at — captured at build time, powers both the
-  "since last build" AI context and the Documentation page's commit-range
-  display).
+  commit this build ran against), `error_log_id` (nullable FK →
+  `ErrorLog`, set on failure so `/images` can link straight to the full
+  error/traceback instead of making someone search Error Logs for it) →
+  `ImageBuildCommit` (one row per commit since this `(builder, branch)`
+  pair's previous successful build — sha, author, message, committed-at —
+  captured at build time, powers both the "since last build" AI context
+  and the Documentation page's commit-range display).
 - `ChangeType` (lookup: New Program/Update/Bug Fix/…, extensible).
 - `Object` (lookup: what a build/documentation entry is about, e.g.
   "checkout-flow", extensible — same get-or-create-on-unseen-name shape as
@@ -238,7 +240,8 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   several distinct fields back reliably rather than one free-text blob.
 - `SystemConfig` — a **singleton** row of app-wide settings: timezone
   (applied to every displayed timestamp via a `localtime` Jinja filter),
-  session timeout minutes, build engine choice (`docker`/`kaniko`), a UI
+  session timeout minutes, build engine choice (`docker` only right now —
+  `kaniko` is disabled, see "Image builds" above), a UI
   toggle (`hide_navbar_title_when_sidebar_open`), the Deployment module's
   live-status poll interval, and `commit_log_limit` (max commits
   `GitProvider.get_commits()`/`get_commit_messages()` reads when there's no
@@ -321,6 +324,13 @@ backs the forgot-password flow: single-use, 15-minute expiry.
 
 ## Feature list (by page)
 
+- **`/setup`** (no login/permission required — it's the gate *before* a
+  usable login exists) — first-time/upgrade database setup wizard. Every
+  other route redirects here until the DB is confirmed at Alembic head
+  *and* seeded (a `User` row exists); shows DB connectivity and
+  empty/non-empty status, and a button runs migrations + all seed scripts
+  (`entrypoint.sh` no longer does this automatically on boot). Skipped
+  entirely under `TestingConfig`.
 - **`/` Dashboard** — active users/roles counts; permission-gated Image
   Builder stat cards (Builders/Versions/Images Built/Documentation Pending)
   and Deployment stat cards (Deployment Servers/Manifests/Runs), each only
@@ -389,7 +399,9 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   widget with a spinner + real progress bar while a build runs.
 - **`/images`** — build run history grouped by `BuildBatch`, filterable by
   status, with per-image registry links and human-readable sizes; running
-  items show a spinner.
+  items show a spinner. A failed image also shows a "View error" link
+  straight to its `ErrorLog` entry (`ImageBuild.error_log_id`), gated
+  behind `logs.view`.
 - **`/documentation`** — list of every fully-successful (and thus
   documented) batch, with a full multi-field filter (Version, Version
   String substring, Change Type, Object(s), Built By, Documented/Pending
@@ -708,3 +720,26 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   use the Restart button on `/deployment-pods/<server_id>/workloads`
   instead (`kubectl rollout restart deployment/<name>`) — a separate,
   narrower action that only exists for that one resource kind.
+- **The Kaniko build engine is disabled, not just an untested alternative
+  to Docker** — see the "Image builds" row in the tech-stack table above
+  and `SESSION_START.md`'s "Current state" for the full incident. It needs
+  a real rewrite (running kaniko in its own throwaway container per build,
+  not as a bare subprocess of this app) before it can be re-enabled; the
+  existing `KanikoBuildEngine` implementation is left in place as a
+  starting point, not deleted.
+- **A deploy shipping new migrations now shows `/setup` again on the next
+  request, not just on a brand-new install** — removing entrypoint.sh's
+  automatic `flask db upgrade` + seed in favor of the `/setup` wizard (see
+  the "Feature list" entry above) means routine upgrades are no longer
+  silently auto-migrated on boot either; someone has to click through
+  `/setup` after every deploy that ships a migration, the same as a
+  first-time install. Worth revisiting if that's not the intended
+  tradeoff — e.g. keep auto-migration for an already-seeded DB and use
+  `/setup` only as a fresh-install fallback.
+- **`k8s/deployment.yaml` and `k8s/network-policy.yaml` are untested
+  starting-point manifests** — written for an actual Kubernetes deploy of
+  this app (as opposed to the Podman trial-deploy compose file actually
+  exercised this session), but never applied to a real cluster; every
+  per-environment value is a placeholder. `kubectl apply --dry-run` wasn't
+  even usable to sanity-check them in this sandbox — the only configured
+  cluster context had an unrelated TLS cert mismatch.
