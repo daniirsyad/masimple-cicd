@@ -30,7 +30,28 @@ Then ask me what to work on next rather than assuming.
 - **854 tests passing** (as of the last full run).
 - **This session's work** (on top of everything below), pushed to
   `origin/main`:
-  1. **Editing a Kubernetes Secret's value now auto-restarts the Deployments
+  1. **The container image never had `kubectl` installed at all** — every
+     `DeploymentServer` action (test-connection, apply/delete, pods/
+     secrets/configmaps management, rollout restarts — anything going
+     through `KubernetesProvider`, which shells out to `kubectl` rather
+     than using a Kubernetes REST client) failed with `RuntimeError: Could
+     not reach cluster: [Errno 2] No such file or directory: 'kubectl'` the
+     moment someone deployed this app's own image to a real environment,
+     surfaced when the user deployed to their own Kubernetes cluster (one
+     this session has no access to). `Dockerfile` already copied in a
+     `docker` CLI and `kaniko-executor` as pinned static binaries but
+     simply never did the equivalent for `kubectl`. Fixed by downloading
+     the official release binary (`https://dl.k8s.io/release/${KUBECTL_
+     VERSION}/bin/linux/$(dpkg --print-architecture)/kubectl`, arch-aware)
+     into `/usr/local/bin/kubectl`, pinned via a new `KUBECTL_VERSION`
+     build arg (default `v1.30.4`, overridable with `--build-arg
+     KUBECTL_VERSION=vX.Y.Z` if a cluster needs a version closer to its own
+     — kubectl supports ±1 minor version skew from the server). Verified
+     by actually building the image locally (`docker build .`) and running
+     `kubectl version --client` inside it — v1.30.4, works. `curl` was
+     added to the apt-get line too (only needed transiently to fetch the
+     binary).
+  2. **Editing a Kubernetes Secret's value now auto-restarts the Deployments
      that consume it.** Root-caused a report of "updating a secret in
      `/deployment-pods` doesn't update the Kubernetes secret" — the Secret
      *object* was actually being patched correctly all along (`stringData`
@@ -57,7 +78,7 @@ Then ask me what to work on next rather than assuming.
      documented `kubectl apply` merge caveat for *removing* a key on a
      secret's very first edit (see `update_secret()`'s own docstring) is
      still unfixed — separate, narrower issue, not what was reported here.
-  2. **A missing/malformed `CREDENTIAL_ENCRYPTION_KEY` no longer 500s.**
+  3. **A missing/malformed `CREDENTIAL_ENCRYPTION_KEY` no longer 500s.**
      Found via a real deployment attempt (`k8s/deployment.yaml`'s Secret
      still had its literal `CREDENTIAL_ENCRYPTION_KEY: "<GENERATE_A_FERNET_
      KEY>"` placeholder, never filled in) — saving System Config with a

@@ -26,8 +26,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # ca-certificates: required by kaniko-executor (a static Go binary with no
 #   bundled cert store of its own) to verify registry TLS when the "kaniko"
 #   build engine pushes images — not otherwise guaranteed present on -slim.
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+# curl: only needed transiently, to fetch the kubectl binary below.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
+
+# kubectl: KubernetesProvider (app/services/deployment/kubernetes_provider.py)
+# shells out to `kubectl` for every action against a registered Kubernetes
+# DeploymentServer — test-connection, apply/delete, pods/secrets/configmaps
+# management, rollout restarts — same "shell out to the real CLI, don't
+# reimplement its protocol" precedent as the docker CLI/kaniko-executor
+# below. Not present on python:3.12-slim by default; installed from the
+# official release URL and pinned to a specific version, same as those.
+ARG KUBECTL_VERSION=v1.30.4
+RUN curl -fsSL -o /usr/local/bin/kubectl \
+      "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/$(dpkg --print-architecture)/kubectl" \
+    && chmod +x /usr/local/bin/kubectl
 
 # docker CLI + buildx plugin: the "docker" build engine (see
 # app/services/build/engine.py) shells out to `docker buildx build` against
