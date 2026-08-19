@@ -39,8 +39,19 @@ def _parse_uuid(value):
         return None
 
 
-def _server_choices():
-    return [(str(s.id), s.name) for s in DeploymentServer.query.order_by(DeploymentServer.name).all()]
+def _server_choices(include_servers=None):
+    """Active servers only — plus, if given, `include_servers` (a manifest's
+    own currently-targeted servers) so re-submitting its edit form doesn't
+    fail WTForms' choice validation, or silently drop a target, just because
+    one of them has since been disabled.
+    """
+    choices = [(str(s.id), s.name) for s in DeploymentServer.query.filter_by(is_active=True).order_by(DeploymentServer.name).all()]
+    if include_servers:
+        existing_ids = {choice_id for choice_id, _ in choices}
+        for server in include_servers:
+            if str(server.id) not in existing_ids:
+                choices.append((str(server.id), server.name))
+    return choices
 
 
 def _user_choices():
@@ -51,7 +62,7 @@ def _user_choices():
 
 
 def _builder_choices():
-    return [(str(b.id), b.name) for b in Builder.query.order_by(Builder.name).all()]
+    return [(str(b.id), b.name) for b in Builder.query.filter_by(is_active=True).order_by(Builder.name).all()]
 
 
 BUILDER_SUCCESSFUL_BUILDS_LIMIT = 20
@@ -152,6 +163,50 @@ def _manifest_live_server_ids(manifests):
     }
 
 
+def _manifest_delete_reasons(manifests):
+    """{manifest_id: reason_or_None} — the same three checks delete_manifest()
+    itself runs, in the same order, before rejecting the request; computed
+    here so the Delete button can be disabled up front instead of only
+    failing after a click. The "still deployed" check intentionally mirrors
+    delete_manifest()'s own candidate set (every server with ANY execution
+    history for this manifest, not just its *current* target_servers, since
+    those can drift apart after a manifest's targets are edited) rather than
+    reusing manifest_live_servers/_manifest_live_server_ids above, which is
+    scoped to current target_servers and would miss a manifest still live on
+    a since-detached server.
+    """
+    reasons = {}
+    for manifest in manifests:
+        in_flight = DeploymentExecution.query.filter(
+            DeploymentExecution.manifest_id == manifest.id, DeploymentExecution.status.in_(("queued", "running"))
+        ).first()
+        if in_flight is not None:
+            reasons[manifest.id] = "A deploy/stop is currently in progress for it."
+            continue
+
+        server_ids = {
+            row[0]
+            for row in DeploymentExecution.query.with_entities(DeploymentExecution.server_id)
+            .filter_by(manifest_id=manifest.id)
+            .distinct()
+        }
+        live_servers = [
+            server
+            for server in DeploymentServer.query.filter(DeploymentServer.id.in_(server_ids)).all()
+            if is_currently_deployed(manifest.id, server.id)
+        ]
+        if live_servers:
+            names = ", ".join(server.name for server in live_servers)
+            reasons[manifest.id] = f"Still deployed on: {names}."
+            continue
+
+        referencing_steps = WorkflowStep.query.filter(WorkflowStep.selected_manifests.any(id=manifest.id)).count()
+        reasons[manifest.id] = (
+            f"Individually selected in {referencing_steps} workflow step(s)." if referencing_steps else None
+        )
+    return reasons
+
+
 def _manifest_update_availability(manifests, manifest_live_servers):
     """{manifest_id_str: [server_id_str, ...]} of servers where a manifest
     is currently deployed AND a newer resolvable version exists — drives
@@ -237,18 +292,18 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
     create_form.server_ids.choices = _server_choices()
     create_form.allowed_user_ids.choices = _user_choices()
 
-    manifests = DeploymentManifest.query.order_by(DeploymentManifest.name).all()
+    manifests = DeploymentManifest.query.filter_by(is_active=True).order_by(DeploymentManifest.name).all()
 
     invalid_id, invalid_form = invalid_edit or (None, None)
     edit_forms = {}
     for manifest in manifests:
         if manifest.id == invalid_id:
-            invalid_form.server_ids.choices = _server_choices()
+            invalid_form.server_ids.choices = _server_choices(include_servers=manifest.target_servers)
             invalid_form.allowed_user_ids.choices = _user_choices()
             edit_forms[manifest.id] = invalid_form
         else:
             form = DeploymentManifestForm(obj=manifest, prefix=_edit_prefix(manifest.id))
-            form.server_ids.choices = _server_choices()
+            form.server_ids.choices = _server_choices(include_servers=manifest.target_servers)
             form.server_ids.data = [str(server.id) for server in manifest.target_servers]
             form.allowed_user_ids.choices = _user_choices()
             form.allowed_user_ids.data = [str(user.id) for user in manifest.allowed_users]
@@ -257,6 +312,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
     manifest_live_servers = _manifest_live_server_ids(manifests)
     manifest_updates = _manifest_update_availability(manifests, manifest_live_servers)
     groups, ungrouped = _manifest_groups(manifests, manifest_live_servers, manifest_updates)
+    delete_reasons = _manifest_delete_reasons(manifests)
 
     manifest_bindings = {
         str(manifest.id): [
@@ -277,6 +333,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
         ungrouped=ungrouped,
         manifest_live_servers=manifest_live_servers,
         manifest_updates=manifest_updates,
+        delete_reasons=delete_reasons,
         create_form=create_form,
         edit_forms=edit_forms,
         builders=Builder.query.order_by(Builder.name).all(),
@@ -350,7 +407,7 @@ def create_manifest():
 def edit_manifest(manifest_id):
     manifest = DeploymentManifest.query.get_or_404(manifest_id)
     form = DeploymentManifestForm(prefix=_edit_prefix(manifest_id))
-    form.server_ids.choices = _server_choices()
+    form.server_ids.choices = _server_choices(include_servers=manifest.target_servers)
     form.allowed_user_ids.choices = _user_choices()
 
     if form.validate_on_submit():
@@ -487,6 +544,53 @@ def delete_manifest(manifest_id):
     return redirect(url_for("deployment_manifests.index"))
 
 
+@deployment_manifests_bp.route("/archived")
+@permission_required("deployment_manifest.manage")
+def archived():
+    manifests = DeploymentManifest.query.filter_by(is_active=False).order_by(DeploymentManifest.name).all()
+    # No live-status/update computation needed here — the archived page has
+    # no Deploy/Stop/Update buttons, just a Restore action, so the empty
+    # dicts below are enough for _manifest_groups' grouping-only use.
+    groups, ungrouped = _manifest_groups(manifests, {}, {})
+    return render_template("deployment_manifests/archived.html", groups=groups, ungrouped=ungrouped)
+
+
+@deployment_manifests_bp.route("/<uuid:manifest_id>/disable", methods=["POST"])
+@permission_required("deployment_manifest.manage")
+def disable_manifest(manifest_id):
+    manifest = DeploymentManifest.query.get_or_404(manifest_id)
+    manifest.is_active = False
+    db.session.commit()
+
+    log_activity(
+        action="DISABLE_DEPLOYMENT_MANIFEST",
+        target_type="deployment_manifest",
+        target_id=str(manifest.id),
+        description=f"Disabled deployment manifest '{manifest.name}'",
+    )
+
+    flash(f"'{manifest.name}' disabled — moved to Archived.", "info")
+    return redirect(url_for("deployment_manifests.index"))
+
+
+@deployment_manifests_bp.route("/<uuid:manifest_id>/enable", methods=["POST"])
+@permission_required("deployment_manifest.manage")
+def enable_manifest(manifest_id):
+    manifest = DeploymentManifest.query.get_or_404(manifest_id)
+    manifest.is_active = True
+    db.session.commit()
+
+    log_activity(
+        action="ENABLE_DEPLOYMENT_MANIFEST",
+        target_type="deployment_manifest",
+        target_id=str(manifest.id),
+        description=f"Re-enabled deployment manifest '{manifest.name}'",
+    )
+
+    flash(f"'{manifest.name}' re-enabled.", "success")
+    return redirect(url_for("deployment_manifests.archived"))
+
+
 def _load_manifests_from_form():
     manifest_ids = [_parse_uuid(raw) for raw in request.form.getlist("manifest_ids")]
     return [m for m in (DeploymentManifest.query.get(mid) for mid in manifest_ids if mid) if m is not None]
@@ -542,6 +646,16 @@ def _trigger_deploy_action(manifests, activity_action, verb, no_manifest_message
     """
     if not manifests:
         flash(no_manifest_message, "error")
+        return redirect(url_for("deployment_manifests.index"))
+
+    # Deploying/updating an archived manifest is refused — but restart()/
+    # stop() (the *teardown*-style actions, _trigger_teardown_style_action)
+    # deliberately don't share this check: an archived manifest that's
+    # still deployed must still be stoppable/restartable, only *new*
+    # rollouts of it are blocked.
+    disabled = [manifest.name for manifest in manifests if not manifest.is_active]
+    if disabled:
+        flash(f"Cannot {verb}: disabled manifest(s): {', '.join(disabled)}.", "error")
         return redirect(url_for("deployment_manifests.index"))
 
     servers = {server for manifest in manifests for server in manifest.target_servers}

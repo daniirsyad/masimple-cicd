@@ -27,8 +27,101 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **854 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below), pushed to
+- **911 tests passing** (as of the last full run).
+- **This session's work** (on top of everything below) — three features,
+  built in sequence, each planned via plan-mode with the user before
+  implementation. Not yet committed/pushed as of this note; see the git
+  status check at the end of this session for whether that's since changed.
+  1. **Workflow build steps can auto-generate their Version Bump/Change
+     Type/Object/Message at run time instead of requiring them typed in at
+     authoring time**, with an optional human-review gate. Reuses the
+     existing heuristic (Conventional-Commits regex, `bump_heuristic.py`) +
+     AI (`compute_build_prefill()`) engine that already powered the
+     authoring-time "Preview from Git" modal — just invokes it from
+     `app/services/workflow/worker.py::_start_step()` on every actual run
+     instead of only at step-authoring time. Two new `WorkflowStep` columns:
+     `auto_generate_build_metadata` (leaves the four fields blank/optional
+     when set — `BuildStepForm`'s validators changed from `DataRequired()`
+     to `Optional()`, with the route enforcing all-or-nothing) and
+     `require_review_before_build` (default `True`, matching this app's
+     existing "never apply raw AI output unseen" rule — see
+     `build_prefill.py`'s own docstring). With review off, the generated
+     values are applied immediately; with review on, `_start_step()` parks
+     a `WorkflowStepRun` in a new `"awaiting_review"` status (no `batch_id`
+     yet — the orchestrator's poll loop already no-ops on any non-`"running"`
+     step_run, so this is safe with no other changes needed) with the
+     suggestions stashed in four new nullable columns
+     (`suggested_bump_type`/`suggested_change_type_id`/
+     `suggested_object_names`/`suggested_description`). Two new routes,
+     `workflows.approve_step_run`/`reject_step_run` (gated by the existing
+     `workflow.run` permission), let a human edit-then-approve (enqueues the
+     real `BuildBatch`) or reject (fails the step via a renamed, now-public
+     `finish_step()`, previously private `_finish_step()`, in
+     `workflow/worker.py`) from a new review panel on the Workflow Run
+     detail page. That page's live-status-polling JS reloads once, the
+     first time a step transitions into `awaiting_review` while already
+     being watched, since the review panel itself is server-rendered
+     outside the polled step table (so it doesn't get wiped by the poller's
+     own `innerHTML` replacement) and can't otherwise appear without a
+     manual refresh. Migration `12fa3cb1cfd5`.
+  2. **Every "Delete" (or similar) button that can currently fail with a
+     post-click flash error is now disabled up front, with a tooltip
+     explaining why** — 16 such guards found and fixed across 10
+     blueprints (Workflows ×2, Versions, Git Sources ×2, Deployment Servers
+     ×2, Dockerfiles, Builders ×2, Permissions ×2, Deployment Manifests ×3,
+     Registries; Roles' pre-existing `is_system` guard, which already hid
+     the button entirely, was left as-is; Menus' guard just needed its
+     already-computed-but-unused `has_children_map` wired into the
+     template; Users' self-delete guard turned out to already be handled
+     too). New shared macro `app/templates/partials/_macros.html`'s
+     `disabled_attrs(reason)` renders `disabled title="..."` when given a
+     reason, nothing otherwise — imported into every affected template.
+     Each blueprint's index/detail route now computes a `{id: reason}` dict
+     using the exact same query its own delete route already runs, so the
+     tooltip text always matches what the flash message would have said.
+     Also added: a "Run" button directly on the Workflows **index** page
+     (not just the detail page), reusing the exact same form/disabled-state
+     pattern as the existing one.
+  3. **A "Disable" button now appears next to Delete, exactly when Delete
+     is blocked, for the 8 "resource" blueprints** (Version, Git Sources,
+     Deployment Server, Dockerfile, Builder, Deployment Manifest, Registry,
+     Workflow) — archiving the item onto a new `/<blueprint>/archived` page
+     (hidden from the main list) with a "Restore" button to bring it back.
+     Confirmed with the user up front: Disable only shows when Delete is
+     already blocked (not a general always-available archive action); scope
+     is these 8 "resource" blueprints, not Roles/Permissions/Menus/Users;
+     and disabling must be **functionally** enforced, not just cosmetic. New
+     `is_active` column (migration `c5ebe879231b`) on all 7 of these models
+     that didn't already have one — `Workflow` reused its pre-existing
+     `is_active`. Every dropdown that offers one of these for a *new*
+     selection elsewhere (e.g. Version/Dockerfile/RegistryTarget on the
+     Builder create/edit form, DeploymentServer on the Manifest form,
+     Builder/DeploymentManifest in Workflow step authoring) now filters to
+     active-only, with a "keep the current value visible" fallback
+     (mirroring the pre-existing `_branch_choices()` pattern in
+     `builders/routes.py`) on an *existing* reference's own edit form, so
+     disabling something already in use doesn't silently drop it or break
+     re-saving an unrelated field. The two places that matter most for real
+     enforcement (not just hiding a dropdown option):
+     `app/services/workflow/resolver.py`'s
+     `resolve_builders_from_selection()`/`resolve_step_manifests()` — the
+     run-time group/individual-selection resolver a saved `WorkflowStep`
+     re-runs on *every* run, not just once at authoring — now drop a
+     disabled Builder/Manifest there too; and
+     `deployment_manifests.routes.py`'s `deploy()`/`update()` (via
+     `_trigger_deploy_action()`) now explicitly refuse a disabled manifest,
+     while `stop()`/`restart()` (via `_trigger_teardown_style_action()`)
+     deliberately do **not** — a manifest can be archived while still
+     live (that's one of its own three delete-blocking reasons), and
+     something archived while still deployed must stay stoppable; only
+     *new* rollouts of it are blocked. `builders.build()`/`build_preview()`
+     also explicitly reject a disabled Builder id even if POSTed directly,
+     bypassing the (already-filtered) UI checkboxes.
+  Two prior test-coverage gaps found and closed along the way, unrelated to
+  the features themselves: the `menus` and `permissions` blueprints had **no
+  test file at all** before this session (`tests/test_menus.py`,
+  `tests/test_permissions.py` are new).
+- **A prior session's work** (on top of everything below), already pushed to
   `origin/main`:
   1. **The container image never had `kubectl` installed at all** — every
      `DeploymentServer` action (test-connection, apply/delete, pods/
@@ -278,12 +371,15 @@ Then ask me what to work on next rather than assuming.
      one-off backfill (`migrate_add_missing_icons`) so already-seeded
      databases pick them up too, not just fresh installs.
   Anything older is covered by `git log`/`AI_CONTEXT.md`, not repeated here.
-- **Migration head is `7d79f7acc529`** — already applied to both the
-  bare-metal `.venv` dev DB (`masimple_cicd`) and the Podman trial-deploy
-  DB (an external Postgres server, dbname `postgres` — see
-  `docker-compose.podman.yml`'s `PODMAN_DATABASE_URL` in `.env`; deployed
-  there via the new `/setup` wizard, not `flask db upgrade` directly,
-  though both end up at the same state).
+- **Migration head is `c5ebe879231b`** (`7d79f7acc529` → `12fa3cb1cfd5`
+  (this session's workflow-auto-generate columns) → `c5ebe879231b` (this
+  session's `is_active` columns)) — applied to the bare-metal `.venv` dev DB
+  (`masimple_cicd`) this session. **Not yet applied to the Podman
+  trial-deploy DB** (an external Postgres server, dbname `postgres` — see
+  `docker-compose.podman.yml`'s `PODMAN_DATABASE_URL` in `.env`) — that
+  deploy hasn't been re-run since these two new migrations landed; it'll
+  show `/setup` again (or need `flask db upgrade` run against it directly)
+  next time it's touched.
 - **This session's Podman trial deploy is worth repeating after any future
   change to the build/deploy pipeline** — every fix in commit 3/4 above was
   found only by actually running the app end-to-end this way; none of it

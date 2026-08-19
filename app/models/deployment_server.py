@@ -25,6 +25,11 @@ class DeploymentServer(db.Model):
     encrypted_credentials = db.Column(db.Text, nullable=True)
     status = db.Column(db.String, default="unverified", nullable=False)
     last_checked_at = db.Column(db.DateTime, nullable=True)
+    # Disabled (archived) servers drop off the main list onto a separate
+    # Archived page, and stop being offered as a new target for Deployment
+    # Manifests — see deployment_servers.routes.disable/enable and
+    # deployment_manifests.routes._server_choices.
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

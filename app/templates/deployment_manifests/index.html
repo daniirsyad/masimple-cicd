@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% block title %}Deployment Manifests -
+{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Deployment Manifests -
 MASIMPLE CICD{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/codemirror.css') }}" />
@@ -23,13 +23,16 @@ MASIMPLE CICD{% endblock %}
 
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Deployment Manifests</h1>
-  <button
-    type="button"
-    class="btn btn-primary btn-sm"
-    onclick="document.getElementById('create-manifest-modal').showModal()"
-  >
-    New Manifest
-  </button>
+  <div class="flex gap-2">
+    <a class="btn btn-sm" href="{{ url_for('deployment_manifests.archived') }}">Archived</a>
+    <button
+      type="button"
+      class="btn btn-primary btn-sm"
+      onclick="document.getElementById('create-manifest-modal').showModal()"
+    >
+      New Manifest
+    </button>
+  </div>
 </div>
 
 {# A binding row's builder <option>s never depend on which manifest is being
@@ -144,9 +147,16 @@ MASIMPLE CICD{% endblock %}
       type="button"
       class="btn btn-sm btn-error"
       onclick="document.getElementById('delete-manifest-modal-{{ manifest.id }}').showModal()"
+      {{ disabled_attrs(delete_reasons.get(manifest.id)) }}
     >
       Delete
     </button>
+    {% if delete_reasons.get(manifest.id) %}
+    <form method="POST" action="{{ url_for('deployment_manifests.disable_manifest', manifest_id=manifest.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+      <button type="submit" class="btn btn-sm btn-warning">Disable</button>
+    </form>
+    {% endif %}
   </td>
 </tr>
 {% endmacro %}

@@ -318,6 +318,42 @@ class TestDeleteManifest:
         with app.app_context():
             assert DeploymentManifest.query.get(manifest_id) is not None
 
+    def test_delete_button_disabled_when_still_deployed(self, manifest_client, app, base_entities):
+        with app.app_context():
+            manifest = DeploymentManifest(name="m1", yaml_content="image: nginx")
+            db.session.add(manifest)
+            db.session.flush()
+            run = DeploymentRun(status="success", action="deploy")
+            db.session.add(run)
+            db.session.flush()
+            db.session.add(
+                DeploymentExecution(
+                    run_id=run.id, manifest_id=manifest.id, server_id=base_entities["server_id"], status="success"
+                )
+            )
+            db.session.commit()
+            manifest_id = manifest.id
+
+        response = manifest_client.get("/deployment-manifests/")
+        html = response.data.decode()
+        marker = f"delete-manifest-modal-{manifest_id}"
+        button = html[html.index(marker) : html.index(marker) + 400]
+        assert "disabled" in button
+        assert "Still deployed on:" in button
+
+    def test_delete_button_enabled_when_unreferenced(self, manifest_client, app):
+        with app.app_context():
+            manifest = DeploymentManifest(name="m1", yaml_content="image: nginx")
+            db.session.add(manifest)
+            db.session.commit()
+            manifest_id = manifest.id
+
+        response = manifest_client.get("/deployment-manifests/")
+        html = response.data.decode()
+        marker = f"delete-manifest-modal-{manifest_id}"
+        button = html[html.index(marker) : html.index(marker) + 400]
+        assert "disabled" not in button
+
     def test_blocked_when_execution_in_progress(self, manifest_client, app, base_entities):
         with app.app_context():
             manifest = DeploymentManifest(name="m1", yaml_content="image: nginx")
@@ -524,6 +560,97 @@ class TestDeployTrigger:
             assert len(executions) == 1
             assert executions[0].manifest_id == manifest_id
             assert executions[0].server_id == base_entities["server_id"]
+
+
+class TestDisableArchiveManifest:
+    def test_disable_moves_manifest_off_main_list_and_out_of_workflow_group(
+        self, manifest_client, app, base_entities
+    ):
+        with app.app_context():
+            manifest = DeploymentManifest(name="m1", yaml_content="image: nginx", group_name="grp1")
+            db.session.add(manifest)
+            db.session.commit()
+            manifest_id = manifest.id
+
+        response = manifest_client.post(f"/deployment-manifests/{manifest_id}/disable", follow_redirects=True)
+        assert response.status_code == 200
+        with app.app_context():
+            assert DeploymentManifest.query.get(manifest_id).is_active is False
+
+        assert f"delete-manifest-modal-{manifest_id}" not in manifest_client.get("/deployment-manifests/").data.decode()
+        archived_html = manifest_client.get("/deployment-manifests/archived").data.decode()
+        assert "m1" in archived_html
+        assert f'/deployment-manifests/{manifest_id}/enable' in archived_html
+
+        from app.services.workflow.resolver import resolve_step_manifests
+
+        class _FakeStep:
+            selected_groups = [type("G", (), {"group_name": "grp1"})()]
+            selected_manifests = []
+
+        with app.app_context():
+            resolved = resolve_step_manifests(_FakeStep())
+            assert manifest_id not in {m.id for m in resolved}
+
+    def test_deploy_is_refused_for_a_disabled_manifest(self, manifest_client, app, base_entities):
+        with app.app_context():
+            server = DeploymentServer.query.get(base_entities["server_id"])
+            server.allowed_roles = [Role.query.filter_by(name="ManifestAdmin").first()]
+            manifest = DeploymentManifest(name="m1", yaml_content="image: nginx", is_active=False)
+            manifest.target_servers = [server]
+            db.session.add(manifest)
+            db.session.commit()
+            manifest_id = manifest.id
+
+        response = manifest_client.post(
+            "/deployment-manifests/deploy", data={"manifest_ids": [str(manifest_id)]}, follow_redirects=True
+        )
+        assert response.status_code == 200
+        assert b"disabled manifest" in response.data
+        with app.app_context():
+            assert DeploymentRun.query.count() == 0
+
+    def test_stop_is_not_refused_for_a_disabled_manifest(self, manifest_client, app, base_entities):
+        with app.app_context():
+            server = DeploymentServer.query.get(base_entities["server_id"])
+            server.allowed_roles = [Role.query.filter_by(name="ManifestAdmin").first()]
+            manifest = DeploymentManifest(name="m1", yaml_content="image: nginx", is_active=False)
+            manifest.target_servers = [server]
+            db.session.add(manifest)
+            db.session.commit()
+            manifest_id = manifest.id
+
+        response = manifest_client.post(
+            "/deployment-manifests/stop", data={"manifest_ids": [str(manifest_id)]}, follow_redirects=True
+        )
+        assert response.status_code == 200
+        # Not refused for being disabled — falls through to the ordinary
+        # "nothing was actually deployed" outcome instead.
+        assert b"disabled manifest" not in response.data
+        assert b"Nothing currently deployed" in response.data
+
+    def test_disabled_server_not_offered_when_creating_a_manifest(self, manifest_client, app):
+        with app.app_context():
+            server = DeploymentServer(name="srv-disabled", connection_type="kube", is_active=False)
+            db.session.add(server)
+            db.session.commit()
+
+        html = manifest_client.get("/deployment-manifests/").data.decode()
+        modal_start = html.index('id="create-manifest-modal"')
+        modal_end = html.index("</dialog>", modal_start)
+        assert "srv-disabled" not in html[modal_start:modal_end]
+
+    def test_enable_restores_manifest_to_main_list(self, manifest_client, app):
+        with app.app_context():
+            manifest = DeploymentManifest(name="m1", yaml_content="image: nginx", is_active=False)
+            db.session.add(manifest)
+            db.session.commit()
+            manifest_id = manifest.id
+
+        response = manifest_client.post(f"/deployment-manifests/{manifest_id}/enable", follow_redirects=True)
+        assert response.status_code == 200
+        with app.app_context():
+            assert DeploymentManifest.query.get(manifest_id).is_active is True
 
 
 class TestReorderManifests:

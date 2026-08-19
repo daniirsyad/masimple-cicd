@@ -410,6 +410,27 @@ class TestRemoveRepo:
             assert Repository.query.get(repo_id) is None
         assert not clone_dir.exists()
 
+    def test_remove_button_disabled_when_a_builder_still_references_it(self, git_client, app, tmp_path):
+        with app.app_context():
+            source = GitSource(name="conn", provider_type="github", encrypted_token="x")
+            db.session.add(source)
+            db.session.flush()
+            repo = Repository(
+                git_source_id=source.id, full_name="org/repo", local_path=str(tmp_path), status="ready"
+            )
+            db.session.add(repo)
+            db.session.flush()
+            _make_builder_referencing(repo.id)
+            db.session.commit()
+            repo_id = repo.id
+
+        response = git_client.get("/github/")
+        html = response.data.decode()
+        marker = f"remove-repo-modal-{repo_id}"
+        button = html[html.index(marker) : html.index(marker) + 400]
+        assert "disabled" in button
+        assert "Builder(s) still reference it." in button
+
     def test_blocked_when_a_builder_still_references_it(self, git_client, app, tmp_path):
         with app.app_context():
             source = GitSource(name="conn", provider_type="github", encrypted_token="x")
@@ -527,3 +548,75 @@ class TestDeleteConnection:
 
         with app.app_context():
             assert GitSource.query.get(source_id) is not None
+
+    def test_delete_button_disabled_when_a_repository_is_still_registered(self, git_client, app, tmp_path):
+        with app.app_context():
+            source = GitSource(name="conn", provider_type="github", encrypted_token="x")
+            db.session.add(source)
+            db.session.flush()
+            db.session.add(
+                Repository(
+                    git_source_id=source.id, full_name="org/repo", local_path=str(tmp_path), status="ready"
+                )
+            )
+            db.session.commit()
+            source_id = source.id
+
+        response = git_client.get("/github/")
+        html = response.data.decode()
+        marker = f"delete-connection-modal-{source_id}"
+        button = html[html.index(marker) : html.index(marker) + 400]
+        assert "disabled" in button
+        assert "still registered under it." in button
+
+
+class TestDisableArchiveGitSource:
+    def test_disable_moves_it_off_main_list_onto_archived_page(self, git_client, app, tmp_path):
+        with app.app_context():
+            source = GitSource(name="conn", provider_type="github", encrypted_token="x")
+            db.session.add(source)
+            db.session.flush()
+            db.session.add(
+                Repository(git_source_id=source.id, full_name="org/repo", local_path=str(tmp_path), status="ready")
+            )
+            db.session.commit()
+            source_id = source.id
+
+        response = git_client.post(f"/github/connections/{source_id}/disable", follow_redirects=True)
+        assert response.status_code == 200
+        with app.app_context():
+            assert GitSource.query.get(source_id).is_active is False
+
+        assert f"delete-connection-modal-{source_id}" not in git_client.get("/github/").data.decode()
+        archived_html = git_client.get("/github/archived").data.decode()
+        assert "conn" in archived_html
+        assert f'/github/connections/{source_id}/enable' in archived_html
+
+    def test_enable_restores_it(self, git_client, app):
+        with app.app_context():
+            source = GitSource(name="conn", provider_type="github", encrypted_token="x", is_active=False)
+            db.session.add(source)
+            db.session.commit()
+            source_id = source.id
+
+        response = git_client.post(f"/github/connections/{source_id}/enable", follow_redirects=True)
+        assert response.status_code == 200
+        with app.app_context():
+            assert GitSource.query.get(source_id).is_active is True
+
+    def test_disabled_connection_cannot_register_a_new_repo(self, git_client, app):
+        with app.app_context():
+            source = GitSource(name="conn", provider_type="github", encrypted_token="x", is_active=False)
+            db.session.add(source)
+            db.session.commit()
+            source_id = source.id
+
+        response = git_client.post(
+            "/github/repos/register",
+            data={"git_source_id": str(source_id), "full_name": "org/repo"},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert b"disabled" in response.data
+        with app.app_context():
+            assert Repository.query.filter_by(git_source_id=source_id).count() == 0

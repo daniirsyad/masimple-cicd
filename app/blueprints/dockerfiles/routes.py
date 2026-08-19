@@ -18,7 +18,14 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
     if create_form is None:
         create_form = DockerfileForm(prefix=CREATE_PREFIX)
 
-    dockerfiles = Dockerfile.query.order_by(Dockerfile.name).all()
+    dockerfiles = Dockerfile.query.filter_by(is_active=True).order_by(Dockerfile.name).all()
+
+    # Same guard delete() itself checks before rejecting the request —
+    # computed here so the button can be disabled up front.
+    delete_reasons = {}
+    for dockerfile in dockerfiles:
+        builder_count = Builder.query.filter_by(managed_dockerfile_id=dockerfile.id).count()
+        delete_reasons[dockerfile.id] = f"{builder_count} Builder(s) still reference it." if builder_count else None
 
     invalid_id, invalid_form = invalid_edit or (None, None)
     edit_forms = {}
@@ -31,10 +38,16 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
     return render_template(
         "dockerfiles/index.html",
         dockerfiles=dockerfiles,
+        delete_reasons=delete_reasons,
         create_form=create_form,
         edit_forms=edit_forms,
         open_modal=open_modal,
     )
+
+
+def _render_archived():
+    dockerfiles = Dockerfile.query.filter_by(is_active=False).order_by(Dockerfile.name).all()
+    return render_template("dockerfiles/archived.html", dockerfiles=dockerfiles)
 
 
 @dockerfiles_bp.route("/")
@@ -116,3 +129,45 @@ def delete(dockerfile_id):
 
     flash(f"Dockerfile '{name}' deleted.", "success")
     return redirect(url_for("dockerfiles.index"))
+
+
+@dockerfiles_bp.route("/archived")
+@permission_required("dockerfile.manage")
+def archived():
+    return _render_archived()
+
+
+@dockerfiles_bp.route("/<uuid:dockerfile_id>/disable", methods=["POST"])
+@permission_required("dockerfile.manage")
+def disable(dockerfile_id):
+    dockerfile = Dockerfile.query.get_or_404(dockerfile_id)
+    dockerfile.is_active = False
+    db.session.commit()
+
+    log_activity(
+        action="DISABLE_DOCKERFILE",
+        target_type="dockerfile",
+        target_id=str(dockerfile.id),
+        description=f"Disabled Dockerfile '{dockerfile.name}'",
+    )
+
+    flash(f"'{dockerfile.name}' disabled — moved to Archived.", "info")
+    return redirect(url_for("dockerfiles.index"))
+
+
+@dockerfiles_bp.route("/<uuid:dockerfile_id>/enable", methods=["POST"])
+@permission_required("dockerfile.manage")
+def enable(dockerfile_id):
+    dockerfile = Dockerfile.query.get_or_404(dockerfile_id)
+    dockerfile.is_active = True
+    db.session.commit()
+
+    log_activity(
+        action="ENABLE_DOCKERFILE",
+        target_type="dockerfile",
+        target_id=str(dockerfile.id),
+        description=f"Re-enabled Dockerfile '{dockerfile.name}'",
+    )
+
+    flash(f"'{dockerfile.name}' re-enabled.", "success")
+    return redirect(url_for("dockerfiles.archived"))

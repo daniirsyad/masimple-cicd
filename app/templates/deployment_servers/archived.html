@@ -1,0 +1,45 @@
+{% extends "base.html" %} {% block title %}Archived Deployment Servers -
+MASIMPLE CICD{% endblock %} {% block content %}
+<div class="flex flex-wrap items-center justify-between gap-2">
+  <h1 class="text-2xl font-bold">Archived Deployment Servers</h1>
+  <a class="btn btn-sm" href="{{ url_for('deployment_servers.index') }}">Back to Deployment Servers</a>
+</div>
+<p class="mt-2 text-sm text-base-content/60">
+  Disabled servers — hidden from the main list and no longer offered as a target for new Deployment
+  Manifests. Restore one to bring it back.
+</p>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Connection Type</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for server in servers %}
+          <tr>
+            <td>{{ server.name }}</td>
+            <td>{{ server.connection_type }}</td>
+            <td>
+              <form method="POST" action="{{ url_for('deployment_servers.enable', server_id=server.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                <button type="submit" class="btn btn-sm btn-primary">Restore</button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="3">No archived servers.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

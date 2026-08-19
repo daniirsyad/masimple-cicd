@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% block title %}Builders -
+{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Builders -
 MASIMPLE CICD{% endblock %} {% block content %}
 {# Shared by every Group field's searchable-history dropdown below (the create
    form plus one per Builder's edit form) — see builders.js. Not an HTML
@@ -10,13 +10,16 @@ MASIMPLE CICD{% endblock %} {% block content %}
 </script>
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Builders</h1>
-  <button
-    type="button"
-    class="btn btn-primary btn-sm"
-    onclick="document.getElementById('create-builder-modal').showModal()"
-  >
-    New Builder
-  </button>
+  <div class="flex gap-2">
+    <a class="btn btn-sm" href="{{ url_for('builders.archived') }}">Archived</a>
+    <button
+      type="button"
+      class="btn btn-primary btn-sm"
+      onclick="document.getElementById('create-builder-modal').showModal()"
+    >
+      New Builder
+    </button>
+  </div>
 </div>
 
 <div class="card mt-4 bg-base-100 shadow-sm">
@@ -116,9 +119,16 @@ MASIMPLE CICD{% endblock %} {% block content %}
       type="button"
       class="btn btn-sm btn-error"
       onclick="document.getElementById('delete-builder-modal-{{ builder.id }}').showModal()"
+      {{ disabled_attrs(delete_reasons.get(builder.id)) }}
     >
       Delete
     </button>
+    {% if delete_reasons.get(builder.id) %}
+    <form method="POST" action="{{ url_for('builders.disable_builder', builder_id=builder.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+      <button type="submit" class="btn btn-sm btn-warning">Disable</button>
+    </form>
+    {% endif %}
   </td>
 </tr>
 {% endmacro %}

@@ -1,0 +1,3 @@
+{% macro disabled_attrs(reason) -%}
+{%- if reason %}disabled title="{{ reason }}"{% endif -%}
+{%- endmacro %}

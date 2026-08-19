@@ -93,12 +93,21 @@ def _render_roles_list(create_form=None, open_modal=None, invalid_edit=None):
             form.permissions.data = [str(permission.id) for permission in role.permissions]
             edit_forms[role.id] = form
 
+    # Same guard delete_role itself checks before rejecting the request
+    # (is_system is handled separately, by simply not rendering the Delete
+    # button at all — see roles/list.html) — computed here so the button can
+    # be disabled up front instead of only failing after a click.
+    role_delete_reasons = {
+        role.id: (f"Assigned to {len(role.users)} user(s)." if role.users else None) for role in roles
+    }
+
     return render_template(
         "roles/list.html",
         roles=roles,
         create_form=create_form,
         edit_forms=edit_forms,
         permission_groups=_permission_groups(),
+        role_delete_reasons=role_delete_reasons,
         open_modal=open_modal,
     )
 

@@ -1,0 +1,57 @@
+{% extends "base.html" %} {% block title %}Archived Deployment Manifests -
+MASIMPLE CICD{% endblock %} {% block content %}
+<div class="flex flex-wrap items-center justify-between gap-2">
+  <h1 class="text-2xl font-bold">Archived Deployment Manifests</h1>
+  <a class="btn btn-sm" href="{{ url_for('deployment_manifests.index') }}">Back to Deployment Manifests</a>
+</div>
+<p class="mt-2 text-sm text-base-content/60">
+  Disabled manifests — hidden from the main list, no longer deployable/updatable, and dropped from any
+  Workflow deploy step that selects them by group. Still stoppable if left running. Restore one to bring it
+  back.
+</p>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Group</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for manifest in ungrouped %}
+          <tr>
+            <td>{{ manifest.name }}</td>
+            <td>—</td>
+            <td>
+              <form method="POST" action="{{ url_for('deployment_manifests.enable_manifest', manifest_id=manifest.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                <button type="submit" class="btn btn-sm btn-primary">Restore</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %} {% for group in groups %} {% for manifest in group.manifests %}
+          <tr>
+            <td>{{ manifest.name }}</td>
+            <td><span class="badge badge-ghost badge-sm">{{ group.name }}</span></td>
+            <td>
+              <form method="POST" action="{{ url_for('deployment_manifests.enable_manifest', manifest_id=manifest.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                <button type="submit" class="btn btn-sm btn-primary">Restore</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %} {% else %} {% if not ungrouped %}
+          <tr>
+            <td colspan="3">No archived manifests.</td>
+          </tr>
+          {% endif %} {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

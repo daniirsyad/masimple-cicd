@@ -186,6 +186,71 @@ class TestDeleteServer:
         with app.app_context():
             assert DeploymentServer.query.get(server_id) is not None
 
+    def test_delete_button_disabled_when_a_manifest_still_targets_it(self, server_client, app):
+        with app.app_context():
+            server = DeploymentServer(name="srv", connection_type="kube")
+            db.session.add(server)
+            manifest = DeploymentManifest(name="m1", yaml_content="image: nginx")
+            manifest.target_servers = [server]
+            db.session.add(manifest)
+            db.session.commit()
+            server_id = server.id
+
+        response = server_client.get("/deployment-servers/")
+        html = response.data.decode()
+        marker = f"delete-server-modal-{server_id}"
+        button = html[html.index(marker) : html.index(marker) + 400]
+        assert "disabled" in button
+        assert "still target it." in button
+
+    def test_delete_button_enabled_when_unreferenced(self, server_client, app):
+        with app.app_context():
+            server = DeploymentServer(name="srv", connection_type="kube")
+            db.session.add(server)
+            db.session.commit()
+            server_id = server.id
+
+        response = server_client.get("/deployment-servers/")
+        html = response.data.decode()
+        marker = f"delete-server-modal-{server_id}"
+        button = html[html.index(marker) : html.index(marker) + 400]
+        assert "disabled" not in button
+
+
+class TestDisableArchiveServer:
+    def test_disable_moves_it_off_main_list_onto_archived_page(self, server_client, app):
+        with app.app_context():
+            server = DeploymentServer(name="srv", connection_type="kube")
+            db.session.add(server)
+            manifest = DeploymentManifest(name="m1", yaml_content="image: nginx")
+            manifest.target_servers = [server]
+            db.session.add(manifest)
+            db.session.commit()
+            server_id = server.id
+
+        response = server_client.post(f"/deployment-servers/{server_id}/disable", follow_redirects=True)
+        assert response.status_code == 200
+        with app.app_context():
+            assert DeploymentServer.query.get(server_id).is_active is False
+
+        assert f"delete-server-modal-{server_id}" not in server_client.get("/deployment-servers/").data.decode()
+        archived_html = server_client.get("/deployment-servers/archived").data.decode()
+        assert "srv" in archived_html
+        assert f'/deployment-servers/{server_id}/enable' in archived_html
+
+    def test_enable_restores_it(self, server_client, app):
+        with app.app_context():
+            server = DeploymentServer(name="srv", connection_type="kube", is_active=False)
+            db.session.add(server)
+            db.session.commit()
+            server_id = server.id
+
+        response = server_client.post(f"/deployment-servers/{server_id}/enable", follow_redirects=True)
+        assert response.status_code == 200
+        with app.app_context():
+            assert DeploymentServer.query.get(server_id).is_active is True
+
+
 
 class TestConnectionTest:
     def test_successful_connection_marks_healthy(self, server_client, app, monkeypatch):

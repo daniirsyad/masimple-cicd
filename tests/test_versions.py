@@ -311,6 +311,119 @@ class TestDeleteVersion:
         with app.app_context():
             assert Version.query.get(version_id) is not None
 
+    def test_delete_button_disabled_when_a_builder_is_attached(self, version_client, app, version_type):
+        with app.app_context():
+            version = Version(name="svc", version_type_id=version_type)
+            db.session.add(version)
+            db.session.flush()
+
+            git_source = GitSource(name="conn", provider_type="github", encrypted_token="x")
+            db.session.add(git_source)
+            db.session.flush()
+            repository = Repository(
+                git_source_id=git_source.id, full_name="org/repo", local_path="/tmp/repo", status="ready"
+            )
+            db.session.add(repository)
+            registry_target = RegistryTarget(name="reg", provider_type="dockerhub")
+            db.session.add(registry_target)
+            db.session.flush()
+            db.session.add(
+                Builder(
+                    name="b1",
+                    version_id=version.id,
+                    repository_id=repository.id,
+                    registry_target_id=registry_target.id,
+                    dockerfile_path="Dockerfile",
+                )
+            )
+            db.session.commit()
+            version_id = version.id
+
+        response = version_client.get("/versions/")
+        html = response.data.decode()
+        marker = f"delete-version-modal-{version_id}"
+        button = html[html.index(marker) : html.index(marker) + 400]
+        assert "disabled" in button
+        assert "Builder(s) still reference it." in button
+
+    def test_delete_button_enabled_when_no_builder_is_attached(self, version_client, app, version_type):
+        with app.app_context():
+            version = Version(name="svc", version_type_id=version_type)
+            db.session.add(version)
+            db.session.commit()
+            version_id = version.id
+
+        response = version_client.get("/versions/")
+        html = response.data.decode()
+        marker = f"delete-version-modal-{version_id}"
+        button = html[html.index(marker) : html.index(marker) + 400]
+        assert "disabled" not in button
+
+
+class TestDisableArchiveVersion:
+    def test_disable_button_only_shown_when_undeletable(self, version_client, app, version_type):
+        with app.app_context():
+            deletable = Version(name="deletable", version_type_id=version_type)
+            db.session.add(deletable)
+            db.session.commit()
+            deletable_id = deletable.id
+
+        response = version_client.get("/versions/")
+        html = response.data.decode()
+        assert f'/versions/{deletable_id}/disable' not in html
+
+    def test_disable_moves_version_off_main_list_onto_archived_page(
+        self, version_client, app, version_type
+    ):
+        with app.app_context():
+            version = Version(name="svc", version_type_id=version_type)
+            db.session.add(version)
+            db.session.flush()
+
+            git_source = GitSource(name="conn", provider_type="github", encrypted_token="x")
+            db.session.add(git_source)
+            db.session.flush()
+            repository = Repository(git_source_id=git_source.id, full_name="org/repo", local_path="/tmp/r", status="ready")
+            db.session.add(repository)
+            registry_target = RegistryTarget(name="reg", provider_type="dockerhub")
+            db.session.add(registry_target)
+            db.session.flush()
+            db.session.add(
+                Builder(
+                    name="b1", version_id=version.id, repository_id=repository.id,
+                    registry_target_id=registry_target.id, dockerfile_path="Dockerfile",
+                )
+            )
+            db.session.commit()
+            version_id = version.id
+
+        response = version_client.post(f"/versions/{version_id}/disable", follow_redirects=True)
+        assert response.status_code == 200
+
+        with app.app_context():
+            assert Version.query.get(version_id).is_active is False
+
+        index_html = version_client.get("/versions/").data.decode()
+        assert "svc" not in index_html
+
+        archived_html = version_client.get("/versions/archived").data.decode()
+        assert "svc" in archived_html
+        assert f'/versions/{version_id}/enable' in archived_html
+
+    def test_enable_restores_it_to_the_main_list(self, version_client, app, version_type):
+        with app.app_context():
+            version = Version(name="svc", version_type_id=version_type, is_active=False)
+            db.session.add(version)
+            db.session.commit()
+            version_id = version.id
+
+        response = version_client.post(f"/versions/{version_id}/enable", follow_redirects=True)
+        assert response.status_code == 200
+
+        with app.app_context():
+            assert Version.query.get(version_id).is_active is True
+        assert "svc" in version_client.get("/versions/").data.decode()
+
 
 class TestLinkedVersions:
     def test_linking_on_create_is_one_directional(self, version_client, app, version_type):

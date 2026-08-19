@@ -1,17 +1,20 @@
 import uuid
+from datetime import datetime
 
 from flask import abort, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user
 
 from app.blueprints.workflows import workflows_bp
-from app.blueprints.workflows.forms import BuildStepForm, DeployStepForm, WorkflowForm
+from app.blueprints.workflows.forms import ApproveBuildStepForm, BuildStepForm, DeployStepForm, WorkflowForm
 from app.extensions import db
 from app.models import (
     Builder,
     ChangeType,
     DeploymentManifest,
     ImageBuild,
+    Object,
     Role,
+    Version,
     Workflow,
     WorkflowRun,
     WorkflowStep,
@@ -20,14 +23,17 @@ from app.models import (
 )
 from app.services.build.prefill import compute_build_prefill
 from app.services.build.versioning import BUMP_TYPES
+from app.services.build.worker import enqueue_build_batch
 from app.services.workflow.resolver import (
     resolve_builders_from_selection,
     resolve_step_builders,
     resolve_step_manifests,
 )
-from app.services.workflow.worker import enqueue_workflow_run
+from app.services.workflow.worker import enqueue_workflow_run, finish_step
 from app.utils.decorators import permission_required
 from app.utils.logger import log_activity
+
+AUTO_GENERATE_CHOICE = ("", "— Auto (generate at run time) —")
 
 CREATE_PREFIX = "create-workflow-"
 
@@ -48,22 +54,28 @@ def _apply_allowed_roles(workflow, form):
     workflow.allowed_roles = Role.query.filter(Role.id.in_(selected_ids)).all() if selected_ids else []
 
 
-def _change_type_choices():
-    return [
+def _change_type_choices(include_auto=False):
+    choices = [
         (str(ct.id), ct.name)
         for ct in ChangeType.query.filter_by(is_active=True).order_by(ChangeType.name).all()
     ]
+    return [AUTO_GENERATE_CHOICE] + choices if include_auto else choices
 
 
-def _bump_type_choices():
-    return [(bump_type, bump_type.capitalize()) for bump_type in BUMP_TYPES]
+def _bump_type_choices(include_auto=False):
+    choices = [(bump_type, bump_type.capitalize()) for bump_type in BUMP_TYPES]
+    return [AUTO_GENERATE_CHOICE] + choices if include_auto else choices
 
 
 def _builder_group_name_choices():
+    # Only groups with at least one active member — a disabled Builder alone
+    # shouldn't keep its group selectable for new steps (existing steps
+    # already referencing the group still resolve whatever's still active in
+    # it, via resolve_builders_from_selection).
     names = [
         row[0]
         for row in Builder.query.with_entities(Builder.group_name)
-        .filter(Builder.group_name.isnot(None))
+        .filter(Builder.group_name.isnot(None), Builder.is_active.is_(True))
         .distinct()
         .order_by(Builder.group_name)
     ]
@@ -72,7 +84,8 @@ def _builder_group_name_choices():
 
 def _ungrouped_builder_choices():
     return [
-        (str(b.id), b.name) for b in Builder.query.filter_by(group_name=None).order_by(Builder.name).all()
+        (str(b.id), b.name)
+        for b in Builder.query.filter_by(group_name=None, is_active=True).order_by(Builder.name).all()
     ]
 
 
@@ -80,7 +93,7 @@ def _manifest_group_name_choices():
     names = [
         row[0]
         for row in DeploymentManifest.query.with_entities(DeploymentManifest.group_name)
-        .filter(DeploymentManifest.group_name.isnot(None))
+        .filter(DeploymentManifest.group_name.isnot(None), DeploymentManifest.is_active.is_(True))
         .distinct()
         .order_by(DeploymentManifest.group_name)
     ]
@@ -90,7 +103,9 @@ def _manifest_group_name_choices():
 def _ungrouped_manifest_choices():
     return [
         (str(m.id), m.name)
-        for m in DeploymentManifest.query.filter_by(group_name=None).order_by(DeploymentManifest.name).all()
+        for m in DeploymentManifest.query.filter_by(group_name=None, is_active=True)
+        .order_by(DeploymentManifest.name)
+        .all()
     ]
 
 
@@ -117,7 +132,10 @@ def _render_index(create_form=None, open_modal=None):
         create_form = WorkflowForm(prefix=CREATE_PREFIX)
     create_form.allowed_role_ids.choices = _role_choices()
 
-    workflows = [w for w in Workflow.query.order_by(Workflow.name).all() if w.is_accessible_to(current_user)]
+    workflows = [
+        w for w in Workflow.query.filter_by(is_active=True).order_by(Workflow.name).all()
+        if w.is_accessible_to(current_user)
+    ]
 
     return render_template(
         "workflows/index.html",
@@ -127,10 +145,24 @@ def _render_index(create_form=None, open_modal=None):
     )
 
 
+def _render_archived():
+    workflows = [
+        w for w in Workflow.query.filter_by(is_active=False).order_by(Workflow.name).all()
+        if w.is_accessible_to(current_user)
+    ]
+    return render_template("workflows/archived.html", workflows=workflows)
+
+
 @workflows_bp.route("/")
 @permission_required("workflow.view")
 def index():
     return _render_index()
+
+
+@workflows_bp.route("/archived")
+@permission_required("workflow.view")
+def archived():
+    return _render_archived()
 
 
 @workflows_bp.route("/create", methods=["POST"])
@@ -173,8 +205,8 @@ def _render_view(workflow, edit_form=None, build_form=None, deploy_form=None, op
         build_form = BuildStepForm()
     build_form.group_names.choices = _builder_group_name_choices()
     build_form.builder_ids.choices = _ungrouped_builder_choices()
-    build_form.bump_type.choices = _bump_type_choices()
-    build_form.change_type_id.choices = _change_type_choices()
+    build_form.bump_type.choices = _bump_type_choices(include_auto=True)
+    build_form.change_type_id.choices = _change_type_choices(include_auto=True)
 
     if deploy_form is None:
         deploy_form = DeployStepForm()
@@ -185,12 +217,24 @@ def _render_view(workflow, edit_form=None, build_form=None, deploy_form=None, op
     step_summaries = {step.id: _step_target_summary(step) for step in steps}
     runs = workflow.runs.order_by(WorkflowRun.created_at.desc()).limit(20).all()
 
+    # Same guards delete_workflow/delete_step themselves check before
+    # rejecting the request — computed here too so the Delete buttons can be
+    # disabled up front instead of only failing after a click.
+    run_count = workflow.runs.count()
+    delete_workflow_reason = f"Has {run_count} recorded run(s)." if run_count else None
+    step_delete_reasons = {}
+    for step in steps:
+        step_run_count = WorkflowStepRun.query.filter_by(workflow_step_id=step.id).count()
+        step_delete_reasons[step.id] = f"Has {step_run_count} recorded run(s)." if step_run_count else None
+
     return render_template(
         "workflows/view.html",
         workflow=workflow,
         steps=steps,
         step_summaries=step_summaries,
         runs=runs,
+        delete_workflow_reason=delete_workflow_reason,
+        step_delete_reasons=step_delete_reasons,
         edit_form=edit_form,
         build_form=build_form,
         deploy_form=deploy_form,
@@ -261,6 +305,45 @@ def delete_workflow(workflow_id):
     return redirect(url_for("workflows.index"))
 
 
+@workflows_bp.route("/<uuid:workflow_id>/disable", methods=["POST"])
+@permission_required("workflow.manage")
+def disable_workflow(workflow_id):
+    # Reuses the same is_active column the Edit form's own "Active" checkbox
+    # already writes — this is just a guided shortcut for the "can't delete,
+    # do this instead" case, not a separate concept.
+    workflow = Workflow.query.get_or_404(workflow_id)
+    workflow.is_active = False
+    db.session.commit()
+
+    log_activity(
+        action="DISABLE_WORKFLOW",
+        target_type="workflow",
+        target_id=str(workflow.id),
+        description=f"Disabled workflow '{workflow.name}'",
+    )
+
+    flash(f"'{workflow.name}' disabled — moved to Archived.", "info")
+    return redirect(url_for("workflows.index"))
+
+
+@workflows_bp.route("/<uuid:workflow_id>/enable", methods=["POST"])
+@permission_required("workflow.manage")
+def enable_workflow(workflow_id):
+    workflow = Workflow.query.get_or_404(workflow_id)
+    workflow.is_active = True
+    db.session.commit()
+
+    log_activity(
+        action="ENABLE_WORKFLOW",
+        target_type="workflow",
+        target_id=str(workflow.id),
+        description=f"Re-enabled workflow '{workflow.name}'",
+    )
+
+    flash(f"'{workflow.name}' re-enabled.", "success")
+    return redirect(url_for("workflows.archived"))
+
+
 def _next_step_order(workflow_id):
     max_order = db.session.query(db.func.max(WorkflowStep.order)).filter_by(workflow_id=workflow_id).scalar()
     return 0 if max_order is None else max_order + 1
@@ -273,12 +356,19 @@ def add_build_step(workflow_id):
     form = BuildStepForm()
     form.group_names.choices = _builder_group_name_choices()
     form.builder_ids.choices = _ungrouped_builder_choices()
-    form.bump_type.choices = _bump_type_choices()
-    form.change_type_id.choices = _change_type_choices()
+    form.bump_type.choices = _bump_type_choices(include_auto=True)
+    form.change_type_id.choices = _change_type_choices(include_auto=True)
 
     if form.validate_on_submit():
         if not form.group_names.data and not form.builder_ids.data:
             flash("Select at least one Builder group or individual Builder.", "error")
+            return _render_view(workflow, build_form=form, open_modal="add-build-step-modal")
+
+        auto = form.auto_generate_build_metadata.data
+        if not auto and (not form.bump_type.data or not form.change_type_id.data or not (form.object.data or "").strip()):
+            flash(
+                "Fill in Version Bump, Change Type, and Object — or enable auto-generate at run time.", "error"
+            )
             return _render_view(workflow, build_form=form, open_modal="add-build-step-modal")
 
         step = WorkflowStep(
@@ -286,9 +376,11 @@ def add_build_step(workflow_id):
             order=_next_step_order(workflow.id),
             step_type="build",
             on_failure=form.on_failure.data,
-            bump_type=form.bump_type.data,
-            change_type_id=uuid.UUID(form.change_type_id.data),
-            object=form.object.data.strip(),
+            auto_generate_build_metadata=auto,
+            require_review_before_build=form.require_review_before_build.data,
+            bump_type=None if auto else form.bump_type.data,
+            change_type_id=None if auto else uuid.UUID(form.change_type_id.data),
+            object=None if auto else form.object.data.strip(),
             additional_description=(form.additional_description.data or "").strip() or None,
         )
         db.session.add(step)
@@ -515,6 +607,24 @@ def _step_run_links(step_run):
     return None
 
 
+def _approve_step_run_prefix(step_run_id):
+    return f"approve-{step_run_id}-"
+
+
+def _review_form_for(step_run):
+    form = ApproveBuildStepForm(prefix=_approve_step_run_prefix(step_run.id))
+    form.bump_type.choices = _bump_type_choices()
+    form.change_type_id.choices = _change_type_choices()
+    if not form.is_submitted():
+        form.bump_type.data = step_run.suggested_bump_type
+        form.change_type_id.data = (
+            str(step_run.suggested_change_type_id) if step_run.suggested_change_type_id else None
+        )
+        form.object.data = step_run.suggested_object_names
+        form.description.data = step_run.suggested_description
+    return form
+
+
 @workflows_bp.route("/runs/<uuid:run_id>")
 @permission_required("workflow.view")
 def view_run(run_id):
@@ -524,8 +634,13 @@ def view_run(run_id):
 
     step_runs = run.step_runs.all()
     step_links = {step_run.id: _step_run_links(step_run) for step_run in step_runs}
+    review_forms = {
+        step_run.id: _review_form_for(step_run) for step_run in step_runs if step_run.status == "awaiting_review"
+    }
 
-    return render_template("workflows/run.html", run=run, step_runs=step_runs, step_links=step_links)
+    return render_template(
+        "workflows/run.html", run=run, step_runs=step_runs, step_links=step_links, review_forms=review_forms
+    )
 
 
 @workflows_bp.route("/runs/<uuid:run_id>/status")
@@ -552,3 +667,84 @@ def run_status(run_id):
             ],
         }
     )
+
+
+def _awaiting_review_step_run_or_404(step_run_id):
+    step_run = WorkflowStepRun.query.get_or_404(step_run_id)
+    if not step_run.run.workflow.is_accessible_to(current_user):
+        abort(403)
+    if step_run.status != "awaiting_review":
+        abort(404)
+    return step_run
+
+
+@workflows_bp.route("/step-runs/<uuid:step_run_id>/approve", methods=["POST"])
+@permission_required("workflow.run")
+def approve_step_run(step_run_id):
+    step_run = _awaiting_review_step_run_or_404(step_run_id)
+    run = step_run.run
+
+    form = ApproveBuildStepForm(prefix=_approve_step_run_prefix(step_run.id))
+    form.bump_type.choices = _bump_type_choices()
+    form.change_type_id.choices = _change_type_choices()
+
+    if not form.validate_on_submit():
+        flash("Fill in Version Bump and Change Type before approving.", "error")
+        return redirect(url_for("workflows.view_run", run_id=run.id))
+
+    step = step_run.step
+    builders = resolve_step_builders(step)
+    if not builders:
+        flash("Could not approve — this step's builders no longer resolve to anything.", "error")
+        return redirect(url_for("workflows.view_run", run_id=run.id))
+
+    version = Version.query.get({builder.version_id for builder in builders}.pop())
+    object_names = [name.strip() for name in (form.object.data or "").split(",") if name.strip()]
+
+    batch = enqueue_build_batch(
+        version=version,
+        bump_type=form.bump_type.data,
+        builder_branches=[(builder, builder.default_branch) for builder in builders],
+        objects=Object.resolve([], object_names) if object_names else [],
+        additional_description=(form.description.data or "").strip() or None,
+        requested_by=current_user.id,
+        change_type_id=uuid.UUID(form.change_type_id.data),
+    )
+    step_run.status = "running"
+    step_run.batch_id = batch.id
+    db.session.commit()
+
+    log_activity(
+        action="APPROVE_WORKFLOW_BUILD_STEP",
+        target_type="workflow_run",
+        target_id=str(run.id),
+        description=f"Approved AI-suggested build metadata for a step in workflow '{run.workflow.name}'",
+    )
+
+    flash("Build approved — queued.", "success")
+    return redirect(url_for("workflows.view_run", run_id=run.id))
+
+
+@workflows_bp.route("/step-runs/<uuid:step_run_id>/reject", methods=["POST"])
+@permission_required("workflow.run")
+def reject_step_run(step_run_id):
+    step_run = _awaiting_review_step_run_or_404(step_run_id)
+    run = step_run.run
+    step = step_run.step
+
+    step_run.status = "failed"
+    step_run.error = "Rejected by reviewer."
+    step_run.finished_at = datetime.utcnow()
+    db.session.commit()
+
+    log_activity(
+        action="REJECT_WORKFLOW_BUILD_STEP",
+        target_type="workflow_run",
+        target_id=str(run.id),
+        description=f"Rejected AI-suggested build metadata for a step in workflow '{run.workflow.name}'",
+    )
+
+    finish_step(run, step, success=False)
+
+    flash("Build step rejected.", "info")
+    return redirect(url_for("workflows.view_run", run_id=run.id))

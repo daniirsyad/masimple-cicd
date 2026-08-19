@@ -1,0 +1,45 @@
+{% extends "base.html" %} {% block title %}Archived Connections -
+MASIMPLE CICD{% endblock %} {% block content %}
+<div class="flex flex-wrap items-center justify-between gap-2">
+  <h1 class="text-2xl font-bold">Archived GitHub Connections</h1>
+  <a class="btn btn-sm" href="{{ url_for('git_sources.index') }}">Back to Connections</a>
+</div>
+<p class="mt-2 text-sm text-base-content/60">
+  Disabled connections — hidden from the main list and can no longer register new repositories. Restore one
+  to bring it back.
+</p>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Provider</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for source in sources %}
+          <tr>
+            <td>{{ source.name }}</td>
+            <td>{{ source.provider_type }}</td>
+            <td>
+              <form method="POST" action="{{ url_for('git_sources.enable_connection', source_id=source.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                <button type="submit" class="btn btn-sm btn-primary">Restore</button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="3">No archived connections.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

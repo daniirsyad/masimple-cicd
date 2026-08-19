@@ -3,13 +3,16 @@ MASIMPLE CICD{% endblock %} {% block content %}
 
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Workflows</h1>
-  <button
-    type="button"
-    class="btn btn-primary btn-sm"
-    onclick="document.getElementById('create-workflow-modal').showModal()"
-  >
-    + New Workflow
-  </button>
+  <div class="flex gap-2">
+    <a class="btn btn-sm" href="{{ url_for('workflows.archived') }}">Archived</a>
+    <button
+      type="button"
+      class="btn btn-primary btn-sm"
+      onclick="document.getElementById('create-workflow-modal').showModal()"
+    >
+      + New Workflow
+    </button>
+  </div>
 </div>
 <p class="mt-1 text-sm text-base-content/60">
   An ordered sequence of existing Builders/Manifests, run one step at a time — build a batch, then deploy it, then
@@ -56,7 +59,19 @@ MASIMPLE CICD{% endblock %} {% block content %}
               {% endif %}
             </td>
             <td>
-              <a class="btn btn-sm" href="{{ url_for('workflows.view_workflow', workflow_id=workflow.id) }}">Open</a>
+              <div class="flex gap-2">
+                <form method="POST" action="{{ url_for('workflows.run_workflow', workflow_id=workflow.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                  <button
+                    type="submit"
+                    class="btn btn-sm btn-primary"
+                    {{ 'disabled' if (not workflow.is_active or workflow.steps.count() == 0) else '' }}
+                  >
+                    Run
+                  </button>
+                </form>
+                <a class="btn btn-sm" href="{{ url_for('workflows.view_workflow', workflow_id=workflow.id) }}">Open</a>
+              </div>
             </td>
           </tr>
           {% endfor %}

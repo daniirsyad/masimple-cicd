@@ -184,6 +184,32 @@ class TestIndexRendering:
         assert response.status_code == 200
         assert b"Existing WF" in response.data
 
+    def test_run_button_enabled_for_an_active_workflow_with_steps(self, workflow_client, app, base_entities):
+        with app.app_context():
+            workflow = _make_workflow("Runnable")
+            builder = _make_builder(base_entities)
+            step = WorkflowStep(workflow_id=workflow.id, order=0, step_type="build", on_failure="stop")
+            db.session.add(step)
+            db.session.flush()
+            step.selected_builders = [builder]
+            db.session.commit()
+            workflow_id = workflow.id
+
+        response = workflow_client.get("/workflows/")
+        html = response.data.decode()
+        form = _form_html(html, f'action="/workflows/{workflow_id}/run"')
+        assert "disabled" not in form
+
+    def test_run_button_disabled_for_an_inactive_or_stepless_workflow(self, workflow_client, app):
+        with app.app_context():
+            workflow = _make_workflow("No Steps")
+            workflow_id = workflow.id
+
+        response = workflow_client.get("/workflows/")
+        html = response.data.decode()
+        form = _form_html(html, f'action="/workflows/{workflow_id}/run"')
+        assert "disabled" in form
+
 
 def _form_html(html, action_substring):
     """The <form ...>...</form> block whose action contains `action_substring`
@@ -319,6 +345,153 @@ class TestAddBuildStep:
         assert response.status_code == 200  # re-rendered with a validation error, not a redirect
         with app.app_context():
             assert WorkflowStep.query.filter_by(workflow_id=workflow_id).count() == 0
+
+
+class TestAddBuildStepAutoGenerate:
+    def test_auto_generate_leaves_metadata_fields_blank(self, workflow_client, app, base_entities):
+        with app.app_context():
+            _make_builder(base_entities, "a", group_name="prod")
+            workflow = _make_workflow()
+            workflow_id = workflow.id
+
+        response = workflow_client.post(
+            f"/workflows/{workflow_id}/steps/build",
+            data={
+                "group_names": ["prod"],
+                "auto_generate_build_metadata": "y",
+                "require_review_before_build": "y",
+                "on_failure": "stop",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        with app.app_context():
+            step = WorkflowStep.query.filter_by(workflow_id=workflow_id).first()
+            assert step is not None
+            assert step.auto_generate_build_metadata is True
+            assert step.require_review_before_build is True
+            assert step.bump_type is None
+            assert step.change_type_id is None
+            assert step.object is None
+
+    def test_manual_mode_still_requires_the_three_fields(self, workflow_client, app, base_entities):
+        with app.app_context():
+            _make_builder(base_entities, "a", group_name="prod")
+            workflow = _make_workflow()
+            workflow_id = workflow.id
+
+        response = workflow_client.post(
+            f"/workflows/{workflow_id}/steps/build",
+            data={"group_names": ["prod"], "on_failure": "stop"},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert b"or enable auto-generate at run time" in response.data
+        with app.app_context():
+            assert WorkflowStep.query.filter_by(workflow_id=workflow_id).count() == 0
+
+
+class TestApproveRejectStepRun:
+    def _start_awaiting_review_run(self, app, base_entities, monkeypatch, require_review=True):
+        import app.services.workflow.worker as worker
+        from app.services.workflow.worker import _tick, enqueue_workflow_run
+
+        with app.app_context():
+            workflow = _make_workflow()
+            builder = _make_builder(base_entities)
+            step = WorkflowStep(
+                workflow_id=workflow.id,
+                order=0,
+                step_type="build",
+                on_failure="stop",
+                auto_generate_build_metadata=True,
+                require_review_before_build=require_review,
+            )
+            db.session.add(step)
+            db.session.flush()
+            step.selected_builders = [builder]
+            db.session.commit()
+            change_type_id = base_entities["change_type_id"]
+
+            monkeypatch.setattr(
+                worker,
+                "compute_build_prefill",
+                lambda builder_branches, additional_description=None: {
+                    "bump_type": "patch",
+                    "matched_objects": [],
+                    "new_object_names": ["api"],
+                    "change_type_id": change_type_id,
+                    "description": "Draft.",
+                    "commit_count": 1,
+                },
+            )
+
+            run = enqueue_workflow_run(workflow, triggered_by=None)
+            _tick(app)
+
+            step_run = WorkflowStepRun.query.filter_by(workflow_run_id=run.id).one()
+            return run.id, step_run.id, change_type_id
+
+    def test_approve_enqueues_a_real_batch(self, workflow_client, app, base_entities, monkeypatch):
+        from app.models import BuildBatch
+
+        run_id, step_run_id, change_type_id = self._start_awaiting_review_run(app, base_entities, monkeypatch)
+
+        prefix = f"approve-{step_run_id}-"
+        response = workflow_client.post(
+            f"/workflows/step-runs/{step_run_id}/approve",
+            data={
+                f"{prefix}bump_type": "minor",
+                f"{prefix}change_type_id": str(change_type_id),
+                f"{prefix}object": "api, billing",
+                f"{prefix}description": "Edited before approving.",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        with app.app_context():
+            step_run = WorkflowStepRun.query.get(step_run_id)
+            assert step_run.status == "running"
+            assert step_run.batch_id is not None
+            batch = BuildBatch.query.get(step_run.batch_id)
+            assert batch.bump_type == "minor"
+            assert sorted(obj.name for obj in batch.objects) == ["api", "billing"]
+
+    def test_reject_fails_the_step_and_stops_the_run(self, workflow_client, app, base_entities, monkeypatch):
+        run_id, step_run_id, _ = self._start_awaiting_review_run(app, base_entities, monkeypatch)
+
+        response = workflow_client.post(f"/workflows/step-runs/{step_run_id}/reject", follow_redirects=True)
+        assert response.status_code == 200
+        with app.app_context():
+            step_run = WorkflowStepRun.query.get(step_run_id)
+            assert step_run.status == "failed"
+            assert step_run.error == "Rejected by reviewer."
+            run = WorkflowRun.query.get(run_id)
+            assert run.status == "failed"
+
+    def test_approve_requires_workflow_run_permission(self, view_only_client, app, base_entities, monkeypatch):
+        run_id, step_run_id, change_type_id = self._start_awaiting_review_run(app, base_entities, monkeypatch)
+
+        prefix = f"approve-{step_run_id}-"
+        response = view_only_client.post(
+            f"/workflows/step-runs/{step_run_id}/approve",
+            data={f"{prefix}bump_type": "patch", f"{prefix}change_type_id": str(change_type_id)},
+        )
+        assert response.status_code == 403
+
+    def test_run_page_renders_the_review_panel_with_suggested_values(
+        self, workflow_client, app, base_entities, monkeypatch
+    ):
+        run_id, step_run_id, change_type_id = self._start_awaiting_review_run(app, base_entities, monkeypatch)
+
+        response = workflow_client.get(f"/workflows/runs/{run_id}")
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert "Awaiting Review" in html
+        assert f'action="/workflows/step-runs/{step_run_id}/approve"' in html
+        assert f'action="/workflows/step-runs/{step_run_id}/reject"' in html
+        assert 'value="api"' in html  # pre-filled from suggested_object_names
+        assert "awaiting_review" in html  # step status badge in the polled table
 
 
 class _FakePreviewGitProvider:
@@ -459,6 +632,31 @@ class TestDeleteStep:
         with app.app_context():
             assert WorkflowStep.query.get(step_id) is not None
 
+    def test_delete_button_disabled_when_step_has_run_history(self, workflow_client, app, base_entities):
+        with app.app_context():
+            workflow = _make_workflow()
+            builder = _make_builder(base_entities)
+            step = WorkflowStep(workflow_id=workflow.id, order=0, step_type="build", on_failure="stop")
+            db.session.add(step)
+            db.session.flush()
+            step.selected_builders = [builder]
+            run = WorkflowRun(workflow_id=workflow.id, status="success")
+            db.session.add(run)
+            db.session.flush()
+            db.session.add(
+                WorkflowStepRun(
+                    workflow_run_id=run.id, workflow_step_id=step.id, step_order=0, step_type="build", status="success"
+                )
+            )
+            db.session.commit()
+            workflow_id, step_id = workflow.id, step.id
+
+        response = workflow_client.get(f"/workflows/{workflow_id}")
+        html = response.data.decode()
+        button = html[html.index(f"delete-step-modal-{step_id}") : html.index(f"delete-step-modal-{step_id}") + 400]
+        assert "disabled" in button
+        assert "recorded run" in button
+
     def test_never_run_step_can_be_deleted(self, workflow_client, app, base_entities):
         with app.app_context():
             workflow = _make_workflow()
@@ -499,6 +697,62 @@ class TestDeleteWorkflow:
         assert b"recorded run" in response.data
         with app.app_context():
             assert Workflow.query.get(workflow_id) is not None
+
+    def test_delete_button_disabled_when_workflow_has_run_history(self, workflow_client, app):
+        with app.app_context():
+            workflow = _make_workflow()
+            db.session.add(WorkflowRun(workflow_id=workflow.id, status="success"))
+            db.session.commit()
+            workflow_id = workflow.id
+
+        response = workflow_client.get(f"/workflows/{workflow_id}")
+        html = response.data.decode()
+        button = html[html.index("delete-workflow-modal") : html.index("delete-workflow-modal") + 400]
+        assert "disabled" in button
+        assert "recorded run" in button
+
+    def test_delete_button_enabled_when_workflow_has_no_run_history(self, workflow_client, app):
+        with app.app_context():
+            workflow = _make_workflow()
+            db.session.commit()
+            workflow_id = workflow.id
+
+        response = workflow_client.get(f"/workflows/{workflow_id}")
+        html = response.data.decode()
+        button = html[html.index("delete-workflow-modal") : html.index("delete-workflow-modal") + 400]
+        assert "disabled" not in button
+
+
+class TestDisableArchiveWorkflow:
+    def test_disable_moves_it_off_main_list_onto_archived_page(self, workflow_client, app):
+        with app.app_context():
+            workflow = _make_workflow()
+            db.session.add(WorkflowRun(workflow_id=workflow.id, status="success"))
+            db.session.commit()
+            workflow_id = workflow.id
+
+        response = workflow_client.post(f"/workflows/{workflow_id}/disable", follow_redirects=True)
+        assert response.status_code == 200
+        with app.app_context():
+            assert Workflow.query.get(workflow_id).is_active is False
+
+        index_html = workflow_client.get("/workflows/").data.decode()
+        assert f'workflow_id={workflow_id}' not in index_html
+        archived_html = workflow_client.get("/workflows/archived").data.decode()
+        assert "wf" in archived_html
+        assert f'/workflows/{workflow_id}/enable' in archived_html
+
+    def test_enable_restores_it(self, workflow_client, app):
+        with app.app_context():
+            workflow = _make_workflow()
+            workflow.is_active = False
+            db.session.commit()
+            workflow_id = workflow.id
+
+        response = workflow_client.post(f"/workflows/{workflow_id}/enable", follow_redirects=True)
+        assert response.status_code == 200
+        with app.app_context():
+            assert Workflow.query.get(workflow_id).is_active is True
 
 
 class TestRunWorkflow:

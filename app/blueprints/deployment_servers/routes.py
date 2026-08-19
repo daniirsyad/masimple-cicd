@@ -48,7 +48,20 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
         create_form = DeploymentServerForm(prefix=CREATE_PREFIX)
     create_form.allowed_role_ids.choices = _role_choices()
 
-    servers = DeploymentServer.query.order_by(DeploymentServer.name).all()
+    servers = DeploymentServer.query.filter_by(is_active=True).order_by(DeploymentServer.name).all()
+
+    # Same guards delete() itself checks before rejecting the request —
+    # computed here so the button can be disabled up front.
+    delete_reasons = {}
+    for server in servers:
+        manifest_count = server.manifests.count()
+        execution_count = DeploymentExecution.query.filter_by(server_id=server.id).count()
+        if manifest_count:
+            delete_reasons[server.id] = f"{manifest_count} manifest(s) still target it."
+        elif execution_count:
+            delete_reasons[server.id] = f"Has {execution_count} recorded deployment(s)."
+        else:
+            delete_reasons[server.id] = None
 
     invalid_id, invalid_form = invalid_edit or (None, None)
     edit_forms = {}
@@ -69,10 +82,16 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
     return render_template(
         "deployment_servers/index.html",
         servers=servers,
+        delete_reasons=delete_reasons,
         create_form=create_form,
         edit_forms=edit_forms,
         open_modal=open_modal,
     )
+
+
+def _render_archived():
+    servers = DeploymentServer.query.filter_by(is_active=False).order_by(DeploymentServer.name).all()
+    return render_template("deployment_servers/archived.html", servers=servers)
 
 
 @deployment_servers_bp.route("/")
@@ -187,6 +206,48 @@ def delete(server_id):
 
     flash(f"Server '{name}' deleted.", "success")
     return redirect(url_for("deployment_servers.index"))
+
+
+@deployment_servers_bp.route("/archived")
+@permission_required("deployment_server.manage")
+def archived():
+    return _render_archived()
+
+
+@deployment_servers_bp.route("/<uuid:server_id>/disable", methods=["POST"])
+@permission_required("deployment_server.manage")
+def disable(server_id):
+    server = DeploymentServer.query.get_or_404(server_id)
+    server.is_active = False
+    db.session.commit()
+
+    log_activity(
+        action="DISABLE_DEPLOYMENT_SERVER",
+        target_type="deployment_server",
+        target_id=str(server.id),
+        description=f"Disabled deployment server '{server.name}'",
+    )
+
+    flash(f"'{server.name}' disabled — moved to Archived.", "info")
+    return redirect(url_for("deployment_servers.index"))
+
+
+@deployment_servers_bp.route("/<uuid:server_id>/enable", methods=["POST"])
+@permission_required("deployment_server.manage")
+def enable(server_id):
+    server = DeploymentServer.query.get_or_404(server_id)
+    server.is_active = True
+    db.session.commit()
+
+    log_activity(
+        action="ENABLE_DEPLOYMENT_SERVER",
+        target_type="deployment_server",
+        target_id=str(server.id),
+        description=f"Re-enabled deployment server '{server.name}'",
+    )
+
+    flash(f"'{server.name}' re-enabled.", "success")
+    return redirect(url_for("deployment_servers.archived"))
 
 
 @deployment_servers_bp.route("/<uuid:server_id>/test", methods=["POST"])

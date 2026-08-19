@@ -147,7 +147,7 @@ def _fake_git_provider(monkeypatch):
     return fake
 
 
-def _make_builder(base_entities, name="b1", default_branch="main"):
+def _make_builder(base_entities, name="b1", default_branch="main", group_name=None, is_active=True):
     builder = Builder(
         name=name,
         version_id=base_entities["version_id"],
@@ -155,6 +155,8 @@ def _make_builder(base_entities, name="b1", default_branch="main"):
         default_branch=default_branch,
         dockerfile_path="Dockerfile",
         registry_target_id=base_entities["registry_target_id"],
+        group_name=group_name,
+        is_active=is_active,
     )
     db.session.add(builder)
     db.session.flush()
@@ -699,6 +701,125 @@ class TestDeleteBuilder:
 
         with app.app_context():
             assert Builder.query.get(builder_id) is not None
+
+    def test_delete_button_disabled_when_build_history_exists(self, builder_client, app, base_entities):
+        with app.app_context():
+            builder = _make_builder(base_entities)
+            batch = BuildBatch(
+                version_id=base_entities["version_id"],
+                full_version_string="DEV.1.0.0.010101000000",
+                bump_type="patch",
+            )
+            db.session.add(batch)
+            db.session.flush()
+            db.session.add(ImageBuild(batch_id=batch.id, builder_id=builder.id, branch_used="main"))
+            db.session.commit()
+            builder_id = builder.id
+
+        response = builder_client.get("/builders/")
+        html = response.data.decode()
+        marker = f"delete-builder-modal-{builder_id}"
+        button = html[html.index(marker) : html.index(marker) + 400]
+        assert "disabled" in button
+        assert "recorded build" in button
+
+    def test_delete_button_enabled_with_no_build_history(self, builder_client, app, base_entities):
+        with app.app_context():
+            builder = _make_builder(base_entities)
+            db.session.commit()
+            builder_id = builder.id
+
+        response = builder_client.get("/builders/")
+        html = response.data.decode()
+        marker = f"delete-builder-modal-{builder_id}"
+        button = html[html.index(marker) : html.index(marker) + 400]
+        assert "disabled" not in button
+
+
+class TestDisableArchiveBuilder:
+    def test_disable_moves_builder_off_main_list_and_out_of_workflow_group(
+        self, builder_client, app, base_entities
+    ):
+        with app.app_context():
+            builder = _make_builder(base_entities, group_name="prod")
+            batch = BuildBatch(
+                version_id=base_entities["version_id"],
+                full_version_string="DEV.1.0.0.010101000000",
+                bump_type="patch",
+            )
+            db.session.add(batch)
+            db.session.flush()
+            db.session.add(ImageBuild(batch_id=batch.id, builder_id=builder.id, branch_used="main"))
+            db.session.commit()
+            builder_id = builder.id
+
+        response = builder_client.post(f"/builders/{builder_id}/disable", follow_redirects=True)
+        assert response.status_code == 200
+
+        with app.app_context():
+            assert Builder.query.get(builder_id).is_active is False
+
+        index_html = builder_client.get("/builders/").data.decode()
+        assert builder_id.hex not in index_html.replace("-", "")
+
+        archived_html = builder_client.get("/builders/archived").data.decode()
+        assert f'/builders/{builder_id}/enable' in archived_html
+
+        from app.services.workflow.resolver import resolve_builders_from_selection
+
+        with app.app_context():
+            resolved = resolve_builders_from_selection(["prod"], [])
+            assert builder_id not in {b.id for b in resolved}
+
+    def test_disabled_builder_cannot_be_triggered_directly(self, builder_client, app, base_entities):
+        with app.app_context():
+            builder = _make_builder(base_entities, is_active=False)
+            change_type = _make_change_type()
+            db.session.commit()
+            builder_id, change_type_id = builder.id, change_type.id
+
+        response = builder_client.post(
+            "/builders/build",
+            data={
+                "builder_ids": [str(builder_id)],
+                "bump_type": "patch",
+                "change_type_id": str(change_type_id),
+                "new_object_names": ["svc"],
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert b"disabled and can" in response.data
+        with app.app_context():
+            assert ImageBuild.query.filter_by(builder_id=builder_id).count() == 0
+
+    def test_enable_restores_builder_to_main_list(self, builder_client, app, base_entities):
+        with app.app_context():
+            builder = _make_builder(base_entities, is_active=False)
+            db.session.commit()
+            builder_id = builder.id
+
+        response = builder_client.post(f"/builders/{builder_id}/enable", follow_redirects=True)
+        assert response.status_code == 200
+        with app.app_context():
+            assert Builder.query.get(builder_id).is_active is True
+
+    def test_disabled_version_not_offered_when_creating_a_builder(self, builder_client, app, base_entities):
+        with app.app_context():
+            other_version = Version.query.get(base_entities["version_id"])
+            other_version.is_active = False
+            db.session.commit()
+            other_version_name = other_version.name
+
+        response = builder_client.get("/builders/")
+        assert response.status_code == 200
+        # The disabled version must not appear as a create-form choice —
+        # check inside the create modal's own select, not the whole page
+        # (which may still show it elsewhere, e.g. an existing Builder row).
+        html = response.data.decode()
+        select_start = html.index('id="create-builder-version_id"')
+        select_end = html.index("</select>", select_start)
+        assert other_version_name not in html[select_start:select_end]
 
 
 class TestBuildTrigger:

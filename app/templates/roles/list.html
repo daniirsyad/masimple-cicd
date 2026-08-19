@@ -1,5 +1,5 @@
-{% extends "base.html" %} {% block title %}Roles - MASIMPLE CICD{% endblock %} {%
-block content %}
+{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Roles -
+MASIMPLE CICD{% endblock %} {% block content %}
 
 {% macro permission_picker(form) %}
 <div class="flex flex-col gap-3">
@@ -72,6 +72,7 @@ block content %}
             type="button"
             class="btn btn-sm btn-error"
             onclick="document.getElementById('delete-modal-{{ role.id }}').showModal()"
+            {{ disabled_attrs(role_delete_reasons.get(role.id)) }}
           >
             Delete
           </button>

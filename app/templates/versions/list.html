@@ -1,14 +1,17 @@
-{% extends "base.html" %} {% block title %}Versions -
+{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Versions -
 MASIMPLE CICD{% endblock %} {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Versions</h1>
-  <button
-    type="button"
-    class="btn btn-primary btn-sm"
-    onclick="document.getElementById('create-version-modal').showModal()"
-  >
-    New Version
-  </button>
+  <div class="flex gap-2">
+    <a class="btn btn-sm" href="{{ url_for('versions.archived') }}">Archived</a>
+    <button
+      type="button"
+      class="btn btn-primary btn-sm"
+      onclick="document.getElementById('create-version-modal').showModal()"
+    >
+      New Version
+    </button>
+  </div>
 </div>
 <p class="mt-2 text-sm text-base-content/60">
   A Version is created standalone here — it's attached to one or more Builders
@@ -66,9 +69,16 @@ MASIMPLE CICD{% endblock %} {% block content %}
                 type="button"
                 class="btn btn-sm btn-error"
                 onclick="document.getElementById('delete-version-modal-{{ version.id }}').showModal()"
+                {{ disabled_attrs(delete_reasons.get(version.id)) }}
               >
                 Delete
               </button>
+              {% if delete_reasons.get(version.id) %}
+              <form method="POST" action="{{ url_for('versions.disable_version', version_id=version.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                <button type="submit" class="btn btn-sm btn-warning">Disable</button>
+              </form>
+              {% endif %}
             </td>
           </tr>
           {% else %}

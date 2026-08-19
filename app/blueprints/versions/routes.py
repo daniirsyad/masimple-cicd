@@ -17,11 +17,24 @@ def _edit_prefix(version_id):
     return f"version-{version_id}-"
 
 
-def _linked_version_choices(version_id=None):
-    query = Version.query
+def _linked_version_choices(version_id=None, include_versions=None):
+    """Active versions only (a disabled one shouldn't be newly linkable) —
+    plus, if given, `include_versions` (a version's own *currently* linked
+    versions) so that re-submitting its edit form doesn't fail WTForms'
+    choice validation, or silently drop the link, just because one of them
+    has since been disabled. Same "keep the current value selectable in its
+    own edit form" fallback as builders.routes._version_choices.
+    """
+    query = Version.query.filter_by(is_active=True)
     if version_id is not None:
         query = query.filter(Version.id != version_id)
-    return [(str(v.id), v.name) for v in query.order_by(Version.name).all()]
+    choices = [(str(v.id), v.name) for v in query.order_by(Version.name).all()]
+    if include_versions:
+        existing_ids = {choice_id for choice_id, _ in choices}
+        for version in include_versions:
+            if str(version.id) not in existing_ids:
+                choices.append((str(version.id), version.name))
+    return choices
 
 
 def _sync_linked_versions(version, selected_ids):
@@ -84,19 +97,29 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
         create_form = VersionForm(prefix=CREATE_PREFIX)
     create_form.linked_version_ids.choices = _linked_version_choices()
 
-    versions = Version.query.order_by(Version.name).all()
+    versions = Version.query.filter_by(is_active=True).order_by(Version.name).all()
     latest_batches = _latest_batch_by_version()
+    # Same guard delete_version itself checks before rejecting the request —
+    # computed here so the button can be disabled up front.
+    delete_reasons = {}
+    for version in versions:
+        builder_count = Builder.query.filter_by(version_id=version.id).count()
+        delete_reasons[version.id] = f"{builder_count} Builder(s) still reference it." if builder_count else None
 
     invalid_id, invalid_form = invalid_edit or (None, None)
     edit_forms = {}
     for version in versions:
         if version.id == invalid_id:
-            invalid_form.linked_version_ids.choices = _linked_version_choices(version.id)
+            invalid_form.linked_version_ids.choices = _linked_version_choices(
+                version.id, include_versions=version.linked_versions
+            )
             edit_forms[version.id] = invalid_form
         else:
             form = VersionForm(obj=version, prefix=_edit_prefix(version.id))
             form.version_type.data = version.version_type.name
-            form.linked_version_ids.choices = _linked_version_choices(version.id)
+            form.linked_version_ids.choices = _linked_version_choices(
+                version.id, include_versions=version.linked_versions
+            )
             form.linked_version_ids.data = [str(v.id) for v in version.linked_versions]
             edit_forms[version.id] = form
 
@@ -104,11 +127,17 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
         "versions/list.html",
         versions=versions,
         latest_batches=latest_batches,
+        delete_reasons=delete_reasons,
         create_form=create_form,
         edit_forms=edit_forms,
         version_type_names=_version_type_names(),
         open_modal=open_modal,
     )
+
+
+def _render_archived():
+    versions = Version.query.filter_by(is_active=False).order_by(Version.name).all()
+    return render_template("versions/archived.html", versions=versions)
 
 
 @versions_bp.route("/")
@@ -160,7 +189,7 @@ def create_version():
 def edit_version(version_id):
     version = Version.query.get_or_404(version_id)
     form = VersionForm(prefix=_edit_prefix(version_id))
-    form.linked_version_ids.choices = _linked_version_choices(version_id)
+    form.linked_version_ids.choices = _linked_version_choices(version_id, include_versions=version.linked_versions)
 
     if form.validate_on_submit():
         duplicate = Version.query.filter(
@@ -219,3 +248,45 @@ def delete_version(version_id):
 
     flash(f"Version '{name}' deleted.", "success")
     return redirect(url_for("versions.list_versions"))
+
+
+@versions_bp.route("/archived")
+@permission_required("version.view")
+def archived():
+    return _render_archived()
+
+
+@versions_bp.route("/<uuid:version_id>/disable", methods=["POST"])
+@permission_required("version.manage")
+def disable_version(version_id):
+    version = Version.query.get_or_404(version_id)
+    version.is_active = False
+    db.session.commit()
+
+    log_activity(
+        action="DISABLE_VERSION",
+        target_type="version",
+        target_id=str(version.id),
+        description=f"Disabled version '{version.name}'",
+    )
+
+    flash(f"'{version.name}' disabled — moved to Archived.", "info")
+    return redirect(url_for("versions.list_versions"))
+
+
+@versions_bp.route("/<uuid:version_id>/enable", methods=["POST"])
+@permission_required("version.manage")
+def enable_version(version_id):
+    version = Version.query.get_or_404(version_id)
+    version.is_active = True
+    db.session.commit()
+
+    log_activity(
+        action="ENABLE_VERSION",
+        target_type="version",
+        target_id=str(version.id),
+        description=f"Re-enabled version '{version.name}'",
+    )
+
+    flash(f"'{version.name}' re-enabled.", "success")
+    return redirect(url_for("versions.archived"))

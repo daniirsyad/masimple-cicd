@@ -1,0 +1,50 @@
+{% extends "base.html" %} {% block title %}Archived Workflows -
+MASIMPLE CICD{% endblock %} {% block content %}
+<div class="flex flex-wrap items-center justify-between gap-2">
+  <h1 class="text-2xl font-bold">Archived Workflows</h1>
+  <a class="btn btn-sm" href="{{ url_for('workflows.index') }}">Back to Workflows</a>
+</div>
+<p class="mt-2 text-sm text-base-content/60">
+  Disabled workflows — hidden from the main list and can't be run. Restore one to bring it back.
+</p>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Description</th>
+            <th>Steps</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for workflow in workflows %}
+          <tr>
+            <td>
+              <a class="link link-primary" href="{{ url_for('workflows.view_workflow', workflow_id=workflow.id) }}"
+                >{{ workflow.name }}</a
+              >
+            </td>
+            <td class="max-w-xs truncate text-xs text-base-content/70">{{ workflow.description or "—" }}</td>
+            <td>{{ workflow.steps.count() }}</td>
+            <td>
+              <form method="POST" action="{{ url_for('workflows.enable_workflow', workflow_id=workflow.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                <button type="submit" class="btn btn-sm btn-primary">Restore</button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="4">No archived workflows.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

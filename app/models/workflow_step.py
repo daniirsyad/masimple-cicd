@@ -51,13 +51,27 @@ class WorkflowStep(db.Model):
     # "continue": the run proceeds to the next step anyway; its final status
     # still reflects that a step failed (see WorkflowRun.has_failed_step).
     on_failure = db.Column(db.String, default="stop", nullable=False)
-    # Only meaningful for step_type="build" — enqueue_build_batch requires
-    # all of these at trigger time (see builders.routes.build()), so a build
-    # step must capture them once at authoring time rather than at every run.
+    # Only meaningful for step_type="build". Either filled in by hand at
+    # authoring time (the three below are then required, see
+    # workflows.routes.add_build_step), or left blank with
+    # auto_generate_build_metadata=True, in which case the orchestrator
+    # computes them fresh on every run via the same compute_build_prefill()
+    # engine the authoring-time preview already uses (see
+    # workflow.worker._start_step) — instead of a step capturing them once
+    # and replaying the same values on every future run.
     bump_type = db.Column(db.String, nullable=True)
     change_type_id = db.Column(UUID(as_uuid=True), db.ForeignKey("change_types.id"), nullable=True)
     object = db.Column(db.String, nullable=True)
     additional_description = db.Column(db.Text, nullable=True)
+    auto_generate_build_metadata = db.Column(db.Boolean, default=False, nullable=False)
+    # Only consulted when auto_generate_build_metadata is True: pause the run
+    # and let a human review/edit the generated values before they're used
+    # (see workflow.worker._start_step and workflows.routes.approve_step_run/
+    # reject_step_run), vs. apply them immediately with no human in the loop.
+    # Defaults True — same "never apply raw AI output unseen" rule already
+    # followed everywhere else AI output touches this app (see
+    # app/services/ai/build_prefill.py's own docstring).
+    require_review_before_build = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

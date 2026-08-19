@@ -1,5 +1,5 @@
-{% extends "base.html" %} {% block title %}{{ workflow.name }} - Workflows -
-MASIMPLE CICD{% endblock %} {% block content %}
+{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}{{
+workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
 
 <span id="workflow-view-page" data-csrf="{{ csrf_token() }}" class="hidden"></span>
 
@@ -28,9 +28,16 @@ MASIMPLE CICD{% endblock %} {% block content %}
       type="button"
       class="btn btn-sm btn-error"
       onclick="document.getElementById('delete-workflow-modal').showModal()"
+      {{ disabled_attrs(delete_workflow_reason) }}
     >
       Delete
     </button>
+    {% if delete_workflow_reason %}
+    <form method="POST" action="{{ url_for('workflows.disable_workflow', workflow_id=workflow.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+      <button type="submit" class="btn btn-sm btn-warning">Disable</button>
+    </form>
+    {% endif %}
   </div>
 </div>
 
@@ -91,8 +98,13 @@ MASIMPLE CICD{% endblock %} {% block content %}
               <span class="text-xs text-error">Resolves to nothing right now</span>
               {% endif %} {% if step.step_type == "build" %}
               <div class="mt-1 text-xs text-base-content/60">
+                {% if step.auto_generate_build_metadata %}
+                Auto-generated at run time ({{ "review required" if step.require_review_before_build else
+                "applied automatically" }})
+                {% else %}
                 {{ step.bump_type }} bump · {{ step.change_type.name if step.change_type else "—" }} · "{{
                 step.object }}"
+                {% endif %}
               </div>
               {% endif %}
             </td>
@@ -104,6 +116,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
                 type="button"
                 class="btn btn-sm btn-error"
                 onclick="document.getElementById('delete-step-modal-{{ step.id }}').showModal()"
+                {{ disabled_attrs(step_delete_reasons.get(step.id)) }}
               >
                 Delete
               </button>
@@ -271,26 +284,39 @@ MASIMPLE CICD{% endblock %} {% block content %}
 
       <p id="build-step-preview-status" class="text-xs text-base-content/60"></p>
 
-      <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <div>
-          {{ build_form.bump_type.label(class="label text-sm") }} {{ build_form.bump_type(id="build-step-bump-type",
-          class="select select-bordered select-sm w-full") }}
+      <div class="rounded-lg border border-base-300 bg-base-200/40 p-3">
+        <label class="flex items-center gap-2 text-sm font-medium">
+          {{ build_form.auto_generate_build_metadata(id="build-step-auto-generate", class="checkbox checkbox-sm") }}
+          {{ build_form.auto_generate_build_metadata.label.text }}
+        </label>
+        <label id="build-step-require-review-row" class="mt-2 flex items-center gap-2 text-sm">
+          {{ build_form.require_review_before_build(id="build-step-require-review", class="checkbox checkbox-sm") }}
+          {{ build_form.require_review_before_build.label.text }}
+        </label>
+      </div>
+
+      <div id="build-step-manual-fields" class="flex flex-col gap-3">
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div>
+            {{ build_form.bump_type.label(class="label text-sm") }} {{ build_form.bump_type(id="build-step-bump-type",
+            class="select select-bordered select-sm w-full") }}
+          </div>
+          <div>
+            {{ build_form.change_type_id.label(class="label text-sm") }} {{
+            build_form.change_type_id(id="build-step-change-type", class="select select-bordered select-sm w-full") }}
+          </div>
         </div>
         <div>
-          {{ build_form.change_type_id.label(class="label text-sm") }} {{
-          build_form.change_type_id(id="build-step-change-type", class="select select-bordered select-sm w-full") }}
+          {{ build_form.object.label(class="label text-sm") }} {{ build_form.object(id="build-step-object",
+          class="input input-bordered input-sm w-full") }} {% for error in build_form.object.errors %}
+          <p class="mt-1 text-xs text-error">{{ error }}</p>
+          {% endfor %}
         </div>
-      </div>
-      <div>
-        {{ build_form.object.label(class="label text-sm") }} {{ build_form.object(id="build-step-object",
-        class="input input-bordered input-sm w-full") }} {% for error in build_form.object.errors %}
-        <p class="mt-1 text-xs text-error">{{ error }}</p>
-        {% endfor %}
-      </div>
-      <div>
-        {{ build_form.additional_description.label(class="label text-sm") }} {{
-        build_form.additional_description(id="build-step-additional-description", class="textarea
-        textarea-bordered textarea-sm w-full", rows=2) }}
+        <div>
+          {{ build_form.additional_description.label(class="label text-sm") }} {{
+          build_form.additional_description(id="build-step-additional-description", class="textarea
+          textarea-bordered textarea-sm w-full", rows=2) }}
+        </div>
       </div>
       <div>
         {{ build_form.on_failure.label(class="label text-sm") }} {{ build_form.on_failure(class="select

@@ -30,6 +30,11 @@ class Version(db.Model):
     major = db.Column(db.Integer, default=0, nullable=False)
     minor = db.Column(db.Integer, default=0, nullable=False)
     patch = db.Column(db.Integer, default=0, nullable=False)
+    # Disabled (archived) versions drop off the main /versions list onto a
+    # separate Archived page, and stop being offered as a choice for new
+    # Builders — see versions.routes.disable_version/enable_version and
+    # builders.routes._version_choices.
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

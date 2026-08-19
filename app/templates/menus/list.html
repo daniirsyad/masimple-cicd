@@ -1,5 +1,5 @@
-{% extends "base.html" %} {% block title %}Menus - MASIMPLE CICD{% endblock %} {%
-block content %}
+{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Menus -
+MASIMPLE CICD{% endblock %} {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Menus</h1>
   <button
@@ -59,6 +59,7 @@ block content %}
             type="button"
             class="btn btn-sm btn-error"
             onclick="document.getElementById('delete-modal-{{ item.id }}').showModal()"
+            {{ disabled_attrs("Still has sub-items." if has_children_map.get(item.id) else None) }}
           >
             Delete
           </button>
@@ -106,6 +107,7 @@ block content %}
               type="button"
               class="btn btn-sm btn-error"
               onclick="document.getElementById('delete-modal-{{ child.id }}').showModal()"
+              {{ disabled_attrs("Still has sub-items." if has_children_map.get(child.id) else None) }}
             >
               Delete
             </button>

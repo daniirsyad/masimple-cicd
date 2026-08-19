@@ -58,6 +58,44 @@ def role_admin_client(client, role_admin_user):
     return client
 
 
+class TestDeleteButtonDisabledForRolesWithAssignedUsers:
+    def test_role_with_assigned_users_shows_disabled_delete_button(self, role_admin_client, app):
+        with app.app_context():
+            role = Role(name="Assigned", description="has a user")
+            db.session.add(role)
+            db.session.flush()
+            db.session.add(
+                User(
+                    username="assigned_to_role",
+                    password_hash=generate_password_hash("Whatever123!"),
+                    is_active=True,
+                    role_id=role.id,
+                )
+            )
+            db.session.commit()
+            role_id = role.id
+
+        response = role_admin_client.get("/roles/")
+        html = response.data.decode()
+        marker = f"delete-modal-{role_id}"
+        button = html[html.index(marker) : html.index(marker) + 400]
+        assert "disabled" in button
+        assert "Assigned to 1 user(s)." in button
+
+    def test_role_with_no_assigned_users_shows_enabled_delete_button(self, role_admin_client, app):
+        with app.app_context():
+            role = Role(name="Unassigned", description="no users")
+            db.session.add(role)
+            db.session.commit()
+            role_id = role.id
+
+        response = role_admin_client.get("/roles/")
+        html = response.data.decode()
+        marker = f"delete-modal-{role_id}"
+        button = html[html.index(marker) : html.index(marker) + 400]
+        assert "disabled" not in button
+
+
 class TestPermissionPicker:
     def test_groups_permissions_by_resource_with_friendly_descriptions(
         self, role_admin_client, some_permissions

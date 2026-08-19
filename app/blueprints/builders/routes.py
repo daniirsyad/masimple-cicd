@@ -41,8 +41,27 @@ def _parse_uuid(value):
         return None
 
 
-def _version_choices():
-    return [(str(v.id), v.name) for v in Version.query.order_by(Version.name).all()]
+def _active_choices_with_fallback(query, include_id, extra_lookup):
+    """Active-only choices, defensively including `include_id` (a Builder's
+    own already-assigned Version/Dockerfile/RegistryTarget) even if it's
+    since been disabled — same "keep the current value selectable in its
+    own edit form" reasoning as _branch_choices above: without this, editing
+    an otherwise-unrelated field on a Builder whose Version/Dockerfile/
+    Registry got disabled would silently drop that assignment (or fail
+    WTForms' choice validation outright), rather than just leaving it as-is.
+    """
+    choices = [(str(row.id), row.name) for row in query.all()]
+    if include_id and str(include_id) not in {choice_id for choice_id, _ in choices}:
+        extra = extra_lookup(include_id)
+        if extra is not None:
+            choices.append((str(extra.id), extra.name))
+    return choices
+
+
+def _version_choices(include_id=None):
+    return _active_choices_with_fallback(
+        Version.query.filter_by(is_active=True).order_by(Version.name), include_id, Version.query.get
+    )
 
 
 def _repository_choices():
@@ -52,14 +71,18 @@ def _repository_choices():
     ]
 
 
-def _registry_choices():
-    return [(str(r.id), r.name) for r in RegistryTarget.query.order_by(RegistryTarget.name).all()]
+def _registry_choices(include_id=None):
+    return _active_choices_with_fallback(
+        RegistryTarget.query.filter_by(is_active=True).order_by(RegistryTarget.name),
+        include_id,
+        RegistryTarget.query.get,
+    )
 
 
-def _dockerfile_choices():
-    return [("", "— Select —")] + [
-        (str(d.id), d.name) for d in Dockerfile.query.order_by(Dockerfile.name).all()
-    ]
+def _dockerfile_choices(include_id=None):
+    return [("", "— Select —")] + _active_choices_with_fallback(
+        Dockerfile.query.filter_by(is_active=True).order_by(Dockerfile.name), include_id, Dockerfile.query.get
+    )
 
 
 def _role_choices():
@@ -83,7 +106,11 @@ def _apply_dockerfile_source(builder, form):
     if form.dockerfile_source.data == "managed":
         dockerfile_id = _parse_uuid(form.managed_dockerfile_id.data)
         managed_dockerfile = Dockerfile.query.get(dockerfile_id) if dockerfile_id else None
-        if managed_dockerfile is None:
+        # A disabled Dockerfile can't be newly selected, but re-submitting a
+        # Builder's own already-assigned one (unrelated field edit) must
+        # still succeed even if it's since been disabled.
+        already_assigned = managed_dockerfile is not None and managed_dockerfile.id == builder.managed_dockerfile_id
+        if managed_dockerfile is None or not (managed_dockerfile.is_active or already_assigned):
             return "Select a Managed Dockerfile."
         builder.dockerfile_source = "managed"
         builder.managed_dockerfile_id = managed_dockerfile.id
@@ -216,7 +243,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None, selected
     create_form.managed_dockerfile_id.choices = _dockerfile_choices()
     create_form.allowed_role_ids.choices = _role_choices()
 
-    query = Builder.query
+    query = Builder.query.filter_by(is_active=True)
     if selected_version_id:
         query = query.filter_by(version_id=selected_version_id)
     builders = [b for b in query.order_by(Builder.name).all() if b.is_accessible_to(current_user)]
@@ -230,19 +257,19 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None, selected
         repo_info_by_builder[builder.id] = info
 
         if builder.id == invalid_id:
-            invalid_form.version_id.choices = _version_choices()
+            invalid_form.version_id.choices = _version_choices(include_id=builder.version_id)
             invalid_form.repository_id.choices = _repository_choices()
-            invalid_form.registry_target_id.choices = _registry_choices()
-            invalid_form.managed_dockerfile_id.choices = _dockerfile_choices()
+            invalid_form.registry_target_id.choices = _registry_choices(include_id=builder.registry_target_id)
+            invalid_form.managed_dockerfile_id.choices = _dockerfile_choices(include_id=builder.managed_dockerfile_id)
             invalid_form.allowed_role_ids.choices = _role_choices()
             invalid_form.default_branch.choices = _branch_choices(info, invalid_form.default_branch.data)
             edit_forms[builder.id] = invalid_form
         else:
             form = BuilderForm(obj=builder, prefix=_edit_prefix(builder.id))
-            form.version_id.choices = _version_choices()
+            form.version_id.choices = _version_choices(include_id=builder.version_id)
             form.repository_id.choices = _repository_choices()
-            form.registry_target_id.choices = _registry_choices()
-            form.managed_dockerfile_id.choices = _dockerfile_choices()
+            form.registry_target_id.choices = _registry_choices(include_id=builder.registry_target_id)
+            form.managed_dockerfile_id.choices = _dockerfile_choices(include_id=builder.managed_dockerfile_id)
             form.allowed_role_ids.choices = _role_choices()
             form.version_id.data = str(builder.version_id)
             form.repository_id.data = str(builder.repository_id)
@@ -255,9 +282,23 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None, selected
 
     groups, ungrouped = _builder_groups(builders)
 
+    # Same guards delete_builder() itself checks before rejecting the
+    # request — computed here so the button can be disabled up front.
+    delete_reasons = {}
+    for builder in builders:
+        build_count = ImageBuild.query.filter_by(builder_id=builder.id).count()
+        referencing_steps = WorkflowStep.query.filter(WorkflowStep.selected_builders.any(id=builder.id)).count()
+        if build_count:
+            delete_reasons[builder.id] = f"Has {build_count} recorded build(s)."
+        elif referencing_steps:
+            delete_reasons[builder.id] = f"Individually selected in {referencing_steps} workflow step(s)."
+        else:
+            delete_reasons[builder.id] = None
+
     return render_template(
         "builders/index.html",
         builders=builders,
+        delete_reasons=delete_reasons,
         groups=groups,
         ungrouped=ungrouped,
         versions=Version.query.order_by(Version.name).all(),
@@ -348,10 +389,10 @@ def create_builder():
 def edit_builder(builder_id):
     builder = Builder.query.get_or_404(builder_id)
     form = BuilderForm(prefix=_edit_prefix(builder_id))
-    form.version_id.choices = _version_choices()
+    form.version_id.choices = _version_choices(include_id=builder.version_id)
     form.repository_id.choices = _repository_choices()
-    form.registry_target_id.choices = _registry_choices()
-    form.managed_dockerfile_id.choices = _dockerfile_choices()
+    form.registry_target_id.choices = _registry_choices(include_id=builder.registry_target_id)
+    form.managed_dockerfile_id.choices = _dockerfile_choices(include_id=builder.managed_dockerfile_id)
     form.allowed_role_ids.choices = _role_choices()
 
     if form.validate_on_submit():
@@ -425,6 +466,52 @@ def delete_builder(builder_id):
     return redirect(url_for("builders.index"))
 
 
+@builders_bp.route("/archived")
+@permission_required("builder.view")
+def archived():
+    builders = [
+        b for b in Builder.query.filter_by(is_active=False).order_by(Builder.name).all()
+        if b.is_accessible_to(current_user)
+    ]
+    return render_template("builders/archived.html", builders=builders)
+
+
+@builders_bp.route("/<uuid:builder_id>/disable", methods=["POST"])
+@permission_required("builder.manage")
+def disable_builder(builder_id):
+    builder = Builder.query.get_or_404(builder_id)
+    builder.is_active = False
+    db.session.commit()
+
+    log_activity(
+        action="DISABLE_BUILDER",
+        target_type="builder",
+        target_id=str(builder.id),
+        description=f"Disabled builder '{builder.name}'",
+    )
+
+    flash(f"'{builder.name}' disabled — moved to Archived.", "info")
+    return redirect(url_for("builders.index"))
+
+
+@builders_bp.route("/<uuid:builder_id>/enable", methods=["POST"])
+@permission_required("builder.manage")
+def enable_builder(builder_id):
+    builder = Builder.query.get_or_404(builder_id)
+    builder.is_active = True
+    db.session.commit()
+
+    log_activity(
+        action="ENABLE_BUILDER",
+        target_type="builder",
+        target_id=str(builder.id),
+        description=f"Re-enabled builder '{builder.name}'",
+    )
+
+    flash(f"'{builder.name}' re-enabled.", "success")
+    return redirect(url_for("builders.archived"))
+
+
 @builders_bp.route("/build", methods=["POST"])
 @permission_required("builder.build")
 def build():
@@ -438,6 +525,12 @@ def build():
 
     if any(not builder.is_accessible_to(current_user) for builder in builders):
         abort(403)
+
+    # Defense in depth against a disabled Builder's id being POSTed
+    # directly — the index page's checkboxes already stop offering one.
+    if any(not builder.is_active for builder in builders):
+        flash("One or more selected Builders are disabled and can't be built.", "error")
+        return redirect(url_for("builders.index"))
 
     version_ids = {builder.version_id for builder in builders}
     if len(version_ids) > 1:

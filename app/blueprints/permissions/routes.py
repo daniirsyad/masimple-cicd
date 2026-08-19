@@ -27,9 +27,22 @@ def _render_permissions_list(create_form=None, open_modal=None, invalid_edit=Non
         else:
             edit_forms[permission.id] = PermissionForm(obj=permission, prefix=_edit_prefix(permission.id))
 
+    # Same guards delete_permission() itself checks before rejecting the
+    # request — computed here so the button can be disabled up front.
+    delete_reasons = {}
+    for permission in permissions:
+        menus_using_it = Menu.query.filter_by(permission_code=permission.code).count()
+        if permission.roles:
+            delete_reasons[permission.id] = f"Assigned to {len(permission.roles)} role(s)."
+        elif menus_using_it:
+            delete_reasons[permission.id] = f"Required by {menus_using_it} menu item(s)."
+        else:
+            delete_reasons[permission.id] = None
+
     return render_template(
         "permissions/list.html",
         permissions=permissions,
+        delete_reasons=delete_reasons,
         create_form=create_form,
         edit_forms=edit_forms,
         open_modal=open_modal,

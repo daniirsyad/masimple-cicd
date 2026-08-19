@@ -1,0 +1,45 @@
+{% extends "base.html" %} {% block title %}Archived Dockerfiles -
+MASIMPLE CICD{% endblock %} {% block content %}
+<div class="flex flex-wrap items-center justify-between gap-2">
+  <h1 class="text-2xl font-bold">Archived Dockerfiles</h1>
+  <a class="btn btn-sm" href="{{ url_for('dockerfiles.index') }}">Back to Dockerfiles</a>
+</div>
+<p class="mt-2 text-sm text-base-content/60">
+  Disabled Dockerfiles — hidden from the main list and no longer selectable for new Builders. Restore one to
+  bring it back.
+</p>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>First line</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for dockerfile in dockerfiles %}
+          <tr>
+            <td>{{ dockerfile.name }}</td>
+            <td><code class="text-xs">{{ (dockerfile.content.splitlines() | first) if dockerfile.content else "" }}</code></td>
+            <td>
+              <form method="POST" action="{{ url_for('dockerfiles.enable', dockerfile_id=dockerfile.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                <button type="submit" class="btn btn-sm btn-primary">Restore</button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="3">No archived Dockerfiles.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

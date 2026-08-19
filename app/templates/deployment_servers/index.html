@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% block title %}Deployment Servers -
+{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Deployment Servers -
 MASIMPLE CICD{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/codemirror.css') }}" />
@@ -7,13 +7,16 @@ MASIMPLE CICD{% endblock %}
 {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Deployment Servers</h1>
-  <button
-    type="button"
-    class="btn btn-primary btn-sm"
-    onclick="document.getElementById('create-server-modal').showModal()"
-  >
-    New Server
-  </button>
+  <div class="flex gap-2">
+    <a class="btn btn-sm" href="{{ url_for('deployment_servers.archived') }}">Archived</a>
+    <button
+      type="button"
+      class="btn btn-primary btn-sm"
+      onclick="document.getElementById('create-server-modal').showModal()"
+    >
+      New Server
+    </button>
+  </div>
 </div>
 
 <div class="card mt-4 bg-base-100 shadow-sm">
@@ -75,9 +78,16 @@ MASIMPLE CICD{% endblock %}
                 type="button"
                 class="btn btn-sm btn-error"
                 onclick="document.getElementById('delete-server-modal-{{ server.id }}').showModal()"
+                {{ disabled_attrs(delete_reasons.get(server.id)) }}
               >
                 Delete
               </button>
+              {% if delete_reasons.get(server.id) %}
+              <form method="POST" action="{{ url_for('deployment_servers.disable', server_id=server.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                <button type="submit" class="btn btn-sm btn-warning">Disable</button>
+              </form>
+              {% endif %}
             </td>
           </tr>
           {% else %}

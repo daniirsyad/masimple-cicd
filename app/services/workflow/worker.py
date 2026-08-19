@@ -14,6 +14,7 @@ from datetime import datetime
 
 from app.extensions import db
 from app.models import BuildBatch, DeploymentRun, Object, Version, WorkflowRun, WorkflowStep, WorkflowStepRun
+from app.services.build.prefill import compute_build_prefill
 from app.services.build.worker import enqueue_build_batch
 from app.services.deployment.worker import enqueue_deployment_run
 from app.services.workflow.resolver import resolve_step_builders, resolve_step_manifests
@@ -53,7 +54,7 @@ def _next_step(step):
     )
 
 
-def _finish_step(run, step, success):
+def finish_step(run, step, success):
     """Shared branch point for a step that just reached a terminal outcome —
     whether that's a real BuildBatch/DeploymentRun finishing (see
     _check_current_step) or a step that couldn't even be started (see
@@ -94,7 +95,7 @@ def _fail_step(run, step, message):
         finished_at=datetime.utcnow(),
     )
     db.session.add(step_run)
-    _finish_step(run, step, success=False)
+    finish_step(run, step, success=False)
 
 
 def _start_step(run, step):
@@ -123,20 +124,59 @@ def _start_step(run, step):
             return
 
         version = Version.query.get(version_ids.pop())
-        # WorkflowStep.object is still a single free-typed string captured at
-        # authoring time (see WorkflowStep's own docstring) — resolved as a
-        # "new" name on every run rather than multi-object yet, same
-        # get-or-create as any other Object.resolve() call site, so it
-        # collapses onto the same real Object row a manual trigger using the
-        # same text would.
+        builder_branches = [(builder, builder.default_branch) for builder in builders]
+
+        if step.auto_generate_build_metadata:
+            prefill = compute_build_prefill(builder_branches, additional_description=step.additional_description)
+            object_names = [obj.name for obj in prefill["matched_objects"]] + prefill["new_object_names"]
+
+            if step.require_review_before_build:
+                # Same "never apply raw AI output unseen" rule
+                # compute_build_prefill() itself already follows — stash the
+                # suggestion and stop here without enqueueing anything; the
+                # poll loop's own _check_current_step() already no-ops on any
+                # step_run.status != "running", so this run just waits safely
+                # until workflows.routes.approve_step_run/reject_step_run
+                # acts on it (see WorkflowStepRun's own docstring).
+                step_run = WorkflowStepRun(
+                    workflow_run_id=run.id,
+                    workflow_step_id=step.id,
+                    step_order=step.order,
+                    step_type=step.step_type,
+                    status="awaiting_review",
+                    suggested_bump_type=prefill["bump_type"],
+                    suggested_change_type_id=prefill["change_type_id"],
+                    suggested_object_names=", ".join(object_names) or None,
+                    suggested_description=prefill["description"] or None,
+                )
+                db.session.add(step_run)
+                db.session.commit()
+                return
+
+            bump_type = prefill["bump_type"]
+            change_type_id = prefill["change_type_id"]
+            objects = Object.resolve([], object_names) if object_names else []
+            description = prefill["description"] or step.additional_description
+        else:
+            bump_type = step.bump_type
+            change_type_id = step.change_type_id
+            # WorkflowStep.object is still a single free-typed string
+            # captured at authoring time (see WorkflowStep's own docstring)
+            # — resolved as a "new" name on every run rather than
+            # multi-object yet, same get-or-create as any other
+            # Object.resolve() call site, so it collapses onto the same real
+            # Object row a manual trigger using the same text would.
+            objects = Object.resolve([], [step.object])
+            description = step.additional_description
+
         batch = enqueue_build_batch(
             version=version,
-            bump_type=step.bump_type,
-            builder_branches=[(builder, builder.default_branch) for builder in builders],
-            objects=Object.resolve([], [step.object]),
-            additional_description=step.additional_description,
+            bump_type=bump_type,
+            builder_branches=builder_branches,
+            objects=objects,
+            additional_description=description,
             requested_by=run.triggered_by,
-            change_type_id=step.change_type_id,
+            change_type_id=change_type_id,
         )
         step_run = WorkflowStepRun(
             workflow_run_id=run.id,
@@ -194,7 +234,7 @@ def _check_current_step(run):
     db.session.commit()
 
     step = WorkflowStep.query.get(step_run.workflow_step_id)
-    _finish_step(run, step, success)
+    finish_step(run, step, success)
 
 
 def _tick(app):

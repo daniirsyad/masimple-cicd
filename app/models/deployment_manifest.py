@@ -35,6 +35,15 @@ class DeploymentManifest(db.Model):
     # descending order (tear down in reverse of how they went up).
     order = db.Column(db.Integer, default=0, nullable=False)
     status = db.Column(db.String, default="active", nullable=False)
+    # Disabled (archived) manifests drop off the main list onto a separate
+    # Archived page, and stop being deployable/selectable for new build-
+    # step authoring — see deployment_manifests.routes.disable/enable, its
+    # deploy()/update()/restart() guards (never stop() — an archived
+    # manifest that's still deployed must still be stoppable), and
+    # app/services/workflow/resolver.py's resolve_step_manifests(), which
+    # drops a disabled manifest from group resolution on every future
+    # workflow run, not just new step authoring.
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

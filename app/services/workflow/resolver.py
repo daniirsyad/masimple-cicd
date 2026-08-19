@@ -16,12 +16,15 @@ def resolve_builders_from_selection(group_names, builder_ids):
     seen_ids = set()
 
     for group_name in sorted(group_names):
-        for builder in Builder.query.filter_by(group_name=group_name).order_by(Builder.name).all():
+        query = Builder.query.filter_by(group_name=group_name, is_active=True).order_by(Builder.name)
+        for builder in query.all():
             if builder.id not in seen_ids:
                 builders.append(builder)
                 seen_ids.add(builder.id)
 
-    selected = Builder.query.filter(Builder.id.in_(builder_ids)).all() if builder_ids else []
+    selected = (
+        Builder.query.filter(Builder.id.in_(builder_ids), Builder.is_active.is_(True)).all() if builder_ids else []
+    )
     for builder in sorted(selected, key=lambda b: b.name):
         if builder.id not in seen_ids:
             builders.append(builder)
@@ -55,7 +58,7 @@ def resolve_step_manifests(step):
     group_names = sorted(g.group_name for g in step.selected_groups)
     for group_name in group_names:
         query = (
-            DeploymentManifest.query.filter_by(group_name=group_name)
+            DeploymentManifest.query.filter_by(group_name=group_name, is_active=True)
             .order_by(DeploymentManifest.order, DeploymentManifest.name)
             .all()
         )
@@ -64,7 +67,8 @@ def resolve_step_manifests(step):
                 manifests.append(manifest)
                 seen_ids.add(manifest.id)
 
-    for manifest in sorted(step.selected_manifests, key=lambda m: m.name):
+    active_selected = [m for m in step.selected_manifests if m.is_active]
+    for manifest in sorted(active_selected, key=lambda m: m.name):
         if manifest.id not in seen_ids:
             manifests.append(manifest)
             seen_ids.add(manifest.id)

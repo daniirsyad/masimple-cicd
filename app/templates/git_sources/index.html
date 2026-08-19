@@ -1,14 +1,17 @@
-{% extends "base.html" %} {% block title %}GitHub Connections -
+{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}GitHub Connections -
 MASIMPLE CICD{% endblock %} {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">GitHub Connections</h1>
-  <button
-    type="button"
-    class="btn btn-primary btn-sm"
-    onclick="document.getElementById('create-connection-modal').showModal()"
-  >
-    New Connection
-  </button>
+  <div class="flex gap-2">
+    <a class="btn btn-sm" href="{{ url_for('git_sources.archived') }}">Archived</a>
+    <button
+      type="button"
+      class="btn btn-primary btn-sm"
+      onclick="document.getElementById('create-connection-modal').showModal()"
+    >
+      New Connection
+    </button>
+  </div>
 </div>
 <p class="mt-2 text-sm text-base-content/60">
   Only registered repos (already cloned locally) are selectable when creating
@@ -32,9 +35,16 @@ MASIMPLE CICD{% endblock %} {% block content %}
           type="button"
           class="btn btn-sm btn-error"
           onclick="document.getElementById('delete-connection-modal-{{ entry.source.id }}').showModal()"
+          {{ disabled_attrs(entry.delete_source_reason) }}
         >
           Delete
         </button>
+        {% if entry.delete_source_reason %}
+        <form method="POST" action="{{ url_for('git_sources.disable_connection', source_id=entry.source.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+          <button type="submit" class="btn btn-sm btn-warning">Disable</button>
+        </form>
+        {% endif %}
       </div>
     </div>
 
@@ -117,6 +127,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
                 type="button"
                 class="btn btn-sm btn-error"
                 onclick="document.getElementById('remove-repo-modal-{{ repo.id }}').showModal()"
+                {{ disabled_attrs(entry.remove_repo_reasons.get(repo.id)) }}
               >
                 Remove
               </button>

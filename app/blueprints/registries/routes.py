@@ -61,7 +61,14 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
     if create_form is None:
         create_form = RegistryTargetForm(prefix=CREATE_PREFIX)
 
-    targets = RegistryTarget.query.order_by(RegistryTarget.name).all()
+    targets = RegistryTarget.query.filter_by(is_active=True).order_by(RegistryTarget.name).all()
+
+    # Same guard delete() itself checks before rejecting the request —
+    # computed here so the button can be disabled up front.
+    delete_reasons = {}
+    for target in targets:
+        builder_count = Builder.query.filter_by(registry_target_id=target.id).count()
+        delete_reasons[target.id] = f"{builder_count} Builder(s) still reference it." if builder_count else None
 
     invalid_id, invalid_form = invalid_edit or (None, None)
     edit_forms = {}
@@ -76,10 +83,16 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
     return render_template(
         "registries/index.html",
         targets=targets,
+        delete_reasons=delete_reasons,
         create_form=create_form,
         edit_forms=edit_forms,
         open_modal=open_modal,
     )
+
+
+def _render_archived():
+    targets = RegistryTarget.query.filter_by(is_active=False).order_by(RegistryTarget.name).all()
+    return render_template("registries/archived.html", targets=targets)
 
 
 @registries_bp.route("/")
@@ -202,3 +215,45 @@ def delete(target_id):
 
     flash(f"Registry '{name}' deleted.", "success")
     return redirect(url_for("registries.index"))
+
+
+@registries_bp.route("/archived")
+@permission_required("registry.manage")
+def archived():
+    return _render_archived()
+
+
+@registries_bp.route("/<uuid:target_id>/disable", methods=["POST"])
+@permission_required("registry.manage")
+def disable(target_id):
+    target = RegistryTarget.query.get_or_404(target_id)
+    target.is_active = False
+    db.session.commit()
+
+    log_activity(
+        action="DISABLE_REGISTRY_TARGET",
+        target_type="registry_target",
+        target_id=str(target.id),
+        description=f"Disabled registry target '{target.name}'",
+    )
+
+    flash(f"'{target.name}' disabled — moved to Archived.", "info")
+    return redirect(url_for("registries.index"))
+
+
+@registries_bp.route("/<uuid:target_id>/enable", methods=["POST"])
+@permission_required("registry.manage")
+def enable(target_id):
+    target = RegistryTarget.query.get_or_404(target_id)
+    target.is_active = True
+    db.session.commit()
+
+    log_activity(
+        action="ENABLE_REGISTRY_TARGET",
+        target_type="registry_target",
+        target_id=str(target.id),
+        description=f"Re-enabled registry target '{target.name}'",
+    )
+
+    flash(f"'{target.name}' re-enabled.", "success")
+    return redirect(url_for("registries.archived"))

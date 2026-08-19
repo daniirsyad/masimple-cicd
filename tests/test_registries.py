@@ -264,3 +264,65 @@ class TestDeleteRegistry:
         assert b"still reference it" in response.data
         with app.app_context():
             assert RegistryTarget.query.get(target_id) is not None
+
+    def test_delete_button_disabled_when_a_builder_still_references_it(self, registry_client, app):
+        with app.app_context():
+            target = RegistryTarget(name="reg", provider_type="dockerhub")
+            db.session.add(target)
+            db.session.flush()
+            _make_builder_referencing(target.id)
+            db.session.commit()
+            target_id = target.id
+
+        response = registry_client.get("/registries/")
+        html = response.data.decode()
+        marker = f"delete-registry-modal-{target_id}"
+        button = html[html.index(marker) : html.index(marker) + 400]
+        assert "disabled" in button
+        assert "Builder(s) still reference it." in button
+
+    def test_delete_button_enabled_when_unreferenced(self, registry_client, app):
+        with app.app_context():
+            target = RegistryTarget(name="reg", provider_type="dockerhub")
+            db.session.add(target)
+            db.session.commit()
+            target_id = target.id
+
+        response = registry_client.get("/registries/")
+        html = response.data.decode()
+        marker = f"delete-registry-modal-{target_id}"
+        button = html[html.index(marker) : html.index(marker) + 400]
+        assert "disabled" not in button
+
+
+class TestDisableArchiveRegistry:
+    def test_disable_moves_it_off_main_list_onto_archived_page(self, registry_client, app):
+        with app.app_context():
+            target = RegistryTarget(name="reg", provider_type="dockerhub")
+            db.session.add(target)
+            db.session.flush()
+            _make_builder_referencing(target.id)
+            db.session.commit()
+            target_id = target.id
+
+        response = registry_client.post(f"/registries/{target_id}/disable", follow_redirects=True)
+        assert response.status_code == 200
+        with app.app_context():
+            assert RegistryTarget.query.get(target_id).is_active is False
+
+        assert f"delete-registry-modal-{target_id}" not in registry_client.get("/registries/").data.decode()
+        archived_html = registry_client.get("/registries/archived").data.decode()
+        assert "reg" in archived_html
+        assert f'/registries/{target_id}/enable' in archived_html
+
+    def test_enable_restores_it(self, registry_client, app):
+        with app.app_context():
+            target = RegistryTarget(name="reg", provider_type="dockerhub", is_active=False)
+            db.session.add(target)
+            db.session.commit()
+            target_id = target.id
+
+        response = registry_client.post(f"/registries/{target_id}/enable", follow_redirects=True)
+        assert response.status_code == 200
+        with app.app_context():
+            assert RegistryTarget.query.get(target_id).is_active is True

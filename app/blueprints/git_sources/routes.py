@@ -56,7 +56,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
     if create_form is None:
         create_form = GitSourceForm(prefix=CREATE_CONNECTION_PREFIX)
 
-    sources = GitSource.query.order_by(GitSource.name).all()
+    sources = GitSource.query.filter_by(is_active=True).order_by(GitSource.name).all()
     registered_full_names = {(repo.git_source_id, repo.full_name) for repo in Repository.query.all()}
 
     invalid_id, invalid_form = invalid_edit or (None, None)
@@ -74,14 +74,29 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
             edit_form = GitSourceForm(obj=source, prefix=_edit_prefix(source.id))
             edit_form.token.data = ""  # never re-populate the encrypted value into the form
 
+        repositories = Repository.query.filter_by(git_source_id=source.id).order_by(Repository.full_name).all()
+        # Same guards delete_connection/remove_repo themselves check before
+        # rejecting the request — computed here so the buttons can be
+        # disabled up front instead of only failing after a click.
+        repo_count = len(repositories)
+        delete_source_reason = (
+            f"{repo_count} repositor{'y is' if repo_count == 1 else 'ies are'} still registered under it."
+            if repo_count
+            else None
+        )
+        remove_repo_reasons = {}
+        for repo in repositories:
+            builder_count = Builder.query.filter_by(repository_id=repo.id).count()
+            remove_repo_reasons[repo.id] = f"{builder_count} Builder(s) still reference it." if builder_count else None
+
         connections.append(
             {
                 "source": source,
                 "unregistered_repos": unregistered,
                 "list_error": list_error,
-                "repositories": Repository.query.filter_by(git_source_id=source.id)
-                .order_by(Repository.full_name)
-                .all(),
+                "repositories": repositories,
+                "delete_source_reason": delete_source_reason,
+                "remove_repo_reasons": remove_repo_reasons,
                 "edit_form": edit_form,
             }
         )
@@ -187,6 +202,49 @@ def delete_connection(source_id):
     return redirect(url_for("git_sources.index"))
 
 
+@git_sources_bp.route("/archived")
+@permission_required("gitsource.manage")
+def archived():
+    sources = GitSource.query.filter_by(is_active=False).order_by(GitSource.name).all()
+    return render_template("git_sources/archived.html", sources=sources)
+
+
+@git_sources_bp.route("/connections/<uuid:source_id>/disable", methods=["POST"])
+@permission_required("gitsource.manage")
+def disable_connection(source_id):
+    source = GitSource.query.get_or_404(source_id)
+    source.is_active = False
+    db.session.commit()
+
+    log_activity(
+        action="DISABLE_GIT_SOURCE",
+        target_type="git_source",
+        target_id=str(source.id),
+        description=f"Disabled GitHub connection '{source.name}'",
+    )
+
+    flash(f"'{source.name}' disabled — moved to Archived.", "info")
+    return redirect(url_for("git_sources.index"))
+
+
+@git_sources_bp.route("/connections/<uuid:source_id>/enable", methods=["POST"])
+@permission_required("gitsource.manage")
+def enable_connection(source_id):
+    source = GitSource.query.get_or_404(source_id)
+    source.is_active = True
+    db.session.commit()
+
+    log_activity(
+        action="ENABLE_GIT_SOURCE",
+        target_type="git_source",
+        target_id=str(source.id),
+        description=f"Re-enabled GitHub connection '{source.name}'",
+    )
+
+    flash(f"'{source.name}' re-enabled.", "success")
+    return redirect(url_for("git_sources.archived"))
+
+
 @git_sources_bp.route("/repos/register", methods=["POST"])
 @permission_required("gitsource.manage")
 def register_repo():
@@ -195,6 +253,9 @@ def register_repo():
         flash("Invalid connection.", "error")
         return redirect(url_for("git_sources.index"))
     source = GitSource.query.get_or_404(source_id)
+    if not source.is_active:
+        flash(f"'{source.name}' is disabled — re-enable it before registering new repositories.", "error")
+        return redirect(url_for("git_sources.index"))
 
     full_name = (request.form.get("full_name") or "").strip()
     if not full_name:

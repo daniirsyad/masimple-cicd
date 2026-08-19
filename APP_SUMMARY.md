@@ -292,20 +292,30 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   access-gate shape as `Builder`/`DeploymentManifest`: empty means locked to
   `workflow.manage` users only).
 - `WorkflowStep` — one ordered step (`order`, `step_type` `build`/`deploy`,
-  `on_failure` `stop`/`continue`). A `build` step also carries
-  `bump_type`/`change_type_id`/`object`/`additional_description`, captured
-  once at authoring time since `/builders/build` requires them at every
-  trigger. What a step actually targets is **resolved live at run time**,
-  never stored as a frozen list:
+  `on_failure` `stop`/`continue`). A `build` step either carries
+  `bump_type`/`change_type_id`/`object`/`additional_description` typed in by
+  hand at authoring time (unchanged legacy path — `/builders/build` requires
+  them at every trigger), **or**, if `auto_generate_build_metadata` is set,
+  leaves all three blank and has them computed fresh **at run time** by
+  `_start_step()` via the same heuristic (Conventional-Commits Bump Type) +
+  AI (`compute_build_prefill()`) engine the authoring-time "Preview from
+  Git" modal already used — so a saved step never goes stale even as commit
+  history moves. `require_review_before_build` (default `True`) then decides
+  whether those generated values apply immediately or pause the run for a
+  human to review/edit/approve first (see `WorkflowStepRun` below). What a
+  step actually targets is **resolved live at run time**, never stored as a
+  frozen list:
   - `WorkflowStepGroup` — one row per selected `group_name`, resolved
-    against whichever Builders/Manifests currently share that name (so
-    adding a member to an already-referenced group later is picked up
-    automatically next run).
+    against whichever Builders/Manifests currently share that name **and
+    are currently active** (a disabled Builder/Manifest drops out of group
+    resolution automatically, on every future run, without needing the step
+    re-authored — see `is_active` below).
   - `WorkflowStep.selected_builders`/`selected_manifests` — individually
     picked *ungrouped* Builders/Manifests only (an item belonging to a
     group is only reachable by selecting that group — same rule as the
     "Deploy Group vs. per-manifest Deploy button" split on
-    `/deployment-manifests`).
+    `/deployment-manifests`); a disabled one is likewise skipped at
+    resolution time.
   - A step can combine several selected groups **and** individual items at
     once.
 - `WorkflowRun` — one "Run" click; `status`
@@ -320,7 +330,33 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   rather than duplicating any log UI. A step that couldn't even be started
   (nothing resolved, or a build step's builders don't share one Version/are
   missing a default branch) gets a `WorkflowStepRun` with just an `error`
-  string and no batch/run at all.
+  string and no batch/run at all. A fourth `status`, `awaiting_review`, is
+  used only for an auto-generating build step with
+  `require_review_before_build=True`: no `batch_id` yet, the AI-suggested
+  values are held in `suggested_bump_type`/`suggested_change_type_id`/
+  `suggested_object_names` (a raw comma-separated string — deliberately not
+  yet resolved into real `Object` rows, same "never save raw AI output
+  unseen" rule as `build_prefill.py`)/`suggested_description` until a human
+  hits Approve (`workflows.approve_step_run`, which then enqueues the real
+  `BuildBatch` with the — possibly edited — values) or Reject
+  (`workflows.reject_step_run`, fails the step).
+- Every `Workflow` (via its pre-existing `is_active`) plus `Version`,
+  `Dockerfile`, `RegistryTarget`, `GitSource`, `DeploymentServer`, `Builder`,
+  and `DeploymentManifest` (each with a new `is_active` column) can be
+  **disabled/archived**: a "Disable" button appears next to Delete on each
+  one's own page exactly when Delete is already blocked by something still
+  referencing it, moves the row onto a new `/<blueprint>/archived` page
+  (hidden from the main list), and a "Restore" button there flips it back.
+  Disabling is functionally enforced, not just cosmetic — a disabled row
+  stops being offered in every dropdown that creates a new reference to it
+  (with a "keep the current value visible" fallback on an *existing*
+  reference's own edit form, so disabling something already in use doesn't
+  silently break unrelated edits elsewhere), and the two run-time resolvers
+  above (`WorkflowStepGroup`/`selected_builders`/`selected_manifests`
+  resolution) drop a disabled Builder/Manifest on every future Workflow run.
+  `deployment_manifests.deploy()`/`update()` refuse a disabled manifest
+  outright; `stop()`/`restart()` deliberately don't, since something
+  archived while still deployed must stay stoppable.
 
 ## Feature list (by page)
 
@@ -525,31 +561,50 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   pod/namespace/etc. concept for a generic agent endpoint) and 404 if tried.
 
 - **`/workflows`** — list/create/edit Workflows (`workflow.view`/`manage`),
-  `allowed_roles` picker. Detail page (`/workflows/<id>`) is the step
-  builder: "+ Add Build Step"/"+ Add Deploy Step" open a modal combining a
-  multi-select of existing `group_name`s with a multi-select of individual
-  *ungrouped* Builders/Manifests (an item already in a group is never
-  independently selectable — only reachable via its group), plus (build
-  steps only) Bump Type/Change Type/Object/Additional Description and a
-  per-step "if this step fails: stop the run / continue anyway" choice —
-  checking a group/Builder auto-fires the same "Preview from Git" pre-fill
-  the Image Builder trigger modal uses (debounced, no separate button here,
-  since the target selection happens inside this modal rather than
-  beforehand). **Still authoring-time only**: the pre-filled/entered values
-  are captured once when the step is added and replayed unchanged on every
-  future run of that step — not re-resolved against fresh commits each run
-  (see Known Gaps). Steps are drag-reordered (SortableJS, same pattern as
+  `allowed_roles` picker, and a "Run" button right on the index row (posts
+  to the same `workflow.run` endpoint the detail page's own Run button
+  does, disabled the same way — inactive or zero steps — so a workflow can
+  be triggered without opening it first). Detail page (`/workflows/<id>`)
+  is the step builder: "+ Add Build Step"/"+ Add Deploy Step" open a modal
+  combining a multi-select of existing `group_name`s with a multi-select of
+  individual *ungrouped* Builders/Manifests (an item already in a group is
+  never independently selectable — only reachable via its group), plus
+  (build steps only) Bump Type/Change Type/Object/Additional Description
+  and a per-step "if this step fails: stop the run / continue anyway"
+  choice — checking a group/Builder auto-fires the same "Preview from Git"
+  pre-fill the Image Builder trigger modal uses (debounced, no separate
+  button here, since the target selection happens inside this modal rather
+  than beforehand). Those four fields can now be left blank instead: an
+  "Auto-generate at run time" checkbox (`auto_generate_build_metadata`)
+  hides them and instead computes them fresh via that same heuristic+AI
+  engine **every time the step actually runs**, not just once at authoring
+  — with a second checkbox (`require_review_before_build`, default on)
+  choosing whether the generated values apply immediately or pause the run
+  for a human to review first. A step still filled in by hand keeps the old
+  "captured once, replayed unchanged" behavior (see Known Gaps). When a
+  paused step is awaiting review, the Workflow Run detail page
+  (`/workflows/runs/<id>`) shows an editable panel with the AI-suggested
+  values and Approve & Build / Reject buttons, and the page's own status
+  poller reloads once to reveal it if the pause happens while already
+  watching the page. Steps are drag-reordered (SortableJS, same pattern as
   manifest groups). Each step's card shows a **live** preview of what it
   currently resolves to (re-computed on every page load, not frozen at
-  step-creation time). "Run"
-  (`workflow.run`) queues a `WorkflowRun`; its detail page
-  (`/workflows/runs/<id>`) polls run status and renders a step tracker that
-  links each finished step straight into the real `/images` or
-  `/deployment-runs/<id>` page for its actual build/deploy log — no
-  duplicate log UI. Deleting a Workflow or an individual step is blocked
-  once either has any run history, mirroring the delete-guard pattern
-  elsewhere in the app (`builder.manage`'s "N recorded build(s)" block,
-  etc.) rather than nulling out foreign keys.
+  step-creation time). "Run" (`workflow.run`) queues a `WorkflowRun`; its
+  detail page polls run status and renders a step tracker that links each
+  finished step straight into the real `/images` or `/deployment-runs/<id>`
+  page for its actual build/deploy log — no duplicate log UI. Deleting a
+  Workflow or an individual step is blocked once either has any run
+  history, mirroring the delete-guard pattern elsewhere in the app
+  (`builder.manage`'s "N recorded build(s)" block, etc.) rather than
+  nulling out foreign keys — and, exactly when that block is active, a
+  "Disable" button appears next to the (now greyed-out, tooltipped) Delete
+  button as the real alternative: it archives the Workflow/step's parent
+  Workflow onto `/workflows/archived`, off the main list, restorable from
+  there. The same disabled-Delete-button-plus-tooltip and Disable/Archived
+  pattern is used across `/versions`, `/dockerfiles`, `/registries`,
+  `/github` (Git Sources), `/deployment-servers`, `/builders`, and
+  `/deployment-manifests` too — see the Data model section above for what
+  "disabled" actually enforces for each.
 
 ## Conventions a new feature should follow
 
@@ -628,17 +683,23 @@ backs the forgot-password flow: single-use, 15-minute expiry.
 - No Workflow step *editing* — only add/delete. Changing a step means
   deleting it and adding a new one (blocked entirely if the step has any
   run history — see `WorkflowStepRun`).
-- A Workflow build step's Bump Type/Object(s)/Change Type/Description —
-  whether typed in by hand or pre-filled via "Preview from Git" — are
-  **captured once when the step is added and replayed unchanged on every
-  future run**, never re-resolved against fresh commits at run time. A
-  workflow that runs repeatedly keeps reusing whatever was true (or
-  guessed) at authoring time, even though new commits may have landed
-  since. Moving this to true run-time resolution (the orchestrator calling
-  `compute_build_prefill()` itself right before enqueueing, instead of
-  reading `WorkflowStep`'s frozen columns) would be a real behavior change
-  to this already-existing, deliberate design — not done as part of adding
-  the "Preview from Git" feature; revisit if it comes up.
+- **Partially resolved**: a Workflow build step's Bump Type/Object(s)/
+  Change Type/Description used to always be **captured once when the step
+  is added and replayed unchanged on every future run**, whether typed in
+  by hand or pre-filled via "Preview from Git." A step can now opt out of
+  that by leaving the fields blank and checking "Auto-generate at run
+  time," which has the orchestrator call `compute_build_prefill()` itself
+  fresh on every run instead of reading frozen columns (optionally pausing
+  for human review first — see the Data model/Feature list sections above).
+  A step that still has the fields filled in by hand keeps the exact old
+  frozen-at-authoring-time behavior — this was a deliberate choice to
+  preserve, not something still to fix.
+- **New from this arc, unverified in a live browser**: the auto-generate/
+  review-approval Workflow build-step flow, the disabled-Delete-button
+  tooltips, the Disable/Archived pages across the 8 affected blueprints, and
+  the Workflow index page's own Run button — all only exercised via the
+  Flask test client so far (same sandbox constraint noted throughout this
+  section), not a real browser.
 - The Workflow feature's UI (drag-and-drop step reorder, the run page's live
   JS polling) has been verified via Flask's test client (every route and
   template renders correctly, including populated/linked/errored run

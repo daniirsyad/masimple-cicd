@@ -43,6 +43,13 @@ class Builder(db.Model):
     managed_dockerfile_id = db.Column(UUID(as_uuid=True), db.ForeignKey("dockerfiles.id"), nullable=True)
     registry_target_id = db.Column(UUID(as_uuid=True), db.ForeignKey("registry_targets.id"), nullable=False)
     default_build_args = db.Column(db.JSON, nullable=True)
+    # Disabled (archived) Builders drop off the main list onto a separate
+    # Archived page, and stop being buildable/selectable — see
+    # builders.routes.disable/enable/build, and
+    # app/services/workflow/resolver.py's resolve_builders_from_selection(),
+    # which drops a disabled Builder from group resolution on every future
+    # workflow run, not just new step authoring.
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

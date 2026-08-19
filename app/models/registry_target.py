@@ -15,5 +15,9 @@ class RegistryTarget(db.Model):
     username = db.Column(db.String, nullable=True)
     encrypted_token = db.Column(db.Text, nullable=True)
     registry_url = db.Column(db.String, nullable=True)
+    # Disabled (archived) targets drop off the main list onto a separate
+    # Archived page, and stop being offered as a choice for new Builders —
+    # see registries.routes.disable/enable and builders.routes._registry_choices.
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

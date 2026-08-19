@@ -96,12 +96,32 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    buildStepModal.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
-      checkbox.addEventListener("change", () => {
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(runPreview, 300);
+    buildStepModal
+      .querySelectorAll('input[type="checkbox"]:not(#build-step-auto-generate):not(#build-step-require-review)')
+      .forEach((checkbox) => {
+        checkbox.addEventListener("change", () => {
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(runPreview, 300);
+        });
       });
-    });
+
+    // Auto-generate toggle: hides the manual Bump Type/Change Type/Object/
+    // Additional Description fields (they're left blank and generated at
+    // run time instead — see WorkflowStep.auto_generate_build_metadata),
+    // and the "require review" checkbox only makes sense once auto-generate
+    // is on.
+    const autoGenerateCheckbox = document.getElementById("build-step-auto-generate");
+    const manualFields = document.getElementById("build-step-manual-fields");
+    const requireReviewRow = document.getElementById("build-step-require-review-row");
+    if (autoGenerateCheckbox && manualFields && requireReviewRow) {
+      function applyAutoGenerateVisibility() {
+        const auto = autoGenerateCheckbox.checked;
+        manualFields.classList.toggle("hidden", auto);
+        requireReviewRow.classList.toggle("hidden", !auto);
+      }
+      autoGenerateCheckbox.addEventListener("change", applyAutoGenerateVisibility);
+      applyAutoGenerateVisibility();
+    }
   }
 
   // --- Run detail page (workflows/run.html) — polls run_status() and
@@ -118,9 +138,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const TERMINAL_STATUSES = ["success", "failed", "completed_with_failures"];
 
+  // The "Awaiting Review" panel (workflows/run.html) is server-rendered
+  // once, outside #workflow-run-steps-body, so it never gets wiped by
+  // poll()'s innerHTML replacement below — but that also means it can't
+  // appear on its own once a step transitions into "awaiting_review" while
+  // this page is already open. Reload once, the first time that happens,
+  // rather than re-implementing the whole review form in JS.
+  let hadAwaitingReview = runPage.dataset.hasAwaitingReview === "true";
+
   function badgeClass(status) {
     if (status === "success") return "badge-success";
     if (status === "failed" || status === "completed_with_failures") return "badge-error";
+    if (status === "awaiting_review") return "badge-warning";
     return "badge-info";
   }
 
@@ -165,6 +194,13 @@ document.addEventListener("DOMContentLoaded", () => {
     fetch(statusUrl)
       .then((response) => response.json())
       .then((data) => {
+        const nowAwaitingReview = data.step_runs.some((stepRun) => stepRun.status === "awaiting_review");
+        if (nowAwaitingReview && !hadAwaitingReview) {
+          window.location.reload();
+          return;
+        }
+        hadAwaitingReview = nowAwaitingReview;
+
         statusBadge.textContent = data.status;
         statusBadge.className = `badge ${badgeClass(data.status)}`;
 

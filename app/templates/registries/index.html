@@ -1,14 +1,17 @@
-{% extends "base.html" %} {% block title %}Registries -
+{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Registries -
 MASIMPLE CICD{% endblock %} {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Registries</h1>
-  <button
-    type="button"
-    class="btn btn-primary btn-sm"
-    onclick="document.getElementById('create-registry-modal').showModal()"
-  >
-    New Registry
-  </button>
+  <div class="flex gap-2">
+    <a class="btn btn-sm" href="{{ url_for('registries.archived') }}">Archived</a>
+    <button
+      type="button"
+      class="btn btn-primary btn-sm"
+      onclick="document.getElementById('create-registry-modal').showModal()"
+    >
+      New Registry
+    </button>
+  </div>
 </div>
 <p class="mt-2 text-sm text-base-content/60">
   Only Docker Hub is implemented right now — GHCR, Harbor, ECR, and Custom can
@@ -56,9 +59,16 @@ MASIMPLE CICD{% endblock %} {% block content %}
                 type="button"
                 class="btn btn-sm btn-error"
                 onclick="document.getElementById('delete-registry-modal-{{ target.id }}').showModal()"
+                {{ disabled_attrs(delete_reasons.get(target.id)) }}
               >
                 Delete
               </button>
+              {% if delete_reasons.get(target.id) %}
+              <form method="POST" action="{{ url_for('registries.disable', target_id=target.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                <button type="submit" class="btn btn-sm btn-warning">Disable</button>
+              </form>
+              {% endif %}
             </td>
           </tr>
           {% else %}
