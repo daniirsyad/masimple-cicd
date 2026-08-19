@@ -273,6 +273,27 @@ class TestIndexPage:
             assert config.encrypted_telegram_bot_token != "123456:ABC-DEF"
             assert decrypt(config.encrypted_telegram_bot_token) == "123456:ABC-DEF"
 
+    def test_post_with_malformed_encryption_key_flashes_instead_of_500(self, config_client, app, monkeypatch):
+        monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", "<GENERATE_A_FERNET_KEY>")
+
+        response = config_client.post(
+            "/config/",
+            data={
+                "timezone": "UTC",
+                "session_timeout_minutes": "60",
+                "build_engine": "docker",
+                "max_login_attempts": "5",
+                "telegram_bot_token": "123456:ABC-DEF",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert b"Internal Server Error" not in response.data
+        assert b"CREDENTIAL_ENCRYPTION_KEY" in response.data
+
+        with app.app_context():
+            assert get_system_config().encrypted_telegram_bot_token is None
+
     def test_post_with_blank_bot_token_keeps_the_existing_one(self, config_client, app):
         with app.app_context():
             from app.utils.crypto import encrypt

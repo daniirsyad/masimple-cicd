@@ -879,6 +879,90 @@ class TestEditSecret:
         assert response.status_code == 200
         assert called["removed_keys"] == ["username"]
 
+    def test_restarts_deployments_that_reference_the_edited_secret(
+        self, manage_client, manage_kube_server, monkeypatch, app
+    ):
+        restarted = []
+
+        def _fake_update(self, namespace, name, data_updates, removed_keys=None):
+            return DeployResult(success=True, log="")
+
+        def _fake_find_deployments(self, namespace, secret_name):
+            assert namespace == "default"
+            assert secret_name == "db-creds"
+            return ["api", "worker"]
+
+        def _fake_restart(self, namespace, name):
+            restarted.append(name)
+            return DeployResult(success=True, log="")
+
+        monkeypatch.setattr(KubernetesProvider, "update_secret", _fake_update)
+        monkeypatch.setattr(KubernetesProvider, "find_deployments_using_secret", _fake_find_deployments)
+        monkeypatch.setattr(KubernetesProvider, "restart_deployment", _fake_restart)
+        monkeypatch.setattr(KubernetesProvider, "list_resources", _one_namespace)
+        monkeypatch.setattr(
+            KubernetesProvider,
+            "list_secrets",
+            lambda self, namespace=None: [
+                {"name": "db-creds", "namespace": "default", "type": "Opaque", "keys": ["username"], "created_at": None}
+            ],
+        )
+
+        prefix = "secret-default-db-creds-"
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/secrets/default/db-creds/edit",
+            data={
+                "secret_kind": "opaque",
+                f"{prefix}existing_entries-0-key": "username",
+                f"{prefix}existing_entries-0-value": "newadmin",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert restarted == ["api", "worker"]
+        assert b"Restarted 2 deployment(s)" in response.data
+
+        with app.app_context():
+            entries = ActivityLog.query.filter_by(action="RESTART_WORKLOAD").all()
+            assert {entry.description for entry in entries} != set()
+            assert len(entries) == 2
+
+    def test_does_not_scan_for_dependents_when_nothing_changed(
+        self, manage_client, manage_kube_server, monkeypatch
+    ):
+        find_calls = []
+
+        def _fake_update(self, namespace, name, data_updates, removed_keys=None):
+            return DeployResult(success=True, log="")
+
+        def _fake_find_deployments(self, namespace, secret_name):
+            find_calls.append((namespace, secret_name))
+            return []
+
+        monkeypatch.setattr(KubernetesProvider, "update_secret", _fake_update)
+        monkeypatch.setattr(KubernetesProvider, "find_deployments_using_secret", _fake_find_deployments)
+        monkeypatch.setattr(KubernetesProvider, "list_resources", _one_namespace)
+        monkeypatch.setattr(
+            KubernetesProvider,
+            "list_secrets",
+            lambda self, namespace=None: [
+                {"name": "db-creds", "namespace": "default", "type": "Opaque", "keys": ["username"], "created_at": None}
+            ],
+        )
+
+        prefix = "secret-default-db-creds-"
+        response = manage_client.post(
+            f"/deployment-pods/{manage_kube_server}/secrets/default/db-creds/edit",
+            data={
+                "secret_kind": "opaque",
+                f"{prefix}existing_entries-0-key": "username",
+                f"{prefix}existing_entries-0-value": "",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert find_calls == []
+
     def test_edits_image_pull_secret_by_full_replace(self, manage_client, manage_kube_server, monkeypatch):
         called = {}
 

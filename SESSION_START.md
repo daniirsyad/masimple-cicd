@@ -27,8 +27,66 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **840 tests passing** (as of the last full run).
-- **Everything is committed and pushed to `origin/main`**, most recently as
+- **854 tests passing** (as of the last full run).
+- **This session's work** (on top of everything below), pushed to
+  `origin/main`:
+  1. **Editing a Kubernetes Secret's value now auto-restarts the Deployments
+     that consume it.** Root-caused a report of "updating a secret in
+     `/deployment-pods` doesn't update the Kubernetes secret" — the Secret
+     *object* was actually being patched correctly all along (`stringData`
+     unconditionally overrides `data` for the same key at the API-server
+     level, regardless of `kubectl apply` merge history); the real gap was
+     that Kubernetes only injects a Secret's values into a container's env
+     vars once, at container start, so an already-running Pod never picks
+     up the new value on its own (confirmed by the reporter via `kubectl
+     exec ... echo $VAR` still showing the old value). Fixed by adding
+     `KubernetesProvider.find_deployments_using_secret()`
+     (`app/services/deployment/kubernetes_provider.py`) — scans every
+     Deployment in a namespace for a pod-template reference to a given
+     Secret (`env[].valueFrom.secretKeyRef`, `envFrom[].secretRef`, or
+     `volumes[].secret.secretName`, across containers and initContainers)
+     — and wiring `edit_secret()`
+     (`app/blueprints/deployment_pods/routes.py`) to roll-restart
+     (`kubectl rollout restart deployment/<name>`) every match right after
+     a successful opaque-secret update (only when a key was actually
+     added/changed/removed, never on a no-op save). `_apply_and_respond()`
+     gained a generic `on_success` hook for this. Each restart gets its own
+     `RESTART_WORKLOAD` activity-log entry; a scan/restart failure is
+     logged but never turns the secret update itself into a failure, since
+     the Secret was already applied successfully by that point. The
+     documented `kubectl apply` merge caveat for *removing* a key on a
+     secret's very first edit (see `update_secret()`'s own docstring) is
+     still unfixed — separate, narrower issue, not what was reported here.
+  2. **A missing/malformed `CREDENTIAL_ENCRYPTION_KEY` no longer 500s.**
+     Found via a real deployment attempt (`k8s/deployment.yaml`'s Secret
+     still had its literal `CREDENTIAL_ENCRYPTION_KEY: "<GENERATE_A_FERNET_
+     KEY>"` placeholder, never filled in) — saving System Config with a
+     Telegram bot token crashed with a raw, unstyled "Internal Server
+     Error" instead of anything actionable. `app/utils/crypto.py`'s
+     `_get_cipher()` now raises a new `CredentialEncryptionError`
+     (a `RuntimeError` subclass) with a clear, actionable message — both
+     for the pre-existing "not set" case and a new "set but not a valid
+     Fernet key" case (catches the `ValueError` `Fernet(...)` raises on a
+     malformed/placeholder value) — and `decrypt()`'s existing "stored
+     credential could not be decrypted" case now raises the same type. A
+     new global `app.errorhandler(CredentialEncryptionError)` in
+     `app/__init__.py` turns it into a normal flash + redirect back to
+     `request.referrer` (still logs an `ErrorLog` entry itself, since
+     catching it here means Flask's `got_request_exception` signal no
+     longer fires for it) — covers every `encrypt()`/`decrypt()` call site
+     app-wide (system config, AI settings, Git sources, registries,
+     deployment servers), not just the Telegram token field that surfaced
+     it. **Still true and unresolved**: `k8s/deployment.yaml`'s Secret
+     placeholders (`CREDENTIAL_ENCRYPTION_KEY`, `SECRET_KEY`,
+     `DATABASE_URL`, `ADMIN_PASSWORD`) are not filled in — the user is
+     deploying to their own cluster this app has no access to, so this
+     needs a real Fernet key (`python -c "from cryptography.fernet import
+     Fernet; print(Fernet.generate_key().decode())"`) and the other real
+     values set on their end, applied out-of-band (not committed into this
+     file) before `/config/` (or anything else that encrypts a credential)
+     will work there.
+- **Everything before this session is committed and pushed to
+  `origin/main`**, most recently as
   six commits from one session — all found and fixed by actually trying to
   *run* this app for the first time, via a new Podman-based trial deploy
   (`docker-compose.podman.yml`, see below) rather than only the usual

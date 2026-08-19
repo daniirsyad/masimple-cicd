@@ -346,7 +346,7 @@ def describe_resource(server_id, kind):
 
 def _apply_and_respond(
     server, endpoint, action_fn, log_source, failure_desc, success_action, success_target_id,
-    success_description, success_flash,
+    success_description, success_flash, on_success=None,
 ):
     """Shared tail for every namespace/secret create-edit-delete route: run
     `action_fn()` (a provider call returning a DeployResult), and handle the
@@ -355,6 +355,11 @@ def _apply_and_respond(
     `result.error`, or the exception `str()`) ever reaches log_error/flash —
     never the request's own field values, which for a Secret would include
     plaintext data.
+
+    `on_success`, if given, runs after `result.success` is confirmed true but
+    before the success flash/redirect — for a side effect that should only
+    fire once the underlying kubectl action actually landed (e.g. restarting
+    the Deployments that consume a Secret that was just edited).
     """
     try:
         result = action_fn()
@@ -367,6 +372,9 @@ def _apply_and_respond(
         entry = log_error(source=log_source, detail=result.log, description=f"{failure_desc}: {result.error}")
         flash(error_detail_link(f"{failure_desc}.", entry), "error")
         return redirect(url_for(endpoint, server_id=server.id))
+
+    if on_success is not None:
+        on_success()
 
     log_activity(
         action=success_action,
@@ -505,6 +513,63 @@ def delete_namespace(server_id, name):
 
 def _secret_edit_prefix(namespace, name):
     return f"secret-{namespace}-{name}-"
+
+
+def _restart_dependents_of_secret(server, namespace, name):
+    """Best-effort: roll-restart every Deployment in `namespace` whose pod
+    template references Secret `name`. Kubernetes only injects a Secret's
+    values into a container's env vars once, at container start — editing
+    the Secret afterward never reaches an already-running container on its
+    own, which is what actually made past edits look like they "didn't
+    update the Kubernetes secret" even though the Secret object itself was
+    updated correctly. Called only after the Secret's own update already
+    succeeded; a failure to scan/restart here is logged but never turns the
+    secret update itself into a failure.
+    """
+    provider = provider_for_server(server)
+    try:
+        deployment_names = provider.find_deployments_using_secret(namespace, name)
+    except Exception as exc:
+        log_error(
+            source="deployment_pods.edit_secret.restart_dependents",
+            exc=exc,
+            description=(
+                f"Could not scan deployments referencing secret '{name}' in namespace '{namespace}' "
+                f"on server '{server.name}': {exc}"
+            ),
+        )
+        return
+
+    restarted = []
+    for dep_name in deployment_names:
+        result = provider.restart_deployment(namespace, dep_name)
+        if result.success:
+            restarted.append(dep_name)
+            log_activity(
+                action="RESTART_WORKLOAD",
+                target_type="deployment_server",
+                target_id=str(server.id),
+                description=(
+                    f"Restarted deployment '{dep_name}' in namespace '{namespace}' on server '{server.name}' "
+                    f"after secret '{name}' was updated"
+                ),
+            )
+        else:
+            log_error(
+                source="deployment_pods.edit_secret.restart_dependents",
+                detail=result.log,
+                description=(
+                    f"Could not restart deployment '{dep_name}' in namespace '{namespace}' on server "
+                    f"'{server.name}' after secret '{name}' was updated: {result.error}"
+                ),
+            )
+
+    if restarted:
+        flash(
+            f"Restarted {len(restarted)} deployment(s) using this secret so they pick up the new value: "
+            f"{', '.join(restarted)}.",
+            "info",
+        )
 
 
 def _namespace_choices(server):
@@ -752,6 +817,9 @@ def edit_secret(server_id, namespace, name):
             f"in namespace '{namespace}' on server '{server.name}'"
         ),
         f"Secret '{name}' updated.",
+        on_success=(
+            (lambda: _restart_dependents_of_secret(server, namespace, name)) if touched_keys else None
+        ),
     )
 
 

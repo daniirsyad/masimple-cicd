@@ -213,3 +213,90 @@ class TestDeleteSecret:
 
         assert result.success is True
         assert captured["args"] == ["kubectl", "delete", "secret", "db-creds", "-n", "default", "--ignore-not-found=true"]
+
+
+class TestFindDeploymentsUsingSecret:
+    def _deployment(self, name, pod_spec):
+        return {"metadata": {"name": name}, "spec": {"template": {"spec": pod_spec}}}
+
+    def test_matches_env_value_from_secret_key_ref(self, provider, monkeypatch):
+        deployments = [
+            self._deployment(
+                "api",
+                {
+                    "containers": [
+                        {
+                            "name": "api",
+                            "env": [{"name": "DB_PASS", "valueFrom": {"secretKeyRef": {"name": "db-creds"}}}],
+                        }
+                    ]
+                },
+            ),
+            self._deployment("worker", {"containers": [{"name": "worker", "env": []}]}),
+        ]
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda *a, **k: _completed(returncode=0, stdout=json.dumps({"items": deployments})),
+        )
+
+        assert provider.find_deployments_using_secret("default", "db-creds") == ["api"]
+
+    def test_matches_env_from_secret_ref(self, provider, monkeypatch):
+        deployments = [
+            self._deployment(
+                "api", {"containers": [{"name": "api", "envFrom": [{"secretRef": {"name": "db-creds"}}]}]}
+            ),
+        ]
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda *a, **k: _completed(returncode=0, stdout=json.dumps({"items": deployments})),
+        )
+
+        assert provider.find_deployments_using_secret("default", "db-creds") == ["api"]
+
+    def test_matches_volume_mounted_secret(self, provider, monkeypatch):
+        deployments = [
+            self._deployment(
+                "api",
+                {"containers": [{"name": "api"}], "volumes": [{"name": "creds", "secret": {"secretName": "db-creds"}}]},
+            ),
+        ]
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda *a, **k: _completed(returncode=0, stdout=json.dumps({"items": deployments})),
+        )
+
+        assert provider.find_deployments_using_secret("default", "db-creds") == ["api"]
+
+    def test_matches_init_container_reference(self, provider, monkeypatch):
+        deployments = [
+            self._deployment(
+                "api",
+                {
+                    "containers": [{"name": "api"}],
+                    "initContainers": [
+                        {"name": "migrate", "envFrom": [{"secretRef": {"name": "db-creds"}}]}
+                    ],
+                },
+            ),
+        ]
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda *a, **k: _completed(returncode=0, stdout=json.dumps({"items": deployments})),
+        )
+
+        assert provider.find_deployments_using_secret("default", "db-creds") == ["api"]
+
+    def test_no_matches_for_unrelated_secret(self, provider, monkeypatch):
+        deployments = [
+            self._deployment(
+                "api",
+                {"containers": [{"name": "api", "envFrom": [{"secretRef": {"name": "other-secret"}}]}]},
+            ),
+        ]
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda *a, **k: _completed(returncode=0, stdout=json.dumps({"items": deployments})),
+        )
+
+        assert provider.find_deployments_using_secret("default", "db-creds") == []

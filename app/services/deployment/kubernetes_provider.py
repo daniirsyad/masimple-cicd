@@ -605,3 +605,42 @@ class KubernetesProvider(DeploymentProvider):
                 success=False, log=log, error=f"kubectl rollout restart exited with code {process.returncode}"
             )
         return DeployResult(success=True, log=log)
+
+    def find_deployments_using_secret(self, namespace, secret_name):
+        """Names of Deployments in `namespace` whose pod template references
+        Secret `secret_name` — via a container/initContainer's `env[].
+        valueFrom.secretKeyRef`, `envFrom[].secretRef`, or a `volumes[].
+        secret.secretName`. An already-running Pod never picks up an
+        updated Secret's value on its own (env vars and imagePullSecrets are
+        injected once, at container start), so the caller uses this to know
+        which Deployments actually need a rollout restart after a Secret
+        edit — restarting every Deployment in the namespace regardless of
+        whether it even references the secret would be needless churn.
+        """
+        deployments = self.list_resources("deployment", namespace=namespace, all_namespaces=False)
+        names = []
+        for item in deployments:
+            pod_spec = (item.get("spec") or {}).get("template", {}).get("spec", {}) or {}
+            if self._pod_spec_references_secret(pod_spec, secret_name):
+                name = item.get("metadata", {}).get("name")
+                if name:
+                    names.append(name)
+        return sorted(names)
+
+    @staticmethod
+    def _pod_spec_references_secret(pod_spec, secret_name):
+        containers = (pod_spec.get("containers") or []) + (pod_spec.get("initContainers") or [])
+        for container in containers:
+            for env_var in container.get("env") or []:
+                secret_ref = (env_var.get("valueFrom") or {}).get("secretKeyRef") or {}
+                if secret_ref.get("name") == secret_name:
+                    return True
+            for env_from in container.get("envFrom") or []:
+                secret_ref = env_from.get("secretRef") or {}
+                if secret_ref.get("name") == secret_name:
+                    return True
+        for volume in pod_spec.get("volumes") or []:
+            secret_volume = volume.get("secret") or {}
+            if secret_volume.get("secretName") == secret_name:
+                return True
+        return False

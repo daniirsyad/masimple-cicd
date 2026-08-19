@@ -3,13 +3,14 @@ import uuid
 from datetime import timedelta
 
 from dotenv import load_dotenv
-from flask import Flask, got_request_exception, redirect, request, url_for
+from flask import Flask, flash, got_request_exception, redirect, request, url_for
 from flask_login import current_user
 
 load_dotenv()
 
 from config import config  # noqa: E402  must load after dotenv so env vars are set
 from app.extensions import csrf, db, login_manager, migrate  # noqa: E402
+from app.utils.crypto import CredentialEncryptionError  # noqa: E402
 from app.utils.error_logger import log_error  # noqa: E402
 from app.utils.menu_builder import menu_builder  # noqa: E402
 from app.utils.setup_status import is_setup_complete  # noqa: E402
@@ -102,6 +103,18 @@ def create_app(config_name=None):
     # blinker's default weak-reference connection would let it get garbage
     # collected the moment create_app() returns, silently disconnecting it.
     got_request_exception.connect(_log_unhandled_exception, app, weak=False)
+
+    @app.errorhandler(CredentialEncryptionError)
+    def _handle_credential_encryption_error(exc):
+        # A missing/malformed/rotated CREDENTIAL_ENCRYPTION_KEY is always a
+        # deployment/config problem, not a bug in whatever form the user
+        # just submitted — every encrypt()/decrypt() call site (system
+        # config, AI settings, Git sources, registries, deployment servers)
+        # would otherwise surface this as a raw, unstyled 500 page instead
+        # of an actionable flash on the page the user was already on.
+        log_error(source=request.endpoint or request.path, exc=exc)
+        flash(str(exc), "error")
+        return redirect(request.referrer or url_for("main.index"))
 
     from app.blueprints.account import account_bp
     from app.blueprints.auth import auth_bp
