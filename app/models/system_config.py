@@ -64,6 +64,19 @@ class SystemConfig(db.Model):
     # can act on that link, so it can't be redirected here).
     security_notification_user_id = db.Column(UUID(as_uuid=True), db.ForeignKey("users.id"), nullable=True)
     security_notification_user = db.relationship("User", foreign_keys=[security_notification_user_id])
+    # Separate from telegram_notifications_enabled above: gates the
+    # long-polling background thread (app/services/telegram/worker.py) that
+    # lets a linked user run/check Workflows via Telegram bot commands
+    # (/run, /status), reusing the same encrypted_telegram_bot_token. Kept
+    # as its own toggle so enabling outbound security/reset notifications
+    # doesn't also silently start accepting inbound commands, and vice
+    # versa. Off by default, same reasoning as telegram_notifications_enabled.
+    telegram_bot_commands_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    # Telegram's getUpdates offset — the highest update_id already
+    # processed. Persisted (not just kept in-memory) so a process restart
+    # doesn't re-deliver, and re-execute, already-handled /run commands.
+    # NULL means "no updates processed yet".
+    telegram_last_update_id = db.Column(db.Integer, nullable=True)
     updated_at = db.Column(
         db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )

@@ -16,6 +16,7 @@ from app.extensions import db
 from app.models import DeploymentExecution, DeploymentRun
 from app.services.deployment.helpers import provider_for_server
 from app.services.deployment.resolver import UnresolvedPlaceholderError, resolve_manifest
+from app.services.telegram.helpers import notify_deploy_finished, notify_deploy_started
 from app.utils.error_logger import log_error
 from app.utils.runtime import is_werkzeug_reloader_parent
 from app.utils.system_config import get_system_config
@@ -203,6 +204,16 @@ def _claim_next_job():
     except IntegrityError:
         db.session.rollback()
         return None
+
+    # DeploymentRun has no started_at of its own (unlike BuildBatch's
+    # full_version_string flag) to check "is this the run's first claimed
+    # execution" — count is equivalent: only this claim's own execution can
+    # have left "queued" so far within this run iff it's the first.
+    started_count = DeploymentExecution.query.filter(
+        DeploymentExecution.run_id == execution.run_id, DeploymentExecution.status != "queued"
+    ).count()
+    if started_count == 1:
+        notify_deploy_started(execution.run)
     return execution.id
 
 
@@ -223,6 +234,9 @@ def _update_run_status(run_id):
     if run is None:
         return
 
+    TERMINAL_STATUSES = {"success", "failed", "partial_failure"}
+    was_terminal = run.status in TERMINAL_STATUSES
+
     executions = DeploymentExecution.query.filter_by(run_id=run_id).all()
     statuses = {execution.status for execution in executions}
 
@@ -242,6 +256,9 @@ def _update_run_status(run_id):
         run.status = "queued"
 
     db.session.commit()
+
+    if not was_terminal and run.status in TERMINAL_STATUSES:
+        notify_deploy_finished(run)
 
 
 def _heartbeat_tick(app):

@@ -12,9 +12,7 @@ from app.models import (
     ChangeType,
     DeploymentManifest,
     ImageBuild,
-    Object,
     Role,
-    Version,
     Workflow,
     WorkflowRun,
     WorkflowStep,
@@ -23,13 +21,12 @@ from app.models import (
 )
 from app.services.build.prefill import compute_build_prefill
 from app.services.build.versioning import BUMP_TYPES
-from app.services.build.worker import enqueue_build_batch
 from app.services.workflow.resolver import (
     resolve_builders_from_selection,
     resolve_step_builders,
     resolve_step_manifests,
 )
-from app.services.workflow.worker import enqueue_workflow_run, finish_step
+from app.services.workflow.worker import approve_awaiting_step, enqueue_workflow_run, reject_awaiting_step
 from app.utils.decorators import permission_required
 from app.utils.logger import log_activity
 
@@ -692,27 +689,18 @@ def approve_step_run(step_run_id):
         flash("Fill in Version Bump and Change Type before approving.", "error")
         return redirect(url_for("workflows.view_run", run_id=run.id))
 
-    step = step_run.step
-    builders = resolve_step_builders(step)
-    if not builders:
-        flash("Could not approve — this step's builders no longer resolve to anything.", "error")
+    try:
+        approve_awaiting_step(
+            step_run,
+            bump_type=form.bump_type.data,
+            change_type_id=uuid.UUID(form.change_type_id.data),
+            object_names_text=form.object.data,
+            description=form.description.data,
+            requested_by=current_user.id,
+        )
+    except ValueError as exc:
+        flash(f"Could not approve — {exc}", "error")
         return redirect(url_for("workflows.view_run", run_id=run.id))
-
-    version = Version.query.get({builder.version_id for builder in builders}.pop())
-    object_names = [name.strip() for name in (form.object.data or "").split(",") if name.strip()]
-
-    batch = enqueue_build_batch(
-        version=version,
-        bump_type=form.bump_type.data,
-        builder_branches=[(builder, builder.default_branch) for builder in builders],
-        objects=Object.resolve([], object_names) if object_names else [],
-        additional_description=(form.description.data or "").strip() or None,
-        requested_by=current_user.id,
-        change_type_id=uuid.UUID(form.change_type_id.data),
-    )
-    step_run.status = "running"
-    step_run.batch_id = batch.id
-    db.session.commit()
 
     log_activity(
         action="APPROVE_WORKFLOW_BUILD_STEP",
@@ -730,12 +718,8 @@ def approve_step_run(step_run_id):
 def reject_step_run(step_run_id):
     step_run = _awaiting_review_step_run_or_404(step_run_id)
     run = step_run.run
-    step = step_run.step
 
-    step_run.status = "failed"
-    step_run.error = "Rejected by reviewer."
-    step_run.finished_at = datetime.utcnow()
-    db.session.commit()
+    reject_awaiting_step(step_run)
 
     log_activity(
         action="REJECT_WORKFLOW_BUILD_STEP",
@@ -743,8 +727,6 @@ def reject_step_run(step_run_id):
         target_id=str(run.id),
         description=f"Rejected AI-suggested build metadata for a step in workflow '{run.workflow.name}'",
     )
-
-    finish_step(run, step, success=False)
 
     flash("Build step rejected.", "info")
     return redirect(url_for("workflows.view_run", run_id=run.id))

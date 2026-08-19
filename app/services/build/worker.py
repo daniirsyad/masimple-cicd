@@ -15,6 +15,7 @@ from app.services.build.history import get_last_built_commit
 from app.services.build.versioning import bump_version
 from app.services.git.helpers import provider_for_git_source
 from app.services.registry.factory import get_registry_provider
+from app.services.telegram.helpers import notify_build_finished, notify_build_started
 from app.utils.crypto import decrypt
 from app.utils.error_logger import log_error
 from app.utils.runtime import is_werkzeug_reloader_parent
@@ -166,9 +167,11 @@ def _claim_next_job():
     # and loading them would otherwise autoflush the pending build.status
     # change above right now — before the try/except below is in place to
     # catch a lost-race IntegrityError, letting it escape uncaught.
+    batch_just_started = False
     with db.session.no_autoflush:
         batch = build.batch
         if batch.full_version_string is None:
+            batch_just_started = True
             batch.bumped_from_major = batch.version.major
             batch.bumped_from_minor = batch.version.minor
             batch.bumped_from_patch = batch.version.patch
@@ -180,6 +183,9 @@ def _claim_next_job():
     except IntegrityError:
         db.session.rollback()
         return None
+
+    if batch_just_started:
+        notify_build_started(batch)
     return build.id
 
 
@@ -334,6 +340,9 @@ def _update_batch_status(batch_id):
     if batch is None:
         return
 
+    TERMINAL_STATUSES = {"success", "failed", "partial_failure"}
+    was_terminal = batch.status in TERMINAL_STATUSES
+
     statuses = {build.status for build in ImageBuild.query.filter_by(batch_id=batch_id).all()}
     if statuses & {"queued", "running"}:
         batch.status = "running" if "running" in statuses else "queued"
@@ -355,6 +364,9 @@ def _update_batch_status(batch_id):
     else:
         batch.status = "partial_failure"
     db.session.commit()
+
+    if not was_terminal and batch.status in TERMINAL_STATUSES:
+        notify_build_finished(batch)
 
 
 def _record_commit_history(git_provider, repository, build):

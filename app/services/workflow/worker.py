@@ -17,6 +17,7 @@ from app.models import BuildBatch, DeploymentRun, Object, Version, WorkflowRun, 
 from app.services.build.prefill import compute_build_prefill
 from app.services.build.worker import enqueue_build_batch
 from app.services.deployment.worker import enqueue_deployment_run
+from app.services.telegram.helpers import notify_awaiting_review, notify_run_finished
 from app.services.workflow.resolver import resolve_step_builders, resolve_step_manifests
 from app.utils.error_logger import log_error
 from app.utils.runtime import is_werkzeug_reloader_parent
@@ -66,6 +67,7 @@ def finish_step(run, step, success):
             run.status = "failed"
             run.finished_at = datetime.utcnow()
             db.session.commit()
+            notify_run_finished(run)
             return
 
     next_step = _next_step(step)
@@ -73,9 +75,57 @@ def finish_step(run, step, success):
         run.status = "completed_with_failures" if run.has_failed_step else "success"
         run.finished_at = datetime.utcnow()
         db.session.commit()
+        notify_run_finished(run)
     else:
         db.session.commit()
         _start_step(run, next_step)
+
+
+def approve_awaiting_step(step_run, bump_type, change_type_id, object_names_text, description, requested_by):
+    """Applies a human-reviewed set of build values to an awaiting_review
+    WorkflowStepRun and enqueues the real BuildBatch — the shared approval
+    logic behind both the web review panel
+    (workflows.routes.approve_step_run) and Telegram's approve_review
+    callback (app/services/telegram/worker.py). Raises ValueError if the
+    step's builders no longer resolve to anything (its group/individual
+    selection changed since the run started) — callers turn that into
+    whatever user-facing message fits their channel.
+    """
+    step = step_run.step
+    builders = resolve_step_builders(step)
+    if not builders:
+        raise ValueError("This step's builders no longer resolve to anything.")
+
+    version = Version.query.get({builder.version_id for builder in builders}.pop())
+    object_names = [name.strip() for name in (object_names_text or "").split(",") if name.strip()]
+
+    batch = enqueue_build_batch(
+        version=version,
+        bump_type=bump_type,
+        builder_branches=[(builder, builder.default_branch) for builder in builders],
+        objects=Object.resolve([], object_names) if object_names else [],
+        additional_description=(description or "").strip() or None,
+        requested_by=requested_by,
+        change_type_id=change_type_id,
+    )
+    step_run.status = "running"
+    step_run.batch_id = batch.id
+    db.session.commit()
+    return batch
+
+
+def reject_awaiting_step(step_run, reason="Rejected by reviewer."):
+    """Fails an awaiting_review WorkflowStepRun without enqueueing anything
+    and advances the run via finish_step — shared by the web review
+    panel's reject route and Telegram's reject_review callback.
+    """
+    run = step_run.run
+    step = step_run.step
+    step_run.status = "failed"
+    step_run.error = reason
+    step_run.finished_at = datetime.utcnow()
+    db.session.commit()
+    finish_step(run, step, success=False)
 
 
 def _fail_step(run, step, message):
@@ -151,6 +201,7 @@ def _start_step(run, step):
                 )
                 db.session.add(step_run)
                 db.session.commit()
+                notify_awaiting_review(step_run)
                 return
 
             bump_type = prefill["bump_type"]
@@ -246,6 +297,7 @@ def _tick(app):
                 run.started_at = datetime.utcnow()
                 run.finished_at = datetime.utcnow()
                 db.session.commit()
+                notify_run_finished(run)
             else:
                 _start_step(run, step)
 

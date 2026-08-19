@@ -2,9 +2,9 @@ import pytest
 import requests
 
 from app.extensions import db
-from app.models import Role, User
+from app.models import ChangeType, Role, User, Workflow, WorkflowRun, WorkflowStep, WorkflowStepRun
 from app.services.telegram.client import TelegramNotifier
-from app.services.telegram.helpers import notify_security_contact, notify_user
+from app.services.telegram.helpers import notify_awaiting_review, notify_run_finished, notify_security_contact, notify_user
 from app.utils.crypto import encrypt
 from app.utils.system_config import get_system_config
 from werkzeug.security import generate_password_hash
@@ -116,7 +116,7 @@ class TestNotifyUser:
     def test_sends_and_returns_true_when_fully_configured(self, app, telegram_user, monkeypatch):
         sent = {}
         monkeypatch.setattr(
-            TelegramNotifier, "send_message", lambda self, chat_id, text: sent.update(chat_id=chat_id, text=text)
+            TelegramNotifier, "send_message", lambda self, chat_id, text, reply_markup=None: sent.update(chat_id=chat_id, text=text)
         )
 
         with app.app_context():
@@ -151,6 +151,122 @@ class TestNotifyUser:
             assert notify_user(None, "hi") is False
 
 
+class TestNotifyRunFinished:
+    def test_notifies_the_triggering_users_own_chat(self, app, telegram_user, monkeypatch):
+        sent = {}
+        monkeypatch.setattr(
+            TelegramNotifier, "send_message", lambda self, chat_id, text, reply_markup=None: sent.update(chat_id=chat_id, text=text)
+        )
+
+        with app.app_context():
+            config = get_system_config()
+            config.telegram_notifications_enabled = True
+            config.encrypted_telegram_bot_token = encrypt("bot-token")
+            db.session.commit()
+
+            workflow = Workflow(name="Deploy Everything", is_active=True)
+            db.session.add(workflow)
+            db.session.flush()
+            run = WorkflowRun(workflow_id=workflow.id, status="success", triggered_by=telegram_user)
+            db.session.add(run)
+            db.session.commit()
+
+            assert notify_run_finished(run) is True
+
+        assert sent["chat_id"] == "98765"
+        assert "Deploy Everything" in sent["text"]
+        assert "succeeded" in sent["text"]
+
+    def test_returns_false_when_run_has_no_triggering_user(self, app):
+        with app.app_context():
+            workflow = Workflow(name="No Trigger WF", is_active=True)
+            db.session.add(workflow)
+            db.session.flush()
+            run = WorkflowRun(workflow_id=workflow.id, status="success", triggered_by=None)
+            db.session.add(run)
+            db.session.commit()
+
+            assert notify_run_finished(run) is False
+
+    def test_returns_false_when_notifications_are_disabled(self, app, telegram_user):
+        with app.app_context():
+            config = get_system_config()
+            config.telegram_notifications_enabled = False
+            config.encrypted_telegram_bot_token = encrypt("bot-token")
+            db.session.commit()
+
+            workflow = Workflow(name="WF", is_active=True)
+            db.session.add(workflow)
+            db.session.flush()
+            run = WorkflowRun(workflow_id=workflow.id, status="failed", triggered_by=telegram_user)
+            db.session.add(run)
+            db.session.commit()
+
+            assert notify_run_finished(run) is False
+
+
+class TestNotifyAwaitingReview:
+    def _make_step_run(self, triggered_by):
+        workflow = Workflow(name="Deploy Everything", is_active=True)
+        db.session.add(workflow)
+        db.session.flush()
+        step = WorkflowStep(workflow_id=workflow.id, order=0, step_type="build", on_failure="stop")
+        db.session.add(step)
+        db.session.flush()
+        run = WorkflowRun(workflow_id=workflow.id, status="running", triggered_by=triggered_by)
+        db.session.add(run)
+        db.session.flush()
+        change_type = ChangeType(name="Bug Fix")
+        db.session.add(change_type)
+        db.session.flush()
+        step_run = WorkflowStepRun(
+            workflow_run_id=run.id,
+            workflow_step_id=step.id,
+            step_order=0,
+            step_type="build",
+            status="awaiting_review",
+            suggested_bump_type="minor",
+            suggested_change_type_id=change_type.id,
+            suggested_object_names="api, billing",
+            suggested_description="Draft.",
+        )
+        db.session.add(step_run)
+        db.session.commit()
+        return step_run
+
+    def test_notifies_the_triggering_user_with_approve_reject_buttons(self, app, telegram_user, monkeypatch):
+        sent = {}
+        monkeypatch.setattr(
+            TelegramNotifier,
+            "send_message",
+            lambda self, chat_id, text, reply_markup=None: sent.update(
+                chat_id=chat_id, text=text, reply_markup=reply_markup
+            ),
+        )
+
+        with app.app_context():
+            config = get_system_config()
+            config.telegram_notifications_enabled = True
+            config.encrypted_telegram_bot_token = encrypt("bot-token")
+            db.session.commit()
+
+            step_run = self._make_step_run(triggered_by=telegram_user)
+            assert notify_awaiting_review(step_run) is True
+
+        assert sent["chat_id"] == "98765"
+        assert "Deploy Everything" in sent["text"]
+        assert "minor" in sent["text"]
+        assert "Bug Fix" in sent["text"]
+        buttons = sent["reply_markup"]["inline_keyboard"][0]
+        assert buttons[0]["callback_data"] == f"approve_review:{step_run.id}"
+        assert buttons[1]["callback_data"] == f"reject_review:{step_run.id}"
+
+    def test_returns_false_when_run_has_no_triggering_user(self, app):
+        with app.app_context():
+            step_run = self._make_step_run(triggered_by=None)
+            assert notify_awaiting_review(step_run) is False
+
+
 class TestNotifySecurityContact:
     def test_returns_false_when_no_recipient_configured(self, app):
         with app.app_context():
@@ -165,7 +281,7 @@ class TestNotifySecurityContact:
     def test_sends_to_the_configured_recipients_own_chat_id(self, app, telegram_user, monkeypatch):
         sent = {}
         monkeypatch.setattr(
-            TelegramNotifier, "send_message", lambda self, chat_id, text: sent.update(chat_id=chat_id, text=text)
+            TelegramNotifier, "send_message", lambda self, chat_id, text, reply_markup=None: sent.update(chat_id=chat_id, text=text)
         )
 
         with app.app_context():

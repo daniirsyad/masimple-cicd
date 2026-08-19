@@ -144,6 +144,7 @@ def create_app(config_name=None):
     from app.services.deployment.worker import start_worker as start_deployment_worker
     from app.services.deployment.worker import start_status_poller as start_deployment_status_poller
     from app.services.workflow.worker import start_worker as start_workflow_worker
+    from app.services.telegram.worker import start_worker as start_telegram_worker
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
@@ -174,5 +175,6 @@ def create_app(config_name=None):
     start_deployment_worker(app)
     start_deployment_status_poller(app)
     start_workflow_worker(app)
+    start_telegram_worker(app)
 
     return app

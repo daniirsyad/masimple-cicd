@@ -51,6 +51,7 @@ class SystemConfigForm(FlaskForm):
     telegram_bot_token = StringField(
         "Telegram Bot Token (leave blank to keep the current one)", validators=[Optional(), Length(max=255)]
     )
+    telegram_bot_commands_enabled = BooleanField("Enable Telegram Bot Commands (/run, /status)")
     # Choices (every user) are populated in the route, same as
     # app.blueprints.users.routes._role_choices() — a "— None —" option is
     # always first so this can be explicitly disabled.

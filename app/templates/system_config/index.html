@@ -161,6 +161,19 @@ MASIMPLE CICD{% endblock %} {% block content %}
         </div>
 
         <div class="form-control">
+          <label class="label cursor-pointer justify-start gap-2" for="{{ form.telegram_bot_commands_enabled.id }}">
+            {{ form.telegram_bot_commands_enabled(class="checkbox checkbox-sm") }}
+            <span class="label-text">Enable Telegram Bot Commands (/run, /status)</span>
+          </label>
+          <p class="mt-1 text-xs text-base-content/60">
+            Lets a user with their Telegram Chat ID linked (Users page) run and check Workflows straight
+            from the bot's own "/" command menu, provided they also hold the <code>workflow.run</code>
+            permission. Separate from the notifications toggle above — turning this on starts a background
+            thread that polls Telegram for incoming commands.
+          </p>
+        </div>
+
+        <div class="form-control">
           <label class="label" for="{{ form.security_notification_user_id.id }}">
             <span class="label-text">Security Notification Recipient</span>
           </label>
