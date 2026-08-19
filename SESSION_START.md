@@ -27,11 +27,95 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **911 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below) — three features,
-  built in sequence, each planned via plan-mode with the user before
-  implementation. Not yet committed/pushed as of this note; see the git
-  status check at the end of this session for whether that's since changed.
+- **943 tests passing** (as of the last full run).
+- **This session's work** (on top of everything below) — a Telegram bot
+  integration, built in three parts in sequence (the first two planned via
+  plan-mode with the user before implementation; the third — build/deploy
+  notifications — was a small enough follow-up request to just implement
+  directly). Migration `041a67231254`.
+  1. **Workflows can now be run and checked from Telegram, not just
+     notified about.** `app/services/telegram/worker.py` (new) is a fifth
+     independent background poll thread — long-polls the Bot API's
+     `getUpdates` (no public HTTPS/webhook needed, unlike a push-based
+     alternative; works for the Podman trial deploy and bare-metal dev
+     alike, since neither is reachable from the public internet) and
+     registers a native "/" command menu inside the Telegram chat via
+     `setMyCommands` (`/start`, `/run`, `/status`, `/review` — the last one
+     is part 2 below). `/run` shows an inline-keyboard pick of active
+     Workflows the sending chat's linked `User.telegram_chat_id` can see
+     (`Workflow.is_accessible_to()`) and holds `workflow.run` for; tapping
+     one calls the existing `enqueue_workflow_run()`, same as the web UI's
+     Run button. `/status` lists that user's own last 5 runs; tapping one
+     replies with its per-step status (same fields the existing
+     `/workflows/runs/<id>/status` JSON route already exposes). New
+     `SystemConfig.telegram_bot_commands_enabled` (a **separate** toggle
+     from the pre-existing `telegram_notifications_enabled`, reusing the
+     same bot token) gates all inbound command handling — a new checkbox on
+     `/config`'s Telegram Integration section. `SystemConfig.
+     telegram_last_update_id` persists the `getUpdates` offset across
+     process restarts, so a redeploy doesn't replay (and re-run) old
+     commands. `app/utils/logger.py`'s `log_activity()` gained optional
+     `user`/`ip_address` kwargs, since this worker thread has an app
+     context but no Flask *request* context to read
+     `current_user`/`request.remote_addr` from (mirrors how
+     `app/utils/error_logger.py`'s `log_error()` already guards its own
+     request-only reads with `has_request_context()`) — every existing
+     call site is unaffected since both default to the old behavior. Also
+     new: a Workflow run now pushes a Telegram notification to whoever
+     triggered it the moment it reaches a terminal status
+     (`notify_run_finished()`, hooked into `workflow/worker.py`'s shared
+     `finish_step()`), regardless of whether it was triggered via Telegram
+     or the web.
+  2. **A build step paused for human review (`awaiting_review`, from the
+     prior session's auto-generate-at-run-time feature) can now be
+     approved or rejected from Telegram too**, not just the web review
+     panel — asked as a direct follow-up once part 1 above landed. The
+     step's triggering user gets a push notification the moment it pauses
+     (`notify_awaiting_review()`), showing the AI-suggested Bump
+     Type/Change Type/Object(s)/Description with inline ✅ Approve/❌
+     Reject buttons attached; any `workflow.run` holder can also pull the
+     same thing up on demand via a new `/review` command — a **shared**
+     review queue across every workflow they can see, not just their own
+     triggered runs (matching the web panel's own
+     `_awaiting_review_step_run_or_404` authorization rule, deliberately
+     wider than `/status`'s "your own runs only" scope). Telegram approves
+     only the suggestion **as-is** — there's no dropdown inside a Telegram
+     chat to edit a missing value the way the web form's fields allow, so
+     a step whose Bump Type or Change Type wasn't confidently suggested
+     just points back to the web UI instead of guessing. The approve/
+     reject logic itself was extracted out of `workflows/routes.py`'s
+     `approve_step_run`/`reject_step_run` views and into two new shared
+     functions, `approve_awaiting_step()`/`reject_awaiting_step()`
+     (`app/services/workflow/worker.py`) — the web route and the Telegram
+     callback now both call the same implementation instead of
+     duplicating the "resolve builders, enqueue the real BuildBatch" logic
+     a second time.
+  3. **Manual (non-Workflow) builds and deploys now also push a Telegram
+     notification on start and finish**, mirroring the Workflow-run
+     notification from part 1 — requested as a direct follow-up once parts
+     1–2 landed. Hooked into `app/services/build/worker.py`'s
+     `_claim_next_job()`/`_update_batch_status()` and
+     `app/services/deployment/worker.py`'s `_claim_next_job()`/
+     `_update_run_status()` — the same places those modules already
+     compute a batch/run's aggregate status — guarded so a multi-image
+     batch or multi-execution run only notifies once each way (start: the
+     first image/execution actually claimed; finish: the first status
+     recomputation that lands on a terminal value, tracked by comparing
+     against the status just before recomputing). Deliberately **skipped**
+     when the `BuildBatch`/`DeploymentRun` was actually enqueued by a
+     Workflow step (checked via `WorkflowStepRun.batch_id`/
+     `.deployment_run_id` — see `_is_workflow_driven_batch`/
+     `_is_workflow_driven_run` in `app/services/telegram/helpers.py`) —
+     that already gets its own Workflow-level notification from part 1, so
+     this avoids double-notifying on every workflow build/deploy step.
+  New test files: `tests/test_telegram_worker.py` (bot command/callback
+  dispatch, white-box on `_tick()`, same pattern as
+  `tests/test_workflow_worker.py`), `tests/test_build_deploy_notifications.py`
+  (start/finish hooks + the workflow-driven skip); plus additions to the
+  existing `tests/test_telegram.py` (`notify_run_finished`,
+  `notify_awaiting_review`).
+- **A prior session's work** (on top of everything below), already
+  committed and pushed to `origin/main`:
   1. **Workflow build steps can auto-generate their Version Bump/Change
      Type/Object/Message at run time instead of requiring them typed in at
      authoring time**, with an optional human-review gate. Reuses the
@@ -121,8 +205,8 @@ Then ask me what to work on next rather than assuming.
   the features themselves: the `menus` and `permissions` blueprints had **no
   test file at all** before this session (`tests/test_menus.py`,
   `tests/test_permissions.py` are new).
-- **A prior session's work** (on top of everything below), already pushed to
-  `origin/main`:
+- **An earlier session's work** (on top of everything below), already
+  pushed to `origin/main`:
   1. **The container image never had `kubectl` installed at all** — every
      `DeploymentServer` action (test-connection, apply/delete, pods/
      secrets/configmaps management, rollout restarts — anything going
@@ -371,15 +455,17 @@ Then ask me what to work on next rather than assuming.
      one-off backfill (`migrate_add_missing_icons`) so already-seeded
      databases pick them up too, not just fresh installs.
   Anything older is covered by `git log`/`AI_CONTEXT.md`, not repeated here.
-- **Migration head is `c5ebe879231b`** (`7d79f7acc529` → `12fa3cb1cfd5`
-  (this session's workflow-auto-generate columns) → `c5ebe879231b` (this
-  session's `is_active` columns)) — applied to the bare-metal `.venv` dev DB
+- **Migration head is `041a67231254`** (`7d79f7acc529` → `12fa3cb1cfd5` →
+  `c5ebe879231b` (an earlier session's workflow-auto-generate and
+  `is_active` columns) → `041a67231254` (this session's
+  `telegram_bot_commands_enabled`/`telegram_last_update_id` columns on
+  `SystemConfig`)) — applied to the bare-metal `.venv` dev DB
   (`masimple_cicd`) this session. **Not yet applied to the Podman
   trial-deploy DB** (an external Postgres server, dbname `postgres` — see
   `docker-compose.podman.yml`'s `PODMAN_DATABASE_URL` in `.env`) — that
-  deploy hasn't been re-run since these two new migrations landed; it'll
-  show `/setup` again (or need `flask db upgrade` run against it directly)
-  next time it's touched.
+  deploy hasn't been re-run since `c5ebe879231b` landed, let alone this
+  session's `041a67231254`; it'll show `/setup` again (or need `flask db
+  upgrade` run against it directly) next time it's touched.
 - **This session's Podman trial deploy is worth repeating after any future
   change to the build/deploy pipeline** — every fix in commit 3/4 above was
   found only by actually running the app end-to-end this way; none of it
@@ -458,18 +544,27 @@ Then ask me what to work on next rather than assuming.
     volume mounted at `/app/data` (not a PVC) with a placeholder node path,
     per explicit request — ties the pod to whichever node has that
     directory unless a `nodeSelector`/`nodeName` is also added.
-  - The app now runs **four** independent background poll threads (build
+  - The app now runs **five** independent background poll threads (build
     worker, deploy worker, deploy live-status poller, workflow
-    orchestrator), each with its own DB-queue; none execute each other's
-    work. Both the build and deploy workers additionally run a
-    **heartbeat** thread each: every claimed job's `heartbeat_at` is ticked
-    every 15s while it runs, and a stale/missing heartbeat (>60s) on the
-    single `status='running'` row is auto-reaped as a failure. All four
-    (and both heartbeat threads) now reliably start under gunicorn — see
-    commit 4 above.
-  - **If `SystemConfig.telegram_notifications_enabled` is turned on**,
-    whatever host runs this app needs outbound HTTPS access to
-    `api.telegram.org` — the Bot API call is a plain `requests.post` with a
-    10s timeout and no retry; a network-level block just makes every
-    notification silently fail (logged to Error Logs, never raised into
+    orchestrator, and this session's Telegram bot long-poller — thread
+    name `telegram-bot`), each with its own DB-queue/external poll target;
+    none execute each other's work. Both the build and deploy workers
+    additionally run a **heartbeat** thread each: every claimed job's
+    `heartbeat_at` is ticked every 15s while it runs, and a stale/missing
+    heartbeat (>60s) on the single `status='running'` row is auto-reaped
+    as a failure. The Telegram bot thread has no heartbeat of its own —
+    Telegram's `getUpdates` itself already blocks server-side up to 25s
+    per poll, so a hung/crashed thread just silently stops responding to
+    commands rather than needing a stale-job reaper. All five poll threads
+    (and both build/deploy heartbeat threads) reliably start under
+    gunicorn, same `is_werkzeug_reloader_parent()` guard every one of
+    them uses — see commit 4 in the six-commits section above for the
+    original bug this guard fixed.
+  - **If `SystemConfig.telegram_notifications_enabled` or
+    `telegram_bot_commands_enabled` is turned on**, whatever host runs
+    this app needs outbound HTTPS access to `api.telegram.org` — the Bot
+    API calls are plain `requests` calls (10s timeout on `sendMessage`, up
+    to 35s on the bot-commands thread's `getUpdates` long-poll) with no
+    retry; a network-level block just makes every outbound notification
+    silently fail (logged to Error Logs, never raised into
     the login/reset flow calling it).

@@ -18,7 +18,12 @@ MASIMPLE CICD is an internal Flask web app with four halves:
    wrong-password/lockout/login security alerts for *every* account to one
    designated security-contact user, plus lets any user request a
    forgot-password reset link and self-service-edit their own Full
-   Name/Telegram Chat ID/password from a "My Account" page.
+   Name/Telegram Chat ID/password from a "My Account" page. The same
+   Telegram bot also accepts commands (long-polled, no webhook needed) from
+   any linked+permitted user: `/run` and `/status` to trigger and check a
+   Workflow (see module 4 below), `/review` to approve/reject a paused
+   auto-generated build step, plus automatic push notifications when a
+   Workflow run, or a manually-triggered build/deploy, starts and finishes.
 2. A **Docker Image Builder module** built on top of it — register Git repos
    and container registries, define reusable "Builder" configs, trigger
    versioned builds (single or batched), push images, and auto-generate
@@ -64,7 +69,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | Database | PostgreSQL, UUID primary keys everywhere |
 | Auth | Flask-Login (session-based) + Flask-WTF (CSRF) + Werkzeug password hashing |
 | Frontend | Jinja2 + Tailwind CSS 3 + daisyUI 4 — **no JS framework/SPA**; vanilla JS per page, vendored SortableJS for drag-and-drop |
-| Background work | Python `threading`/`queue` — independent in-process worker threads (one for builds, one for deploys, one deploy live-status poller, one workflow orchestrator), no Celery/Redis |
+| Background work | Python `threading`/`queue` — independent in-process worker threads (one for builds, one for deploys, one deploy live-status poller, one workflow orchestrator, one Telegram bot long-poller), no Celery/Redis |
 | Deployment (of MASIMPLE CICD itself) | Docker (multi-stage: Node build for CSS, then Python/gunicorn `--worker-class gthread --threads 4`), Docker Compose (`web` + `db`) |
 | Git integration | GitPython, provider-abstracted (`GitProvider` → `GitHubProvider`) |
 | Registry integration | docker-py, provider-abstracted (`RegistryProvider` → `DockerHubProvider`/`GHCRProvider`/`HarborProvider`/`ECRProvider`, all implemented) |
@@ -74,8 +79,8 @@ different roles) — not a SaaS product with per-customer isolation.
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
 | AWS SDK | `boto3` — ECR `RegistryProvider` only (SigV4-signed calls, doesn't fit the generic Docker Registry v2 bearer-token flow the other registry providers share) |
 | YAML generation | `PyYAML` — YAML Generator page only; everywhere else in this app deliberately avoids it in favor of dict→`json.dumps()` (JSON is valid YAML) since that output only ever feeds `kubectl apply -f -`, never a human — see `app/services/yaml_generator/render.py` |
-| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 829 tests |
-| Telegram integration | `requests` against the Bot API's `sendMessage` endpoint (`app/services/telegram/`) — security notifications and forgot-password reset links only; no incoming webhook/command listener exists yet |
+| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 943 tests |
+| Telegram integration | `requests` against the Bot API (`app/services/telegram/`) — both directions now: outbound `sendMessage` (security notifications, forgot-password links, workflow/build/deploy start-finish pushes) **and** inbound, via a long-polling `getUpdates` background thread (no webhook/public HTTPS needed) handling `/run`, `/status`, `/review` bot commands and their inline-keyboard callbacks |
 
 ## Architecture conventions
 
@@ -251,9 +256,14 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   restart needed, same pattern as the poll interval). Also: `max_login_attempts`
   (login lockout threshold), `telegram_notifications_enabled` +
   `encrypted_telegram_bot_token` (Fernet-encrypted, same convention as every
-  other stored credential), and `security_notification_user_id` (the one
+  other stored credential), `security_notification_user_id` (the one
   `User` who receives Telegram security alerts for every account — see the
-  RBAC/core section above).
+  RBAC/core section above), and `telegram_bot_commands_enabled` (a
+  **separate** toggle from `telegram_notifications_enabled` — gates the
+  Telegram bot's inbound `/run`/`/status`/`/review` command handling, reusing
+  the same bot token) + `telegram_last_update_id` (persists the Bot API's
+  `getUpdates` offset across restarts so a redeploy doesn't replay
+  already-handled commands).
 
 **Deployment module:**
 - `DeploymentServer` — a registered target: `connection_type` (`kube` or
@@ -339,7 +349,16 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   unseen" rule as `build_prefill.py`)/`suggested_description` until a human
   hits Approve (`workflows.approve_step_run`, which then enqueues the real
   `BuildBatch` with the — possibly edited — values) or Reject
-  (`workflows.reject_step_run`, fails the step).
+  (`workflows.reject_step_run`, fails the step). The same approve/reject
+  decision is also reachable from Telegram: whoever triggered the run gets a
+  push notification with the AI-suggested values and inline Approve/Reject
+  buttons the moment a step pauses, and any `workflow.run` holder can pull up
+  the same thing on demand via the bot's `/review` command — Telegram itself
+  has no form to edit a missing suggestion, so it only approves a step whose
+  Bump Type and Change Type were both confidently suggested, otherwise
+  pointing back to the web review panel. `approve_awaiting_step()`/
+  `reject_awaiting_step()` (`app/services/workflow/worker.py`) hold the one
+  shared implementation both the web route and the Telegram callback call.
 - Every `Workflow` (via its pre-existing `is_active`) plus `Version`,
   `Dockerfile`, `RegistryTarget`, `GitSource`, `DeploymentServer`, `Builder`,
   and `DeploymentManifest` (each with a new `is_active` column) can be
@@ -464,10 +483,11 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   timeout, build engine, duplicate-title toggle, deploy live-status poll
   interval, commit log limit (see the data model section above), plus two
   newer sections — **Security** (max failed login attempts before
-  lockout) and **Telegram Integration** (enable toggle, bot token —
-  write-only, blank on submit keeps the current one — and the Security
-  Notification Recipient dropdown, see the RBAC/core data model section
-  above).
+  lockout) and **Telegram Integration** (enable-notifications toggle, bot
+  token — write-only, blank on submit keeps the current one — the Security
+  Notification Recipient dropdown, and a separate **Enable Telegram Bot
+  Commands** toggle for the `/run`/`/status`/`/review` inbound command
+  handling, see the RBAC/core and Workflow data model sections above).
 - **`/deployment-servers`** — register/edit target servers (kubeconfig or
   custom-agent credentials, never re-shown after save), per-server "Test
   Connection", `allowed_roles` picker, per-row "Kubernetes" link into that
@@ -732,7 +752,11 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   especially careful manual pass on the Form↔YAML toggles and their
   several independent add/remove-row widgets (Ingress paths; NetworkPolicy
   peers and ports, ×2 for Ingress/Egress), and on actually receiving a
-  Telegram message end-to-end against a real bot.
+  Telegram message end-to-end against a real bot. The new inbound
+  `/run`/`/status`/`/review` commands and the manual-build/deploy/
+  Workflow-run push notifications are in the same boat — every test mocks
+  `TelegramNotifier`'s HTTP methods rather than hitting the real Bot API, so
+  none of it has been exercised against an actual Telegram chat yet either.
 - **A responsive-design pass touched 28 templates app-wide** (header rows
   now wrap via `flex flex-wrap ... gap-2`, modal form-field grids now
   collapse to one column below `sm:` instead of staying fixed at 2-3
@@ -744,15 +768,30 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   every Kubernetes-management page) now uses `flex flex-nowrap
   overflow-x-auto` instead, making it a horizontally-scrollable single row.
   Worth remembering for any other `.tabs` bar added later.
-- The Telegram integration (`app/services/telegram/`) only ever sends
-  outbound notifications — there's no incoming webhook or command listener,
-  so it can't yet be used to *trigger* anything (e.g. a Workflow run via a
-  Telegram command). A parallel Discord integration for the same purpose
-  has also not been started. Both were explicitly scoped out ("not for
-  now") when the Telegram notification feature was built; the
-  `SystemConfig`/`User` fields it added (bot token, per-user chat ID) are
-  meant to be reusable for that later rather than needing a parallel set of
-  fields.
+- **The Telegram integration now also handles inbound commands**, not just
+  outbound notifications — a background thread (`app/services/telegram/worker.py`)
+  long-polls the Bot API's `getUpdates` (no public HTTPS/webhook needed,
+  works even for the Podman trial deploy or bare-metal dev), so a
+  `telegram_chat_id`-linked user holding `workflow.run` can `/run` a
+  Workflow (inline-keyboard pick from active, accessible ones), `/status`
+  their own recent runs, and `/review` any build step paused for approval —
+  same authorization rules the web UI already enforces
+  (`Workflow.is_accessible_to`, `workflow.run`). Gated by its own
+  `telegram_bot_commands_enabled` toggle, independent of
+  `telegram_notifications_enabled`. Also new: automatic push notifications
+  when a Workflow run finishes, a review step needs a human, or a
+  *manually*-triggered (non-Workflow) build/deploy starts or finishes — the
+  last two are skipped for a Workflow-driven build/deploy specifically, to
+  avoid double-notifying on top of the Workflow-level one. A parallel
+  Discord integration for the same purpose has still not been started; the
+  `SystemConfig`/`User` fields already in place (bot token, per-user chat
+  ID) were built with that reuse in mind.
+- **Telegram's `/review` approval only ever applies the AI/heuristic's
+  suggested values as-is** — there's no way to edit a suggested Bump
+  Type/Change Type/Object(s)/Description from inside a Telegram chat the
+  way the web review panel's form fields allow; if either Bump Type or
+  Change Type wasn't confidently suggested, `/review`'s Approve button
+  declines and points back to the web UI instead of guessing.
 - Everything runs through a single in-process worker thread per queue (one
   each for builds and deploys, plus the workflow orchestrator, which only
   ever enqueues into those same two queues) — there is no distributed/
