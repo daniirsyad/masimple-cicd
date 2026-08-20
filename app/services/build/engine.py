@@ -174,7 +174,20 @@ KANIKO_EXECUTOR_IMAGE = os.environ.get("KANIKO_EXECUTOR_IMAGE", "gcr.io/kaniko-p
 # (built from REPO_CLONE_ROOT) is only valid inside the build Job's
 # container if it's mounted at this exact same path there too.
 KANIKO_WORKSPACE_MOUNT_PATH = os.environ.get("KANIKO_WORKSPACE_MOUNT_PATH", "/app/data")
-KANIKO_JOB_STATUS_TIMEOUT_SECONDS = 60
+# How long `kubectl logs -f` itself will wait for the Job's pod to actually
+# reach Running before giving up — its own default (20s) is too tight for a
+# cold pull of the kaniko-executor image (or a slow scheduler), and without
+# this flag it doesn't retry at all: it fails immediately with "container
+# ... is waiting to start: ContainerCreating" the moment it's invoked before
+# the container has started, rather than waiting for it.
+KANIKO_POD_RUNNING_TIMEOUT_SECONDS = 300
+# Fallback safety net for _wait_for_job_completion, only actually exercised
+# when log streaming above returns early without a real answer (e.g. it hit
+# its own pod-running-timeout above). Deliberately generous — an actual
+# image build (pull base layers, run every step, push) can take many
+# minutes, and DockerBuildEngine imposes no build-duration timeout of its
+# own either; this is just a last-resort "something is very wrong" cutoff.
+KANIKO_JOB_STATUS_TIMEOUT_SECONDS = 3600
 KANIKO_JOB_STATUS_POLL_INTERVAL_SECONDS = 2
 SERVICE_ACCOUNT_NAMESPACE_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
@@ -364,7 +377,10 @@ class KanikoBuildEngine(BuildEngine):
             raise RuntimeError((process.stderr or "").strip() or "kubectl apply exited non-zero.")
 
     def _stream_job_logs(self, job_name, namespace, emit):
-        argv = [KUBECTL_PATH, "logs", "-f", f"job/{job_name}", "-n", namespace]
+        argv = [
+            KUBECTL_PATH, "logs", "-f", f"job/{job_name}", "-n", namespace,
+            f"--pod-running-timeout={KANIKO_POD_RUNNING_TIMEOUT_SECONDS}s",
+        ]
         try:
             process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         except OSError as exc:

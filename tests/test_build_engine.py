@@ -396,7 +396,12 @@ class TestKanikoBuildEngine:
         assert job_manifest["spec"]["template"]["spec"]["volumes"][0]["hostPath"]["path"] == "/mnt/data"
         assert "nodeName" not in job_manifest["spec"]["template"]["spec"]
 
-        assert log_calls == [["kubectl", "logs", "-f", f"job/{job_manifest['metadata']['name']}", "-n", "test-ns"]]
+        assert log_calls == [
+            [
+                "kubectl", "logs", "-f", f"job/{job_manifest['metadata']['name']}", "-n", "test-ns",
+                "--pod-running-timeout=300s",
+            ]
+        ]
 
         deletes = {(c["argv"][2], c["argv"][3]) for c in calls if c["argv"][1] == "delete"}
         assert deletes == {("job", job_manifest["metadata"]["name"]), ("secret", secret_manifest["metadata"]["name"])}
