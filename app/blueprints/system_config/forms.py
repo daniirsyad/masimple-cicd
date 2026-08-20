@@ -6,17 +6,18 @@ from wtforms.validators import DataRequired, Length, NumberRange, Optional
 
 TIMEZONE_CHOICES = [(tz, tz) for tz in sorted(zoneinfo.available_timezones())]
 
-# "kaniko" deliberately left out of the selectable choices — see
-# app/services/build/factory.py's _ENGINES for why (kaniko-executor has no
-# daemon/chroot of its own; running it as a raw subprocess of this app, like
-# KanikoBuildEngine currently does, extracts each FROM image's layers
-# directly onto *this app's own* running container filesystem, corrupting
-# it — confirmed in practice: a Kaniko build overwrote /etc/os-release and
-# dropped Alpine binaries into a live app container). The KanikoBuildEngine
-# implementation itself is untouched, just not reachable through this form,
-# pending a rewrite that runs it in its own throwaway container instead.
+# "docker" shells out to `docker buildx build` against a mounted Docker
+# socket — needs a real Docker daemon (or Docker-API-compatible one, e.g.
+# Podman's) reachable from this app's own container. "kaniko" instead
+# launches kaniko-executor as its own Kubernetes Job (see KanikoBuildEngine,
+# app/services/build/engine.py) — no daemon/socket of any kind needed, so
+# it's the engine to pick on a cluster (e.g. CRI-O-backed) that doesn't
+# expose a Docker-compatible socket at all. Needs the app pod's own
+# ServiceAccount to have Job/Secret permissions in its namespace, and
+# KANIKO_WORKSPACE_HOST_PATH set — see k8s/deployment.yaml.
 BUILD_ENGINE_CHOICES = [
     ("docker", "Docker"),
+    ("kaniko", "Kaniko (Kubernetes Job)"),
 ]
 
 

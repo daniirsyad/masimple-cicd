@@ -17,6 +17,56 @@ stringData:
   ADMIN_USERNAME: "admin"
   ADMIN_PASSWORD: "<CHOOSE_A_FIRST_LOGIN_PASSWORD>"
 ---
+# Only needed if SystemConfig.build_engine is set to "kaniko" (the engine
+# for clusters, e.g. CRI-O-backed, with no Docker-compatible socket to mount
+# — see app/services/build/engine.py's KanikoBuildEngine). It launches/
+# watches/tears down a short-lived Job (and a per-build regcred Secret) in
+# this same namespace for every image build, which needs its own
+# permissions beyond what the "default" ServiceAccount has. Not needed if
+# you're only ever using build_engine "docker".
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: masimple-cicd-builder
+  namespace: masimple-cicd
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: masimple-cicd-kaniko-builder
+  namespace: masimple-cicd
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  # "create"/"delete" on Secrets is scoped to this Role, but Kubernetes RBAC
+  # has no by-name-prefix restriction for "create" — this grants the
+  # ability to create/delete *any* Secret in this namespace, not just the
+  # "<job-name>-regcred" ones KanikoBuildEngine actually manages. Acceptable
+  # here since this ServiceAccount is only ever mounted into this app's own
+  # trusted pod, same permission-gated-internal-tool posture as the
+  # docker.sock mount in docker-compose.yml.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: masimple-cicd-kaniko-builder
+  namespace: masimple-cicd
+subjects:
+  - kind: ServiceAccount
+    name: masimple-cicd-builder
+    namespace: masimple-cicd
+roleRef:
+  kind: Role
+  name: masimple-cicd-kaniko-builder
+  apiGroup: rbac.authorization.k8s.io
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -34,6 +84,10 @@ spec:
       labels:
         app: masimple-cicd
     spec:
+      # Only actually required if build_engine is "kaniko" — see the
+      # ServiceAccount/Role/RoleBinding above. Harmless to leave set
+      # otherwise (it just goes unused by the "docker" build engine).
+      serviceAccountName: masimple-cicd-builder
       containers:
         - name: web
           image: "<YOUR_REGISTRY>/masimple-cicd:<TAG>"
@@ -42,6 +96,24 @@ spec:
           env:
             - name: FLASK_ENV
               value: "production"
+            # Only read by the "kaniko" build engine, to pin its per-build
+            # Job's pod to this exact node (a hostPath volume is
+            # node-local, so the Job must land wherever this pod actually
+            # is right now, not wherever the scheduler would otherwise
+            # pick) — see KanikoBuildEngine in
+            # app/services/build/engine.py. Ignored entirely by "docker".
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # Only read by the "kaniko" build engine — must be set to the
+            # exact same host-side path as this Deployment's own "app-data"
+            # hostPath volume below, so the build Job's pod can mount the
+            # identical directory (and see the same repo clones this pod
+            # already produced under it). Leave unset if only ever using
+            # build_engine "docker".
+            - name: KANIKO_WORKSPACE_HOST_PATH
+              value: "<NODE_LOCAL_PATH_FOR_APP_DATA>"
           envFrom:
             - secretRef:
                 name: masimple-cicd-secrets

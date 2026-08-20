@@ -1,6 +1,5 @@
 import base64
 import json
-import os
 
 import docker
 import pytest
@@ -257,7 +256,7 @@ class _FakeRegistryProvider:
         self.docker_config_auth_key = docker_config_auth_key or registry_host
 
 
-class FakeKanikoProcess:
+class FakeKanikoLogProcess:
     def __init__(self, lines, returncode=0):
         self.stdout = iter(lines)
         self._final_returncode = returncode
@@ -266,6 +265,40 @@ class FakeKanikoProcess:
     def wait(self):
         self.returncode = self._final_returncode
         return self.returncode
+
+
+class FakeCompletedProcess:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _make_fake_run(job_status="succeeded"):
+    """A kubectl-shaped fake for subprocess.run, dispatching on the
+    subcommand (argv[1]: apply/get/delete) the way the real
+    KanikoBuildEngine actually calls it. `calls` records every invocation
+    for assertions; `job_status` controls what a "get job" call reports
+    (succeeded/failed/pending, the last leaving status empty).
+    """
+    calls = []
+
+    def fake_run(argv, input=None, capture_output=True, text=True, timeout=None):
+        calls.append({"argv": argv, "input": input})
+        if argv[1] == "apply":
+            return FakeCompletedProcess(returncode=0)
+        if argv[1] == "get":
+            status = {}
+            if job_status == "succeeded":
+                status["succeeded"] = 1
+            elif job_status == "failed":
+                status["failed"] = 1
+            return FakeCompletedProcess(returncode=0, stdout=json.dumps({"status": status}))
+        if argv[1] == "delete":
+            return FakeCompletedProcess(returncode=0)
+        raise AssertionError(f"unexpected kubectl call: {argv}")
+
+    return calls, fake_run
 
 
 class TestKanikoBuildEngine:
@@ -281,16 +314,60 @@ class TestKanikoBuildEngine:
         with pytest.raises(ValueError):
             engine.build_image("/ctx", "Dockerfile", ["x:1"])
 
-    def test_successful_build_returns_pushed_result_and_writes_docker_config(self, monkeypatch):
-        captured = {}
+    def test_missing_workspace_host_path_returns_failure_without_any_kubectl_call(self, monkeypatch):
+        monkeypatch.delenv("KANIKO_WORKSPACE_HOST_PATH", raising=False)
+        calls, fake_run = _make_fake_run()
+        monkeypatch.setattr("app.services.build.engine.subprocess.run", fake_run)
 
-        def fake_popen(argv, stdout=None, stderr=None, text=None, env=None):
-            with open(os.path.join(env["DOCKER_CONFIG"], "config.json")) as config_file:
-                captured["config"] = json.load(config_file)
-            captured["argv"] = argv
-            return FakeKanikoProcess(["Pushed image\n"], returncode=0)
+        engine = KanikoBuildEngine()
+        result = engine.build_image(
+            "/ctx", "Dockerfile", ["x:1"], registry_provider=_FakeRegistryProvider(), push_repository="repo/x"
+        )
+
+        assert result.success is False
+        assert "KANIKO_WORKSPACE_HOST_PATH" in result.error
+        assert calls == []
+
+    def test_undeterminable_namespace_returns_failure(self, monkeypatch):
+        monkeypatch.setenv("KANIKO_WORKSPACE_HOST_PATH", "/mnt/data")
+        monkeypatch.setattr(
+            "app.services.build.engine.KanikoBuildEngine._namespace",
+            lambda self: (_ for _ in ()).throw(RuntimeError("Could not determine the current Kubernetes namespace")),
+        )
+        calls, fake_run = _make_fake_run()
+        monkeypatch.setattr("app.services.build.engine.subprocess.run", fake_run)
+
+        engine = KanikoBuildEngine()
+        result = engine.build_image(
+            "/ctx", "Dockerfile", ["x:1"], registry_provider=_FakeRegistryProvider(), push_repository="repo/x"
+        )
+
+        assert result.success is False
+        assert "namespace" in result.error
+        assert calls == []
+
+    def _prepare(self, monkeypatch, job_status="succeeded", log_lines=("Pushed image\n",), node_name=None):
+        monkeypatch.setenv("KANIKO_WORKSPACE_HOST_PATH", "/mnt/data")
+        if node_name is None:
+            monkeypatch.delenv("NODE_NAME", raising=False)
+        else:
+            monkeypatch.setenv("NODE_NAME", node_name)
+        monkeypatch.setattr("app.services.build.engine.KanikoBuildEngine._namespace", lambda self: "test-ns")
+
+        calls, fake_run = _make_fake_run(job_status=job_status)
+        monkeypatch.setattr("app.services.build.engine.subprocess.run", fake_run)
+
+        log_calls = []
+
+        def fake_popen(argv, stdout=None, stderr=None, text=None):
+            log_calls.append(argv)
+            return FakeKanikoLogProcess(list(log_lines), returncode=0)
 
         monkeypatch.setattr("app.services.build.engine.subprocess.Popen", fake_popen)
+        return calls, log_calls
+
+    def test_successful_build_returns_pushed_result_and_applies_docker_config_secret(self, monkeypatch):
+        calls, log_calls = self._prepare(monkeypatch)
 
         engine = KanikoBuildEngine()
         result = engine.build_image(
@@ -303,13 +380,26 @@ class TestKanikoBuildEngine:
 
         assert result.success is True
         assert result.pushed is True
-        assert "--destination=myuser/myapp:1.0.0" in captured["argv"]
-        assert "--context=dir:///ctx" in captured["argv"]
-        assert "--dockerfile=Dockerfile" in captured["argv"]
 
-        auth_entry = captured["config"]["auths"]["registry-1.docker.io"]
+        applies = [json.loads(c["input"]) for c in calls if c["argv"][1] == "apply"]
+        secret_manifest = next(m for m in applies if m["kind"] == "Secret")
+        job_manifest = next(m for m in applies if m["kind"] == "Job")
+
+        auth_entry = json.loads(secret_manifest["stringData"]["config.json"])["auths"]["registry-1.docker.io"]
         decoded = base64.b64decode(auth_entry["auth"]).decode()
         assert decoded == "myuser:mypass"
+
+        container = job_manifest["spec"]["template"]["spec"]["containers"][0]
+        assert "--destination=myuser/myapp:1.0.0" in container["args"]
+        assert "--context=dir:///ctx" in container["args"]
+        assert "--dockerfile=Dockerfile" in container["args"]
+        assert job_manifest["spec"]["template"]["spec"]["volumes"][0]["hostPath"]["path"] == "/mnt/data"
+        assert "nodeName" not in job_manifest["spec"]["template"]["spec"]
+
+        assert log_calls == [["kubectl", "logs", "-f", f"job/{job_manifest['metadata']['name']}", "-n", "test-ns"]]
+
+        deletes = {(c["argv"][2], c["argv"][3]) for c in calls if c["argv"][1] == "delete"}
+        assert deletes == {("job", job_manifest["metadata"]["name"]), ("secret", secret_manifest["metadata"]["name"])}
 
     def test_writes_docker_config_keyed_by_docker_config_auth_key_not_registry_host(self, monkeypatch):
         """A real DockerHubProvider's docker_config_auth_key differs from its
@@ -317,19 +407,12 @@ class TestKanikoBuildEngine:
         find credentials for an unqualified Docker Hub push (see
         test_registry_provider.py::TestDockerConfigAuthKey).
         """
-        captured = {}
-
-        def fake_popen(argv, stdout=None, stderr=None, text=None, env=None):
-            with open(os.path.join(env["DOCKER_CONFIG"], "config.json")) as config_file:
-                captured["config"] = json.load(config_file)
-            return FakeKanikoProcess(["Pushed image\n"], returncode=0)
-
-        monkeypatch.setattr("app.services.build.engine.subprocess.Popen", fake_popen)
-
+        calls, _ = self._prepare(monkeypatch)
         provider = _FakeRegistryProvider(
             registry_host="registry-1.docker.io",
             docker_config_auth_key="https://index.docker.io/v1/",
         )
+
         engine = KanikoBuildEngine()
         engine.build_image(
             context_dir="/ctx",
@@ -339,17 +422,13 @@ class TestKanikoBuildEngine:
             push_repository="myuser/myapp",
         )
 
-        assert "https://index.docker.io/v1/" in captured["config"]["auths"]
-        assert "registry-1.docker.io" not in captured["config"]["auths"]
+        secret_manifest = next(json.loads(c["input"]) for c in calls if c["argv"][1] == "apply" and "regcred" in json.loads(c["input"])["metadata"]["name"])
+        auths = json.loads(secret_manifest["stringData"]["config.json"])["auths"]
+        assert "https://index.docker.io/v1/" in auths
+        assert "registry-1.docker.io" not in auths
 
     def test_build_args_are_forwarded_as_flags(self, monkeypatch):
-        captured = {}
-
-        def fake_popen(argv, **kwargs):
-            captured["argv"] = argv
-            return FakeKanikoProcess([], returncode=0)
-
-        monkeypatch.setattr("app.services.build.engine.subprocess.Popen", fake_popen)
+        calls, _ = self._prepare(monkeypatch)
 
         engine = KanikoBuildEngine()
         engine.build_image(
@@ -361,13 +440,22 @@ class TestKanikoBuildEngine:
             push_repository="repo/x",
         )
 
-        assert "--build-arg=VERSION=1.2.3" in captured["argv"]
+        job_manifest = next(json.loads(c["input"]) for c in calls if c["argv"][1] == "apply" and json.loads(c["input"])["kind"] == "Job")
+        assert "--build-arg=VERSION=1.2.3" in job_manifest["spec"]["template"]["spec"]["containers"][0]["args"]
+
+    def test_node_name_env_var_pins_the_job_to_the_current_node(self, monkeypatch):
+        calls, _ = self._prepare(monkeypatch, node_name="worker-1")
+
+        engine = KanikoBuildEngine()
+        engine.build_image(
+            "/ctx", "Dockerfile", ["x:1"], registry_provider=_FakeRegistryProvider(), push_repository="repo/x"
+        )
+
+        job_manifest = next(json.loads(c["input"]) for c in calls if c["argv"][1] == "apply" and json.loads(c["input"])["kind"] == "Job")
+        assert job_manifest["spec"]["template"]["spec"]["nodeName"] == "worker-1"
 
     def test_streams_log_lines(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.services.build.engine.subprocess.Popen",
-            lambda argv, **kwargs: FakeKanikoProcess(["line1\n", "line2\n"], returncode=0),
-        )
+        self._prepare(monkeypatch, log_lines=["line1\n", "line2\n"])
 
         engine = KanikoBuildEngine()
         seen_lines = []
@@ -382,11 +470,8 @@ class TestKanikoBuildEngine:
 
         assert seen_lines == ["line1\n", "line2\n"]
 
-    def test_nonzero_exit_code_returns_failure(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.services.build.engine.subprocess.Popen",
-            lambda argv, **kwargs: FakeKanikoProcess(["error building\n"], returncode=1),
-        )
+    def test_job_reporting_failed_returns_failure_and_still_cleans_up(self, monkeypatch):
+        calls, _ = self._prepare(monkeypatch, job_status="failed")
 
         engine = KanikoBuildEngine()
         result = engine.build_image(
@@ -395,9 +480,62 @@ class TestKanikoBuildEngine:
 
         assert result.success is False
         assert result.pushed is False
-        assert "exited with code 1" in result.error
+        assert "did not complete successfully" in result.error
+        assert any(c["argv"][1] == "delete" and c["argv"][2] == "job" for c in calls)
+        assert any(c["argv"][1] == "delete" and c["argv"][2] == "secret" for c in calls)
 
-    def test_missing_executor_binary_returns_failure_without_raising(self, monkeypatch):
+    def test_job_status_timeout_returns_failure(self, monkeypatch):
+        # "pending" leaves status {} forever — never succeeded, never failed
+        # — so _wait_for_job_completion must eventually give up rather than
+        # loop forever. Shrunk to near-zero so the test itself stays fast.
+        monkeypatch.setattr("app.services.build.engine.KANIKO_JOB_STATUS_TIMEOUT_SECONDS", 0.05)
+        monkeypatch.setattr("app.services.build.engine.KANIKO_JOB_STATUS_POLL_INTERVAL_SECONDS", 0.01)
+        self._prepare(monkeypatch, job_status="pending")
+
+        engine = KanikoBuildEngine()
+        result = engine.build_image(
+            "/ctx", "Dockerfile", ["x:1"], registry_provider=_FakeRegistryProvider(), push_repository="repo/x"
+        )
+
+        assert result.success is False
+        assert "Timed out" in result.error
+
+    def test_kubectl_apply_nonzero_exit_returns_failure_without_raising(self, monkeypatch):
+        monkeypatch.setenv("KANIKO_WORKSPACE_HOST_PATH", "/mnt/data")
+        monkeypatch.setattr("app.services.build.engine.KanikoBuildEngine._namespace", lambda self: "test-ns")
+        monkeypatch.setattr(
+            "app.services.build.engine.subprocess.run",
+            lambda argv, **kwargs: FakeCompletedProcess(returncode=1, stderr="secrets is forbidden"),
+        )
+
+        engine = KanikoBuildEngine()
+        result = engine.build_image(
+            "/ctx", "Dockerfile", ["x:1"], registry_provider=_FakeRegistryProvider(), push_repository="repo/x"
+        )
+
+        assert result.success is False
+        assert "forbidden" in result.error
+
+    def test_missing_kubectl_binary_returns_failure_without_raising(self, monkeypatch):
+        monkeypatch.setenv("KANIKO_WORKSPACE_HOST_PATH", "/mnt/data")
+        monkeypatch.setattr("app.services.build.engine.KanikoBuildEngine._namespace", lambda self: "test-ns")
+
+        def fake_run(argv, **kwargs):
+            raise OSError("No such file or directory")
+
+        monkeypatch.setattr("app.services.build.engine.subprocess.run", fake_run)
+
+        engine = KanikoBuildEngine()
+        result = engine.build_image(
+            "/ctx", "Dockerfile", ["x:1"], registry_provider=_FakeRegistryProvider(), push_repository="repo/x"
+        )
+
+        assert result.success is False
+        assert "kubectl apply failed to start" in result.error
+
+    def test_missing_kubectl_for_log_streaming_returns_failure_without_raising(self, monkeypatch):
+        calls, _ = self._prepare(monkeypatch)
+
         def fake_popen(argv, **kwargs):
             raise OSError("No such file or directory")
 
@@ -409,4 +547,8 @@ class TestKanikoBuildEngine:
         )
 
         assert result.success is False
-        assert "Failed to start kaniko-executor" in result.error
+        assert "Failed to start kubectl logs" in result.error
+        # Cleanup still runs even though the build itself never got a
+        # verdict — the Job/Secret it already created must not be
+        # abandoned in the cluster.
+        assert any(c["argv"][1] == "delete" and c["argv"][2] == "job" for c in calls)

@@ -23,9 +23,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     FLASK_APP=run.py
 
 # git: needed by GitPython to clone source repos for the image builder.
-# ca-certificates: required by kaniko-executor (a static Go binary with no
-#   bundled cert store of its own) to verify registry TLS when the "kaniko"
-#   build engine pushes images — not otherwise guaranteed present on -slim.
 # curl: only needed transiently, to fetch the kubectl binary below.
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
@@ -34,9 +31,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 # shells out to `kubectl` for every action against a registered Kubernetes
 # DeploymentServer — test-connection, apply/delete, pods/secrets/configmaps
 # management, rollout restarts — same "shell out to the real CLI, don't
-# reimplement its protocol" precedent as the docker CLI/kaniko-executor
-# below. Not present on python:3.12-slim by default; installed from the
-# official release URL and pinned to a specific version, same as those.
+# reimplement its protocol" precedent as the docker CLI below. Also used by
+# the "kaniko" build engine (KanikoBuildEngine, app/services/build/engine.py)
+# to launch/watch/tear down a Kubernetes Job that runs the *official*
+# kaniko-executor image as its own pod — not a copy of that binary in this
+# image (an earlier version of KanikoBuildEngine ran kaniko-executor as a
+# bare subprocess sharing this app's own root filesystem, which corrupted a
+# live app container mid-build; running it as its own pod avoids that
+# entirely, so there's nothing kaniko-related to install here anymore).
+# Not present on python:3.12-slim by default; installed from the official
+# release URL and pinned to a specific version, same as the docker CLI below.
 ARG KUBECTL_VERSION=v1.30.4
 RUN curl -fsSL -o /usr/local/bin/kubectl \
       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/$(dpkg --print-architecture)/kubectl" \
@@ -49,13 +53,6 @@ RUN curl -fsSL -o /usr/local/bin/kubectl \
 # buildx plugin, so it's copied from the official docker CLI image instead.
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker:27-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
-
-# kaniko-executor: daemonless build+push engine, an alternative to the
-# docker CLI above for environments where mounting /var/run/docker.sock
-# isn't possible/desired (see "kaniko" in SystemConfig.build_engine). Copied
-# as a single static binary from kaniko's own (scratch-based) image rather
-# than installed via a package manager — that's the whole image's contents.
-COPY --from=gcr.io/kaniko-project/executor:v1.23.2 /kaniko/executor /kaniko/executor
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

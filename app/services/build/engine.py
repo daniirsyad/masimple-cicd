@@ -1,7 +1,8 @@
 import json
 import os
 import subprocess
-import tempfile
+import time
+import uuid
 from abc import ABC, abstractmethod
 from base64 import b64encode
 from dataclasses import dataclass
@@ -166,15 +167,46 @@ class DockerBuildEngine(BuildEngine):
             return None, None
 
 
-class KanikoBuildEngine(BuildEngine):
-    """Builds (and pushes) via the `kaniko-executor` binary — no Docker
-    daemon, no docker.sock, no privileged/overlay filesystem requirements.
-    Kaniko builds and pushes in one step, so unlike DockerBuildEngine this
-    needs registry credentials up front rather than after a successful build;
-    `BuildResult.pushed` comes back True so the worker knows not to push again.
-    """
+KUBECTL_PATH = os.environ.get("KUBECTL_PATH", "kubectl")
+KANIKO_EXECUTOR_IMAGE = os.environ.get("KANIKO_EXECUTOR_IMAGE", "gcr.io/kaniko-project/executor:v1.23.2")
+# Must match the mountPath the app's own Deployment already uses for its
+# REPO_CLONE_ROOT-backed volume (see k8s/deployment.yaml) — context_dir
+# (built from REPO_CLONE_ROOT) is only valid inside the build Job's
+# container if it's mounted at this exact same path there too.
+KANIKO_WORKSPACE_MOUNT_PATH = os.environ.get("KANIKO_WORKSPACE_MOUNT_PATH", "/app/data")
+KANIKO_JOB_STATUS_TIMEOUT_SECONDS = 60
+KANIKO_JOB_STATUS_POLL_INTERVAL_SECONDS = 2
+SERVICE_ACCOUNT_NAMESPACE_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
-    EXECUTOR_PATH = os.environ.get("KANIKO_EXECUTOR_PATH", "/kaniko/executor")
+
+class KanikoBuildEngine(BuildEngine):
+    """Builds (and pushes) by launching `kaniko-executor` as its own
+    Kubernetes Job, in the same cluster/namespace this app's own pod runs
+    in — not as a subprocess of this app. An earlier version of this class
+    ran kaniko-executor as a bare subprocess, which shared this app's own
+    root filesystem with it (kaniko has no daemon/chroot of its own and
+    extracts each FROM image's layers directly onto whatever filesystem the
+    executor process is running in) and corrupted a live app container
+    mid-build. Running it as its own pod instead gives it real filesystem
+    isolation, with no Docker/CRI daemon or socket needed at all — this is
+    the build engine for clusters (e.g. CRI-O) that don't expose one.
+
+    Needs the app pod's own ServiceAccount to be able to create/get/delete
+    Jobs, Pods, pods/log, and Secrets in its own namespace (see
+    k8s/deployment.yaml). Shares the exact same hostPath-backed volume the
+    app's own Deployment already mounts (KANIKO_WORKSPACE_HOST_PATH must be
+    set to that same host path) at KANIKO_WORKSPACE_MOUNT_PATH, so the
+    build Job's pod sees the identical repo clone (including any
+    managed-Dockerfile file already written into it — see
+    worker._resolve_dockerfile_path) that `context_dir` already points at,
+    with no separate context-transfer step. Pinned to the exact node the
+    app pod is currently scheduled on via the Downward-API-sourced
+    NODE_NAME env var, since a hostPath is node-local.
+
+    `BuildResult.pushed` comes back True (like the old subprocess version)
+    since kaniko builds and pushes in one step — the worker knows not to
+    push again.
+    """
 
     def build_image(
         self,
@@ -194,9 +226,6 @@ class KanikoBuildEngine(BuildEngine):
                 "registry_provider and push_repository to do so."
             )
 
-        tag_name = tags[0].rpartition(":")[2]
-        destination = f"{push_repository}:{tag_name}"
-
         log_lines = []
 
         def _emit(line):
@@ -204,43 +233,182 @@ class KanikoBuildEngine(BuildEngine):
             if on_log_line:
                 on_log_line(line)
 
-        with tempfile.TemporaryDirectory() as config_dir:
-            self._write_docker_config(config_dir, registry_provider)
-
-            argv = [
-                self.EXECUTOR_PATH,
-                f"--context=dir://{context_dir}",
-                f"--dockerfile={dockerfile_path}",
-                f"--destination={destination}",
-            ]
-            for key, value in (build_args or {}).items():
-                argv.append(f"--build-arg={key}={value}")
-
-            env = {**os.environ, "DOCKER_CONFIG": config_dir}
-
-            try:
-                process = subprocess.Popen(
-                    argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env
-                )
-            except OSError as exc:
-                error = f"Failed to start kaniko-executor: {exc}"
-                _emit(f"ERROR: {error}\n")
-                return BuildResult(success=False, image_id=None, tags=tags, log="".join(log_lines), error=error)
-
-            for line in process.stdout:
-                _emit(line)
-            process.wait()
-
-        if process.returncode != 0:
-            error = f"kaniko-executor exited with code {process.returncode}"
+        def _fail(error):
+            _emit(f"ERROR: {error}\n")
             return BuildResult(success=False, image_id=None, tags=tags, log="".join(log_lines), error=error)
+
+        host_path = os.environ.get("KANIKO_WORKSPACE_HOST_PATH")
+        if not host_path:
+            return _fail("KANIKO_WORKSPACE_HOST_PATH is not set — required to mount the build context into the Job.")
+
+        try:
+            namespace = self._namespace()
+        except RuntimeError as exc:
+            return _fail(str(exc))
+
+        tag_name = tags[0].rpartition(":")[2]
+        destination = f"{push_repository}:{tag_name}"
+        job_name = f"kaniko-build-{uuid.uuid4().hex[:16]}"
+        secret_name = f"{job_name}-regcred"
+
+        try:
+            self._apply_secret(secret_name, namespace, registry_provider)
+            self._apply_job(
+                job_name, namespace, host_path, context_dir, dockerfile_path, destination,
+                build_args or {}, secret_name,
+            )
+        except RuntimeError as exc:
+            self._cleanup(job_name, secret_name, namespace, log_lines)
+            return _fail(str(exc))
+
+        try:
+            self._stream_job_logs(job_name, namespace, _emit)
+            success = self._wait_for_job_completion(job_name, namespace)
+        except RuntimeError as exc:
+            self._cleanup(job_name, secret_name, namespace, log_lines)
+            return _fail(str(exc))
+
+        self._cleanup(job_name, secret_name, namespace, log_lines)
+
+        if not success:
+            return _fail(f"Kaniko build Job {job_name} did not complete successfully.")
 
         return BuildResult(success=True, image_id=None, tags=tags, log="".join(log_lines), pushed=True)
 
-    def _write_docker_config(self, config_dir, registry_provider):
-        auth = b64encode(
-            f"{registry_provider.username}:{registry_provider.password}".encode()
-        ).decode()
-        config = {"auths": {registry_provider.docker_config_auth_key: {"auth": auth}}}
-        with open(os.path.join(config_dir, "config.json"), "w") as config_file:
-            json.dump(config, config_file)
+    def _namespace(self):
+        if os.path.exists(SERVICE_ACCOUNT_NAMESPACE_FILE):
+            with open(SERVICE_ACCOUNT_NAMESPACE_FILE) as namespace_file:
+                return namespace_file.read().strip()
+        namespace = os.environ.get("KUBERNETES_NAMESPACE")
+        if not namespace:
+            raise RuntimeError(
+                "Could not determine the current Kubernetes namespace (no in-cluster "
+                "service account token found, and KUBERNETES_NAMESPACE isn't set)."
+            )
+        return namespace
+
+    def _apply_secret(self, secret_name, namespace, registry_provider):
+        auth = b64encode(f"{registry_provider.username}:{registry_provider.password}".encode()).decode()
+        docker_config = {"auths": {registry_provider.docker_config_auth_key: {"auth": auth}}}
+        self._apply(
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "type": "Opaque",
+                "metadata": {"name": secret_name, "namespace": namespace},
+                "stringData": {"config.json": json.dumps(docker_config)},
+            }
+        )
+
+    def _apply_job(
+        self, job_name, namespace, host_path, context_dir, dockerfile_path, destination, build_args, secret_name
+    ):
+        args = [
+            f"--context=dir://{context_dir}",
+            f"--dockerfile={dockerfile_path}",
+            f"--destination={destination}",
+        ]
+        for key, value in build_args.items():
+            args.append(f"--build-arg={key}={value}")
+
+        pod_spec = {
+            "restartPolicy": "Never",
+            "containers": [
+                {
+                    "name": "kaniko",
+                    "image": KANIKO_EXECUTOR_IMAGE,
+                    "args": args,
+                    "volumeMounts": [
+                        {"name": "workspace", "mountPath": KANIKO_WORKSPACE_MOUNT_PATH},
+                        {"name": "docker-config", "mountPath": "/kaniko/.docker"},
+                    ],
+                }
+            ],
+            "volumes": [
+                {"name": "workspace", "hostPath": {"path": host_path, "type": "Directory"}},
+                {"name": "docker-config", "secret": {"secretName": secret_name}},
+            ],
+        }
+        # A hostPath volume is node-local — this Job's pod must land on the
+        # exact same node the app pod is on right now, not wherever the
+        # scheduler would otherwise pick.
+        node_name = os.environ.get("NODE_NAME")
+        if node_name:
+            pod_spec["nodeName"] = node_name
+
+        self._apply(
+            {
+                "apiVersion": "batch/v1",
+                "kind": "Job",
+                "metadata": {"name": job_name, "namespace": namespace},
+                "spec": {
+                    "backoffLimit": 0,
+                    "ttlSecondsAfterFinished": 300,
+                    "template": {"spec": pod_spec},
+                },
+            }
+        )
+
+    def _apply(self, manifest):
+        try:
+            # JSON is valid YAML — `kubectl apply -f -` accepts it directly,
+            # same rationale as KubernetesProvider.create_namespace/create_secret
+            # for not hand-building YAML text or adding a PyYAML dependency.
+            process = subprocess.run(
+                [KUBECTL_PATH, "apply", "-f", "-"], input=json.dumps(manifest), capture_output=True, text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"kubectl apply failed to start: {exc}") from None
+        if process.returncode != 0:
+            raise RuntimeError((process.stderr or "").strip() or "kubectl apply exited non-zero.")
+
+    def _stream_job_logs(self, job_name, namespace, emit):
+        argv = [KUBECTL_PATH, "logs", "-f", f"job/{job_name}", "-n", namespace]
+        try:
+            process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        except OSError as exc:
+            raise RuntimeError(f"Failed to start kubectl logs: {exc}") from None
+        for line in process.stdout:
+            emit(line)
+        process.wait()
+        # kubectl logs' own exit code only reflects whether it could attach
+        # and stream at all, not the built container's exit code — the
+        # Job's actual outcome is checked separately, in
+        # _wait_for_job_completion, right after this returns.
+
+    def _wait_for_job_completion(self, job_name, namespace):
+        deadline = time.monotonic() + KANIKO_JOB_STATUS_TIMEOUT_SECONDS
+        while True:
+            try:
+                process = subprocess.run(
+                    [KUBECTL_PATH, "get", "job", job_name, "-n", namespace, "-o", "json"],
+                    capture_output=True, text=True, timeout=15,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise RuntimeError(f"Could not check build Job status: {exc}") from None
+            if process.returncode != 0:
+                raise RuntimeError((process.stderr or "").strip() or "kubectl get job failed.")
+
+            status = json.loads(process.stdout).get("status", {})
+            if status.get("succeeded", 0) >= 1:
+                return True
+            if status.get("failed", 0) >= 1:
+                return False
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"Timed out waiting for build Job {job_name} to report a final status.")
+            time.sleep(KANIKO_JOB_STATUS_POLL_INTERVAL_SECONDS)
+
+    def _cleanup(self, job_name, secret_name, namespace, log_lines):
+        """Best-effort: a failed cleanup is a stray Job/Secret left behind
+        in the cluster, not a reason to also fail an otherwise-already-
+        decided build result.
+        """
+        for kind, name in (("job", job_name), ("secret", secret_name)):
+            try:
+                subprocess.run(
+                    [KUBECTL_PATH, "delete", kind, name, "-n", namespace, "--ignore-not-found=true"],
+                    capture_output=True, text=True, timeout=30,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                log_lines.append(f"\nWARNING: failed to clean up {kind}/{name}: {exc}\n")

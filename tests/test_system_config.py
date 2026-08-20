@@ -102,7 +102,7 @@ class TestIndexPage:
     def test_post_updates_build_engine(self, config_client, app):
         with app.app_context():
             config = get_system_config()
-            config.build_engine = "kaniko"  # pre-existing value, bypassing the form's choices
+            config.build_engine = "kaniko"
             db.session.commit()
 
         response = config_client.post(
@@ -115,11 +115,10 @@ class TestIndexPage:
         with app.app_context():
             assert get_system_config().build_engine == "docker"
 
-    def test_post_rejects_kaniko_as_not_a_valid_choice(self, config_client, app):
-        """"kaniko" was removed from BUILD_ENGINE_CHOICES after it corrupted
-        a live app container's filesystem mid-build — see
-        app/blueprints/system_config/forms.py. Submitting it should fail
-        validation, not silently save it.
+    def test_post_accepts_kaniko_as_a_valid_choice(self, config_client, app):
+        """"kaniko" runs as its own Kubernetes Job (see KanikoBuildEngine,
+        app/services/build/engine.py) rather than a bare subprocess of this
+        app, so — unlike before — it's a normal, selectable Build Engine.
         """
         with app.app_context():
             assert get_system_config().build_engine == "docker"
@@ -132,7 +131,7 @@ class TestIndexPage:
         assert response.status_code == 200
 
         with app.app_context():
-            assert get_system_config().build_engine == "docker"
+            assert get_system_config().build_engine == "kaniko"
 
     def test_post_can_enable_hide_navbar_title(self, config_client, app):
         response = config_client.post(
