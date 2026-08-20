@@ -13,11 +13,14 @@ from app.utils.system_config import get_system_config
 def compute_build_prefill(builder_branches, additional_description=None):
     """Syncs each (Builder, branch)'s repo, reads every commit since that
     pair's last successful build, and returns a heuristic Bump Type guess
-    (Conventional Commits) plus an AI-assisted Object/Change Type/
-    Description draft — the single source of truth behind both the Image
-    Builder trigger modal's "Preview from Git" button
-    (builders.routes.build_preview) and the Workflow build-step authoring
-    modal's own auto-preview (workflows.routes.build_step_preview).
+    (Conventional Commits) plus an Object/Change Type/Description draft —
+    the single source of truth behind both the Image Builder trigger
+    modal's "Preview from Git" button (builders.routes.build_preview) and
+    the Workflow build-step authoring modal's own auto-preview
+    (workflows.routes.build_step_preview). Object(s) and Change Type are
+    read straight from the commit messages first when an existing name is
+    spelled out there, only falling back to the AI's own guess when
+    nothing matched — see suggest_metadata's docstring.
 
     Deliberately non-destructive: `new_object_names` are returned as raw
     strings, not created as real Object rows here — same "never save raw AI

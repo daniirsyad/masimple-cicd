@@ -8,6 +8,181 @@ MASIMPLE CICD{% endblock %} {% block content %}
 </p>
 
 <div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-0">
+    {# collapse-arrow, checkbox-driven (no JS needed) — same pattern as
+       Documentation's Filters section. Collapsed by default: informational
+       only, not something that needs to stay open by default. #}
+    <div class="collapse collapse-arrow">
+      <input type="checkbox" />
+      <div class="collapse-title p-4 text-base font-semibold">
+        How does the "Preview from Git" autofill work?
+      </div>
+      <div class="collapse-content px-4 pb-4">
+        <p class="text-sm text-base-content/80">
+          When you trigger a build and hit "Preview from Git", every commit
+          since the last successful build on that branch is read and used
+          to draft the four build fields:
+        </p>
+        <ul class="mt-2 list-inside list-disc text-sm text-base-content/80">
+          <li>
+            <strong>Bump Type</strong> — always read straight from the
+            commit messages, never AI. Highest priority: an explicit
+            <code>major:</code>/<code>minor:</code>/<code>patch:</code>
+            prefix — the developer just said what they meant, so this
+            wins outright, even over a conflicting marker on the same
+            line. Otherwise falls back to a Conventional Commits guess (a
+            <code>feat:</code>/<code>fix:</code> prefix, a
+            <code>!</code> or <code>BREAKING CHANGE</code> marker, etc.).
+            Defaults to "patch" if nothing looks conventional at all.
+          </li>
+          <li>
+            <strong>Object(s)</strong> and <strong>Change Type</strong> —
+            first checked directly against the commit messages: if an
+            existing Object or Change Type's name is spelled out literally
+            in a commit message, that's used as-is, no AI involved. Only
+            when nothing matches does an AI provider (configured below) get
+            asked to guess from the commit messages instead — and it can
+            only ever guess an <em>existing</em> Object/Change Type or
+            propose a brand-new Object name; it never invents a new Change
+            Type.
+          </li>
+          <li>
+            <strong>Description</strong> — always drafted by the AI
+            provider as a short summary of the commit messages; there's no
+            "spelled out in the commit" shortcut for this one.
+          </li>
+        </ul>
+        <p class="mt-2 text-sm text-base-content/80">
+          Every field is just a pre-fill — still fully editable in the
+          build-trigger modal, and nothing is saved until you actually
+          submit the build. If no AI provider is configured or the call
+          fails, Bump Type and any direct commit-message matches still
+          come through; only the AI-only parts (Description, brand-new
+          Object suggestions) are left blank.
+        </p>
+
+        <p class="mt-4 text-sm font-semibold">Example</p>
+        <p class="mt-1 text-sm text-base-content/80">
+          Naming an existing Object/Change Type directly in the commit
+          message — and using a Conventional Commits prefix — lets three
+          of the four fields resolve without the AI having to guess at
+          all, which keeps its job (and token usage) down to just the
+          Description:
+        </p>
+        <pre class="mt-2 overflow-x-auto rounded bg-base-200 p-3 text-xs">fix: resolve pagination bug in Checkout Flow (Bug Fix)</pre>
+        <ul class="mt-1 list-inside list-disc text-xs text-base-content/60">
+          <li>Bump Type → <code>patch</code> (the <code>fix:</code> prefix)</li>
+          <li>Object → <code>Checkout Flow</code> (spelled out directly)</li>
+          <li>Change Type → <code>Bug Fix</code> (spelled out directly)</li>
+          <li>Description → still drafted by the AI</li>
+        </ul>
+
+        <p class="mt-3 text-sm text-base-content/80">
+          Or state the Bump Type explicitly instead of relying on the
+          Conventional Commits guess — useful when the change doesn't
+          neatly fit <code>feat</code>/<code>fix</code>, or you just want
+          to be unambiguous about it:
+        </p>
+        <pre class="mt-2 overflow-x-auto rounded bg-base-200 p-3 text-xs">minor: add discount code support to Checkout Flow (New Program)</pre>
+        <ul class="mt-1 list-inside list-disc text-xs text-base-content/60">
+          <li>Bump Type → <code>minor</code> (the explicit prefix — wins over any other signal)</li>
+          <li>Object → <code>Checkout Flow</code> (spelled out directly)</li>
+          <li>Change Type → <code>New Program</code> (spelled out directly)</li>
+          <li>Description → still drafted by the AI</li>
+        </ul>
+
+        <p class="mt-3 text-sm text-base-content/80">
+          A vaguer message leaves more for the AI to work out (and costs
+          more tokens doing it):
+        </p>
+        <pre class="mt-2 overflow-x-auto rounded bg-base-200 p-3 text-xs">patched some stuff in the flow</pre>
+        <ul class="mt-1 list-inside list-disc text-xs text-base-content/60">
+          <li>Bump Type → <code>patch</code> (default guess — no recognized prefix)</li>
+          <li>Object and Change Type → the AI has to guess both from context</li>
+          <li>Description → still drafted by the AI</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-0">
+    <div class="collapse collapse-arrow">
+      <input type="checkbox" {{ 'checked' if open_test_panel else '' }} />
+      <div class="collapse-title p-4 text-base font-semibold">
+        Test a commit message
+      </div>
+      <div class="collapse-content px-4 pb-4">
+        <p class="text-sm text-base-content/80">
+          Type one or more commit messages (one per line) and see exactly
+          what "Preview from Git" would derive from them — same
+          <code>suggest_bump_type</code>/<code>suggest_metadata</code>
+          logic described above, just fed typed-in text instead of a real
+          git repo. Nothing here is saved.
+        </p>
+
+        <form
+          method="post"
+          action="{{ url_for('ai_settings.test_commit_message') }}"
+          novalidate
+          class="mt-3 flex flex-col gap-3"
+        >
+          {{ test_form.hidden_tag() }}
+
+          <div>
+            {{ test_form.commit_messages.label(class="label text-sm") }}
+            {{ test_form.commit_messages(class="textarea textarea-bordered textarea-sm w-full font-mono", rows=5, placeholder="feat: add discount code support to Checkout Flow\nfix: correct off-by-one in pagination") }}
+            {% for error in test_form.commit_messages.errors %}
+            <p class="text-error text-sm">{{ error }}</p>
+            {% endfor %}
+          </div>
+
+          <div>
+            {{ test_form.submit(class="btn btn-primary btn-sm") }}
+          </div>
+        </form>
+
+        {% if test_result %}
+        <div class="mt-4 rounded border border-base-300 bg-base-200 p-3">
+          <p class="text-sm font-semibold">Result</p>
+          <dl class="mt-2 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt class="text-base-content/60">Bump Type</dt>
+            <dd><span class="badge badge-primary badge-sm">{{ test_result.bump_type }}</span></dd>
+
+            <dt class="text-base-content/60">Object(s)</dt>
+            <dd>
+              {% for name in test_result.matched_object_names %}
+              <span class="badge badge-ghost badge-sm mr-1 mb-1">{{ name }}</span>
+              {% endfor %}
+              {% for name in test_result.new_object_names %}
+              <span class="badge badge-outline badge-sm mr-1 mb-1">{{ name }} (new)</span>
+              {% endfor %}
+              {% if not test_result.matched_object_names and not test_result.new_object_names %}
+              <span class="text-base-content/60">none</span>
+              {% endif %}
+            </dd>
+
+            <dt class="text-base-content/60">Change Type</dt>
+            <dd>
+              {% if test_result.change_type_name %}
+              <span class="badge badge-ghost badge-sm">{{ test_result.change_type_name }}</span>
+              {% else %}
+              <span class="text-base-content/60">none</span>
+              {% endif %}
+            </dd>
+
+            <dt class="text-base-content/60">Description</dt>
+            <dd>{{ test_result.description or '—' }}</dd>
+          </dl>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card mt-4 bg-base-100 shadow-sm">
   <div class="card-body p-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <h2 class="card-title text-base">AI Providers</h2>

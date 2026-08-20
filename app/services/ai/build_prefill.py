@@ -30,6 +30,40 @@ def _build_prompt(commit_messages, existing_objects, existing_change_types, addi
     )
 
 
+def _name_appears_in_text(name, text):
+    """Whole-name, case-insensitive match — word-boundaried so an existing
+    Object/Change Type name doesn't false-positive as a substring of an
+    unrelated one (e.g. "Test" inside "Test2"/"TestAI").
+    """
+    return re.search(rf"\b{re.escape(name)}\b", text, re.IGNORECASE) is not None
+
+
+def _match_existing_from_commits(commit_messages, existing_objects, existing_change_types):
+    """Look for existing Object/Change Type names spelled out directly in
+    the commit messages, before ever asking the AI to guess. Takes priority
+    over the AI's own matched_objects/change_type guess in suggest_metadata
+    below — same idea as Bump Type already being derived straight from
+    commit text (bump_heuristic.suggest_bump_type) rather than the AI,
+    just extended to these two fields too. Only existing names can be
+    found this way; a genuinely *new* Object name still has to come from
+    the AI (suggest_metadata's new_object_names), since there's nothing
+    yet to match a commit message's text against.
+
+    Returns (matched_object_names, change_type_name) — change_type_name is
+    the first existing Change Type (in name order) found mentioned, or
+    None if none were.
+    """
+    text = "\n".join(commit_messages)
+
+    matched_objects = [name for name in existing_objects if _name_appears_in_text(name, text)]
+
+    change_type_name = next(
+        (name for name in existing_change_types if _name_appears_in_text(name, text)), None
+    )
+
+    return matched_objects, change_type_name
+
+
 def _empty_result():
     return {"matched_object_names": [], "new_object_names": [], "change_type_name": None, "description": ""}
 
@@ -80,20 +114,32 @@ def _parse_response(raw, existing_objects, existing_change_types):
 
 
 def suggest_metadata(commit_messages, additional_description=None):
-    """Best-effort AI draft of Object(s)/Change Type/Description from a list
-    of commit messages, for the build-trigger modal's "Preview from Git".
+    """Draft of Object(s)/Change Type/Description from a list of commit
+    messages, for the build-trigger modal's "Preview from Git".
+
+    Object(s) and Change Type are resolved in two tiers, same priority
+    order as Bump Type already uses (see bump_heuristic.suggest_bump_type):
+    1. Direct match — an existing Object/Change Type name spelled out
+       literally in a commit message (_match_existing_from_commits).
+    2. Only for whatever tier 1 didn't find: fall back to the AI's own
+       guess from _parse_response. A brand-new Object name (not yet in the
+       system) can only ever come from tier 2, since there's nothing to
+       text-match against.
+    Description has no "spelled out in the commit" concept, so it's always
+    the AI's summary (tier 2), same as before.
 
     Every field returned here is just a pre-fill for the modal's real
     fields — still fully editable, and nothing is submitted until the user
     hits "Build" — same "never save raw AI output unseen" philosophy as the
-    documentation page's own AI-assist panel. Uses its own small structured-
-    JSON prompt built in code rather than the PromptTemplate singleton: that
-    template is scoped to the single free-text `ai_description` field, not
-    several distinct fields parsed back reliably.
+    documentation page's own AI-assist panel. The AI call uses its own
+    small structured-JSON prompt built in code rather than the
+    PromptTemplate singleton: that template is scoped to the single
+    free-text `ai_description` field, not several distinct fields parsed
+    back reliably.
 
-    Never raises — returns an all-empty result if there's no AI provider
-    configured, or the call/parse fails for any reason, so the modal just
-    falls back to blank fields rather than blocking on a broken AI setup.
+    Never raises — a broken/unconfigured AI provider just means tier 2
+    contributes nothing, so tier 1's direct matches (if any) still come
+    through instead of the whole result going blank.
     """
     if not commit_messages:
         return _empty_result()
@@ -103,11 +149,21 @@ def suggest_metadata(commit_messages, additional_description=None):
         ct.name for ct in ChangeType.query.filter_by(is_active=True).order_by(ChangeType.name).all()
     ]
 
+    direct_matched_objects, direct_change_type = _match_existing_from_commits(
+        commit_messages, existing_objects, existing_change_types
+    )
+
     try:
         provider_type = default_provider_type()
         prompt = _build_prompt(commit_messages, existing_objects, existing_change_types, additional_description)
         raw = get_ai_provider(provider_type).generate_description(prompt)
+        ai_result = _parse_response(raw, existing_objects, existing_change_types)
     except Exception:
-        return _empty_result()
+        ai_result = _empty_result()
 
-    return _parse_response(raw, existing_objects, existing_change_types)
+    return {
+        "matched_object_names": direct_matched_objects or ai_result["matched_object_names"],
+        "new_object_names": ai_result["new_object_names"],
+        "change_type_name": direct_change_type or ai_result["change_type_name"],
+        "description": ai_result["description"],
+    }

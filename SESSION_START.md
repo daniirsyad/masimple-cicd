@@ -27,8 +27,85 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **943 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below) — a Telegram bot
+- **960 tests passing** (as of the last full run).
+- **This session's work** (on top of everything below) — commit messages
+  now drive Bump Type/Object(s)/Change Type more directly, plus a way to
+  actually try that out and understand it from `/ai-settings`. No
+  migration needed for any of it.
+  1. **Object(s)/Change Type are now read straight out of the commit
+     messages first, only falling back to the AI's own guess when nothing
+     matched directly** — Bump Type already worked this way (Conventional
+     Commits regex, `bump_heuristic.suggest_bump_type`, never AI); this
+     extends the same priority to the two AI-assisted fields. New
+     `_match_existing_from_commits()`/`_name_appears_in_text()`
+     (`app/services/ai/build_prefill.py`) do a whole-word, case-insensitive
+     search for each *existing* Object/Change Type name literally spelled
+     out anywhere in the commit messages — found matches are used as-is,
+     no AI call needed for that field; `suggest_metadata()` still always
+     calls the AI too (still the only way to get `description`, and the
+     only way to discover a genuinely *new* Object name), but a direct
+     match now wins over whatever the AI guessed for the same field.
+     Bonus: since direct matches don't depend on the AI succeeding at all,
+     they now survive even when no AI provider is configured or the call
+     fails — previously a broken AI setup meant every field came back
+     blank; now only the AI-only parts (`description`, brand-new Object
+     suggestions) do.
+  2. **`major:`/`minor:`/`patch:` are now recognized as an explicit Bump
+     Type prefix, taking priority over everything else** — requested after
+     confirming (by testing directly) that writing e.g. `Major: ...` was
+     previously silently misclassified as `patch`, since
+     `bump_heuristic.classify_commit()` only ever mapped `feat`/`feature`
+     to minor and a `!`/`BREAKING CHANGE` marker to major; the word
+     "major" itself wasn't recognized at all. `classify_commit()` now
+     checks for a literal `major`/`minor`/`patch` type-word prefix first,
+     before the `!`/`BREAKING CHANGE`/`feat` checks — so an explicit word
+     wins even over a conflicting marker on the same line (e.g.
+     `minor!: ...` resolves to `minor`, not `major`), on the reasoning
+     that the developer explicitly stating their intent is the clearest
+     possible signal.
+  3. **A "How does the 'Preview from Git' autofill work?" note, with
+     worked examples, on `/ai-settings`** — a plain-language explanation of
+     the above (Bump Type is heuristic-only/never AI; Object(s)/Change
+     Type check the commit message directly before ever asking the AI;
+     Description is always AI-drafted) plus side-by-side commit-message
+     examples showing a well-labeled message resolving three of four
+     fields without any AI guessing versus a vague one leaving more for
+     the AI to work out. Uses the same collapse-arrow (checkbox-driven, no
+     JS) pattern as Documentation's Filters section.
+  4. **A "Test a commit message" tool, also on `/ai-settings`, in its own
+     collapsible** — type one or more commit messages (one per line) and
+     see exactly what Bump Type/Object(s)/Change Type/Description would
+     come out, using the *real* `suggest_bump_type`/`suggest_metadata`
+     functions, not a simulation — without needing a real git commit or
+     build trigger to find out. New `TestCommitMessageForm`
+     (`app/blueprints/ai_settings/forms.py`) and `test_commit_message`
+     route (same `aiprovider.manage` permission gate as the rest of the
+     page); nothing is persisted, the page just re-renders directly with
+     the result. Two bugs caught and fixed while building this, both
+     before commit: an initial `test_form.is_submitted()` check for "was
+     anything submitted" only looks at the HTTP method, not which form was
+     actually posted, so it would have spuriously shown the tester's
+     status message on an unrelated failed submission elsewhere on the
+     same page (e.g. an invalid AI Provider create) — replaced with an
+     explicit flag from the route. That flag then turned out to be
+     unreachable anyway: WTForms' `DataRequired` already strips-and-rejects
+     an all-whitespace textarea submission before the route's own code
+     ever runs, so the dead branch was removed and the field's own
+     standard validation-error display handles that case instead.
+  Also considered and fully reverted before landing on the above (no trace
+  left — never committed): a first attempt at "make the AI prompt
+  configurable" via a new `BuildMetadataPromptConfig` singleton model +
+  migration + `/ai-settings` form for free-text "extra guidance" per
+  field. Abandoned once the user redirected priorities toward "read it
+  from the commit message first" instead — the migration was downgraded
+  and dropped from the dev DB, and every file touched for it was restored/
+  removed, so there's nothing to be confused by if this comes up again.
+  New/changed tests: `tests/test_build_prefill.py` (+5, direct-match
+  priority and its AI-failure resilience), `tests/test_bump_heuristic.py`
+  (+6, explicit word recognition and its priority over conflicting
+  markers), `tests/test_ai_settings.py` (+6, the tester route including a
+  regression test for the `is_submitted()` bug above).
+- **A prior session's work** (on top of everything below) — a Telegram bot
   integration, built in three parts in sequence (the first two planned via
   plan-mode with the user before implementation; the third — build/deploy
   notifications — was a small enough follow-up request to just implement
@@ -143,7 +220,7 @@ Then ask me what to work on next rather than assuming.
   (start/finish hooks + the workflow-driven skip); plus additions to the
   existing `tests/test_telegram.py` (`notify_run_finished`,
   `notify_awaiting_review`).
-- **A prior session's work** (on top of everything below), already
+- **An earlier session's work** (on top of everything below), already
   committed and pushed to `origin/main`:
   1. **Workflow build steps can auto-generate their Version Bump/Change
      Type/Object/Message at run time instead of requiring them typed in at
@@ -234,7 +311,7 @@ Then ask me what to work on next rather than assuming.
   the features themselves: the `menus` and `permissions` blueprints had **no
   test file at all** before this session (`tests/test_menus.py`,
   `tests/test_permissions.py` are new).
-- **An earlier session's work** (on top of everything below), already
+- **A session before that's work** (on top of everything below), already
   pushed to `origin/main`:
   1. **The container image never had `kubectl` installed at all** — every
      `DeploymentServer` action (test-connection, apply/delete, pods/
@@ -484,16 +561,18 @@ Then ask me what to work on next rather than assuming.
      one-off backfill (`migrate_add_missing_icons`) so already-seeded
      databases pick them up too, not just fresh installs.
   Anything older is covered by `git log`/`AI_CONTEXT.md`, not repeated here.
-- **Migration head is `041a67231254`** (`7d79f7acc529` → `12fa3cb1cfd5` →
+- **Migration head is still `041a67231254`** (unchanged this session — no
+  new migration needed for the commit-message-priority/bump-heuristic/
+  ai-settings-tester work below) (`7d79f7acc529` → `12fa3cb1cfd5` →
   `c5ebe879231b` (an earlier session's workflow-auto-generate and
-  `is_active` columns) → `041a67231254` (this session's
+  `is_active` columns) → `041a67231254` (a prior session's
   `telegram_bot_commands_enabled`/`telegram_last_update_id` columns on
   `SystemConfig`)) — applied to the bare-metal `.venv` dev DB
-  (`masimple_cicd`) this session. **Not yet applied to the Podman
+  (`masimple_cicd`). **Not yet applied to the Podman
   trial-deploy DB** (an external Postgres server, dbname `postgres` — see
   `docker-compose.podman.yml`'s `PODMAN_DATABASE_URL` in `.env`) — that
-  deploy hasn't been re-run since `c5ebe879231b` landed, let alone this
-  session's `041a67231254`; it'll show `/setup` again (or need `flask db
+  deploy hasn't been re-run since `c5ebe879231b` landed, let alone
+  `041a67231254`; it'll show `/setup` again (or need `flask db
   upgrade` run against it directly) next time it's touched.
 - **This session's Podman trial deploy is worth repeating after any future
   change to the build/deploy pipeline** — every fix in commit 3/4 above was

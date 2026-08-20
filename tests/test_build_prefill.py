@@ -124,3 +124,93 @@ class TestSuggestMetadata:
             assert "checkout-flow" in fake.received_prompt
             assert "Bug Fix" in fake.received_prompt
             assert "manual notes" in fake.received_prompt
+
+
+class TestDirectCommitMessageMatchTakesPriority:
+    """Object(s)/Change Type spelled out literally in a commit message win
+    over the AI's own guess for that field — new_object_names/description
+    still always come from the AI regardless.
+    """
+
+    def test_object_named_in_the_commit_message_is_used_directly_ignoring_the_ai_guess(self, app, monkeypatch):
+        with app.app_context():
+            db.session.add(Object(name="checkout-flow"))
+            db.session.add(Object(name="payments"))
+            db.session.commit()
+
+            # AI guesses the *other* existing object — the direct match
+            # from the commit text should win instead.
+            response = json.dumps(
+                {"matched_objects": ["payments"], "new_objects": [], "change_type": None, "description": "x"}
+            )
+            _patch_provider(monkeypatch, response)
+
+            result = suggest_metadata(["fix: patched checkout-flow behavior"])
+            assert result["matched_object_names"] == ["checkout-flow"]
+
+    def test_change_type_named_in_the_commit_message_is_used_directly_ignoring_the_ai_guess(self, app, monkeypatch):
+        with app.app_context():
+            db.session.add(ChangeType(name="Bug Fix"))
+            db.session.add(ChangeType(name="Hot Fix"))
+            db.session.commit()
+
+            response = json.dumps(
+                {"matched_objects": [], "new_objects": [], "change_type": "Hot Fix", "description": "x"}
+            )
+            _patch_provider(monkeypatch, response)
+
+            result = suggest_metadata(["Bug Fix: patched the login form"])
+            assert result["change_type_name"] == "Bug Fix"
+
+    def test_falls_back_to_the_ai_guess_when_nothing_is_named_directly(self, app, monkeypatch):
+        with app.app_context():
+            db.session.add(Object(name="checkout-flow"))
+            db.session.add(ChangeType(name="Bug Fix"))
+            db.session.commit()
+
+            response = json.dumps(
+                {
+                    "matched_objects": ["checkout-flow"],
+                    "new_objects": [],
+                    "change_type": "Bug Fix",
+                    "description": "x",
+                }
+            )
+            _patch_provider(monkeypatch, response)
+
+            result = suggest_metadata(["fix: something unrelated to any name"])
+            assert result["matched_object_names"] == ["checkout-flow"]
+            assert result["change_type_name"] == "Bug Fix"
+
+    def test_direct_matches_survive_even_when_the_ai_call_fails(self, app, monkeypatch):
+        with app.app_context():
+            db.session.add(Object(name="checkout-flow"))
+            db.session.add(ChangeType(name="Bug Fix"))
+            db.session.commit()
+
+            def _raise(pt):
+                raise RuntimeError("provider down")
+
+            monkeypatch.setattr("app.services.ai.build_prefill.default_provider_type", lambda: "claude")
+            monkeypatch.setattr("app.services.ai.build_prefill.get_ai_provider", _raise)
+
+            result = suggest_metadata(["Bug Fix: patched checkout-flow"])
+            assert result["matched_object_names"] == ["checkout-flow"]
+            assert result["change_type_name"] == "Bug Fix"
+            # Only the AI-only parts stay blank.
+            assert result["description"] == ""
+            assert result["new_object_names"] == []
+
+    def test_direct_match_is_whole_name_only_not_a_substring(self, app, monkeypatch):
+        with app.app_context():
+            db.session.add(Object(name="Test"))
+            db.session.add(Object(name="Test2"))
+            db.session.commit()
+
+            response = json.dumps(
+                {"matched_objects": [], "new_objects": [], "change_type": None, "description": "x"}
+            )
+            _patch_provider(monkeypatch, response)
+
+            result = suggest_metadata(["fix: bumped Test2 config"])
+            assert result["matched_object_names"] == ["Test2"]

@@ -28,3 +28,10 @@ class PromptTemplateForm(FlaskForm):
     is_default = BooleanField("Set as Default")
     is_active = BooleanField("Active", default=True)
     submit = SubmitField("Save Template")
+
+
+class TestCommitMessageForm(FlaskForm):
+    commit_messages = TextAreaField(
+        "Commit message(s) — one per line", validators=[DataRequired(), Length(max=4000)]
+    )
+    submit = SubmitField("Test")

@@ -27,6 +27,28 @@ class TestClassifyCommit:
     def test_empty_message_returns_none(self):
         assert classify_commit("") is None
 
+    def test_explicit_major_prefix_is_recognized(self):
+        assert classify_commit("major: overhauled the auth system") == "major"
+
+    def test_explicit_minor_prefix_is_recognized(self):
+        assert classify_commit("minor: added a new button") == "minor"
+
+    def test_explicit_patch_prefix_is_recognized(self):
+        assert classify_commit("patch: fixed typo") == "patch"
+
+    def test_explicit_bump_type_prefix_is_case_insensitive(self):
+        assert classify_commit("Major: overhauled the auth system") == "major"
+        assert classify_commit("MINOR: added a new button") == "minor"
+
+    def test_explicit_bump_type_word_wins_over_a_conflicting_bang_marker(self):
+        # The developer's explicit word is the clearest signal, even when
+        # it disagrees with the `!` marker on the same line.
+        assert classify_commit("minor!: added a new button") == "minor"
+
+    def test_explicit_patch_word_wins_over_a_breaking_change_footer(self):
+        message = "patch: small tweak\n\nBREAKING CHANGE: removes the old field"
+        assert classify_commit(message) == "patch"
+
 
 class TestSuggestBumpType:
     def test_defaults_to_patch_when_nothing_is_conventional(self):

@@ -1,9 +1,15 @@
 from flask import flash, redirect, render_template, url_for
 
 from app.blueprints.ai_settings import ai_settings_bp
-from app.blueprints.ai_settings.forms import AIProviderConfigForm, PromptTemplateForm
+from app.blueprints.ai_settings.forms import (
+    AIProviderConfigForm,
+    PromptTemplateForm,
+    TestCommitMessageForm,
+)
 from app.extensions import db
 from app.models import AIProviderConfig, PromptTemplate
+from app.services.ai.build_prefill import suggest_metadata
+from app.services.build.bump_heuristic import suggest_bump_type
 from app.utils.crypto import encrypt
 from app.utils.decorators import permission_required
 from app.utils.logger import log_activity
@@ -41,11 +47,16 @@ def _render_settings(
     open_modal=None,
     invalid_provider_edit=None,
     invalid_template_edit=None,
+    test_form=None,
+    test_result=None,
+    open_test_panel=False,
 ):
     if provider_create_form is None:
         provider_create_form = AIProviderConfigForm(prefix=CREATE_PROVIDER_PREFIX)
     if template_create_form is None:
         template_create_form = PromptTemplateForm(prefix=CREATE_TEMPLATE_PREFIX)
+    if test_form is None:
+        test_form = TestCommitMessageForm()
 
     providers = AIProviderConfig.query.order_by(AIProviderConfig.provider_type).all()
     templates = PromptTemplate.query.order_by(PromptTemplate.name).all()
@@ -79,6 +90,9 @@ def _render_settings(
         provider_edit_forms=provider_edit_forms,
         template_edit_forms=template_edit_forms,
         open_modal=open_modal,
+        test_form=test_form,
+        test_result=test_result,
+        open_test_panel=open_test_panel,
     )
 
 
@@ -259,3 +273,34 @@ def delete_template(template_id):
 
     flash(f"Prompt template '{name}' deleted.", "success")
     return redirect(url_for("ai_settings.index"))
+
+
+@ai_settings_bp.route("/test-commit-message", methods=["POST"])
+@permission_required("aiprovider.manage")
+def test_commit_message():
+    """Runs the exact same Bump Type heuristic + Object(s)/Change Type/
+    Description logic a real "Preview from Git" would (suggest_bump_type,
+    suggest_metadata), against commit messages typed in here instead of
+    read from a real git repo — lets someone check how a commit message
+    would actually get classified without needing to make a real commit.
+    Never persists anything; renders the page directly (no redirect) so
+    the result shows up in the same response.
+    """
+    form = TestCommitMessageForm()
+    test_result = None
+
+    if form.validate_on_submit():
+        # DataRequired already rejects an all-whitespace submission before
+        # this point (it strips before checking truthiness), so at least
+        # one non-empty line is guaranteed here.
+        messages = [line.strip() for line in form.commit_messages.data.splitlines() if line.strip()]
+        metadata = suggest_metadata(messages)
+        test_result = {
+            "bump_type": suggest_bump_type(messages),
+            "matched_object_names": metadata["matched_object_names"],
+            "new_object_names": metadata["new_object_names"],
+            "change_type_name": metadata["change_type_name"],
+            "description": metadata["description"],
+        }
+
+    return _render_settings(test_form=form, test_result=test_result, open_test_panel=True)
