@@ -108,6 +108,35 @@ Then ask me what to work on next rather than assuming.
      `_is_workflow_driven_run` in `app/services/telegram/helpers.py`) —
      that already gets its own Workflow-level notification from part 1, so
      this avoids double-notifying on every workflow build/deploy step.
+  4. **Fixed a `RuntimeError: Telegram API error (409): Conflict: terminated
+     by other getUpdates request` crashing the bot poll thread in
+     production**, found via a real traceback after deploying parts 1–3
+     above. Root cause: gunicorn runs **3 worker processes**; the
+     `_worker_started` guard in `app/services/telegram/worker.py` is a
+     Python module-level global, so it only stops a *second thread in the
+     same process* from starting, not the other 2 gunicorn processes each
+     starting their own `telegram-bot` thread — all 3 ended up long-polling
+     Telegram's `getUpdates` with the same bot token at once, which
+     Telegram rejects outright (unlike the build/deploy/workflow workers,
+     which are fine with several processes concurrently polling their own
+     DB queue via `SELECT ... FOR UPDATE SKIP LOCKED` — `getUpdates` has no
+     such queue, it's a single-consumer API). Fixed with a Postgres
+     session-level advisory lock: new `_become_poll_leader()` blocks each
+     process's `telegram-bot` thread on `pg_advisory_lock` before it starts
+     polling, so only one gunicorn worker process is ever the active leader
+     at a time; the lock is taken on a connection `.detach()`ed from the
+     SQLAlchemy pool (so it isn't recycled or counted against `pool_size`)
+     and held open for the process's life. If the leader process dies,
+     Postgres releases the lock automatically and one of the other
+     processes' blocked threads takes over — no manual failover needed.
+     Verified against the real dev Postgres instance that a second acquirer
+     genuinely blocks until the first releases. **Not covered by the
+     automated test suite** (all 36 `test_telegram*.py` tests exercise
+     `_tick()` directly and still pass unchanged) — this is inherently a
+     multi-process/real-Postgres concern the existing white-box tests don't
+     spin up; worth re-confirming after this next reaches a real
+     multi-worker deploy (Podman trial or otherwise) with
+     `telegram_bot_commands_enabled` on.
   New test files: `tests/test_telegram_worker.py` (bot command/callback
   dispatch, white-box on `_tick()`, same pattern as
   `tests/test_workflow_worker.py`), `tests/test_build_deploy_notifications.py`
