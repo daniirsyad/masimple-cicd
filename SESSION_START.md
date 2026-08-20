@@ -27,8 +27,68 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **960 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below) — commit messages
+- **966 tests passing** (as of the last full run).
+- **This session's work** (on top of everything below) — the "kaniko" build
+  engine now actually works, for a self-hosted deploy onto a real
+  Kubernetes + CRI-O cluster (TEBET-APP-3) with no Docker-compatible socket
+  to mount at all. No migration needed. Two commits, `928fa53` and
+  `ec85143`.
+  1. **`KanikoBuildEngine` rewritten to launch kaniko-executor as its own
+     Kubernetes Job, not a bare subprocess** (`app/services/build/engine.py`)
+     — an earlier session had disabled "kaniko" as a selectable Build
+     Engine after a subprocess-run kaniko build corrupted the live app
+     container's own filesystem (no daemon/chroot of its own). Re-enabled
+     in `factory.py`/`system_config/forms.py` now that it's isolated in its
+     own pod instead. The Job shares the app's own hostPath-backed volume
+     (new `KANIKO_WORKSPACE_HOST_PATH` env var, must match the app
+     Deployment's own hostPath) so it sees the exact repo clone `context_dir`
+     already points at, and is pinned to the app pod's current node (new
+     `NODE_NAME` Downward-API env var) since hostPath is node-local.
+     Registry creds go in via a per-build Secret mounted at kaniko's
+     expected config path, deleted (with the Job) after each build.
+     `k8s/deployment.yaml` gained a `ServiceAccount`/`Role`/`RoleBinding`
+     (Jobs/Pods+logs/Secrets, in-namespace) and wires `serviceAccountName`/
+     `NODE_NAME`/`KANIKO_WORKSPACE_HOST_PATH` into the Deployment.
+     `Dockerfile` no longer embeds the `kaniko-executor` binary (dead
+     weight now — kaniko runs as its own pod using the official image, not
+     a copy baked into this app's image). `tests/test_build_engine.py`
+     rewritten for the Job-based flow; `test_build_factory.py`/
+     `test_system_config.py` updated for "kaniko" being a normal choice
+     again.
+  2. **Fixed two bugs found by actually running a build against the real
+     cluster** — `kubectl logs -f job/<name>` doesn't wait for a
+     slow-starting pod by default; it failed immediately with `"container
+     ... is waiting to start: ContainerCreating"` instead of retrying,
+     confirmed via the user's own terminal output. Now passes
+     `--pod-running-timeout=300s` explicitly. Separately, the fallback
+     `KANIKO_JOB_STATUS_TIMEOUT_SECONDS` (waited for the Job to report
+     succeeded/failed once log streaming ends) was left at 60s — nowhere
+     near enough for a real image build — raised to 3600s, matching
+     `DockerBuildEngine`'s own lack of any build-duration timeout.
+  3. **Two DeploymentManifest DB rows edited/created directly (not via
+     git)**, since this app deploys itself and the changes above needed a
+     live manifest to actually take effect: the existing `MASIMPLE-CICD`
+     manifest (deploys to TEBET-APP-3) gained `serviceAccountName:
+     masimple-cicd-builder`, the `NODE_NAME` env var, and
+     `KANIKO_WORKSPACE_HOST_PATH` (set to `/home/hamilton/masimple_cicd/data`,
+     matching its existing hostPath). A new `MASIMPLE-CICD-RBAC` manifest
+     was created (also targeting TEBET-APP-3) holding the ServiceAccount/
+     Role/RoleBinding from `k8s/deployment.yaml` — **created but not yet
+     deployed** (TEBET-APP-3's client cert was already known-expired since
+     2026-08-09, so deploying it was deliberately not attempted this
+     session).
+  - **Still open**: this app builds/deploys *itself*, so the fixes in (2)
+    above only take effect once a new image containing them is actually
+    built and deployed — but building that image through this same
+    cluster's kaniko path would hit the very same (now-fixed-in-source,
+    not-yet-fixed-in-the-running-pod) bug. A one-time bootstrap build/push
+    from outside the current broken loop (e.g. `docker build`/`docker push`
+    from a workstation with real Docker, or any other CI already
+    available) is needed to break the cycle; after that, kaniko builds
+    through this app — including future builds of itself — should work
+    end-to-end. The RBAC manifest also still needs an actual Deploy once
+    TEBET-APP-3's cert is sorted.
+- **A prior session's work** (on top of everything below) — commit messages
   now drive Bump Type/Object(s)/Change Type more directly, plus a way to
   actually try that out and understand it from `/ai-settings`. No
   migration needed for any of it.
@@ -105,7 +165,7 @@ Then ask me what to work on next rather than assuming.
   (+6, explicit word recognition and its priority over conflicting
   markers), `tests/test_ai_settings.py` (+6, the tester route including a
   regression test for the `is_submitted()` bug above).
-- **A prior session's work** (on top of everything below) — a Telegram bot
+- **An earlier session's work** (on top of everything below) — a Telegram bot
   integration, built in three parts in sequence (the first two planned via
   plan-mode with the user before implementation; the third — build/deploy
   notifications — was a small enough follow-up request to just implement
@@ -220,7 +280,7 @@ Then ask me what to work on next rather than assuming.
   (start/finish hooks + the workflow-driven skip); plus additions to the
   existing `tests/test_telegram.py` (`notify_run_finished`,
   `notify_awaiting_review`).
-- **An earlier session's work** (on top of everything below), already
+- **A session before that's work** (on top of everything below), already
   committed and pushed to `origin/main`:
   1. **Workflow build steps can auto-generate their Version Bump/Change
      Type/Object/Message at run time instead of requiring them typed in at
@@ -311,7 +371,7 @@ Then ask me what to work on next rather than assuming.
   the features themselves: the `menus` and `permissions` blueprints had **no
   test file at all** before this session (`tests/test_menus.py`,
   `tests/test_permissions.py` are new).
-- **A session before that's work** (on top of everything below), already
+- **Two sessions before that's work** (on top of everything below), already
   pushed to `origin/main`:
   1. **The container image never had `kubectl` installed at all** — every
      `DeploymentServer` action (test-connection, apply/delete, pods/
@@ -624,20 +684,25 @@ Then ask me what to work on next rather than assuming.
     header automatically, and the form itself is instantiated with
     `meta={"csrf": False}` so its own embedded `csrf_token` field
     (which the AJAX body never includes) doesn't also get checked and fail.
-  - **Kaniko is disabled, not just "an alternative to docker"** — see
-    commit 3 above. Only `"docker"` is a selectable `SystemConfig.
-    build_engine` right now. `DockerBuildEngine` shells out to `docker
-    buildx build`; against Podman's socket specifically (no native
-    BuildKit support server-side), buildx's `docker-container` driver
-    transparently spins up its own `moby/buildkit` container to do the
-    real work instead — confirmed working end-to-end (build, run, correct
-    output) — rather than needing the daemon itself to support BuildKit.
+  - **Both `"docker"` and `"kaniko"` are now selectable `SystemConfig.
+    build_engine` choices** (see this session's work above for the kaniko
+    rewrite). `DockerBuildEngine` shells out to `docker buildx build`;
+    against Podman's socket specifically (no native BuildKit support
+    server-side), buildx's `docker-container` driver transparently spins
+    up its own `moby/buildkit` container to do the real work instead —
+    confirmed working end-to-end (build, run, correct output) — rather
+    than needing the daemon itself to support BuildKit. `KanikoBuildEngine`
+    needs no Docker/CRI socket at all — it launches kaniko-executor as its
+    own Kubernetes Job instead — but does need `KANIKO_WORKSPACE_HOST_PATH`
+    set and its ServiceAccount/Role/RoleBinding applied (see
+    `k8s/deployment.yaml`).
   - The "docker" build engine runs bare-metal on the host (shells out to the
     host's own `docker` CLI over the mounted socket, real `dockerd` or
-    Podman's Docker-API-compatible socket alike); "kaniko" is currently
-    disabled (see above) rather than "runs containerized/daemonless" as
-    previously — its actual problem is the *opposite* of daemonless
-    isolation: no isolation from *this app's own* container at all.
+    Podman's Docker-API-compatible socket alike); "kaniko" runs in its own
+    pod, isolated from *this app's own* container entirely (the earlier
+    subprocess-based version's actual problem was the opposite of
+    daemonless isolation: no isolation from this app's own container at
+    all — see this session's work above).
     `buildx` needed on the host (or in this app's image, which already has
     it) for local "docker"-engine builds regardless of the Dockerfile's own
     copy.

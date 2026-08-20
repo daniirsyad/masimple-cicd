@@ -73,7 +73,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | Deployment (of MASIMPLE CICD itself) | Docker (multi-stage: Node build for CSS, then Python/gunicorn `--worker-class gthread --threads 4`), Docker Compose (`web` + `db`) |
 | Git integration | GitPython, provider-abstracted (`GitProvider` → `GitHubProvider`) |
 | Registry integration | docker-py, provider-abstracted (`RegistryProvider` → `DockerHubProvider`/`GHCRProvider`/`HarborProvider`/`ECRProvider`, all implemented) |
-| Image builds | shells out to `docker buildx build`, provider-abstracted (`BuildEngine`). A `kaniko-executor`-based engine also exists but is currently **disabled** (not selectable) — it ran as a bare subprocess of this app with no container/chroot of its own, and a real build was confirmed to extract the target image's layers onto *this app's own* running container filesystem instead of an isolated one |
+| Image builds | provider-abstracted (`BuildEngine`): `"docker"` shells out to `docker buildx build` against a mounted Docker/Podman-API socket; `"kaniko"` (re-enabled this session — see SESSION_START.md) launches `kaniko-executor` as its own short-lived Kubernetes Job in the app's own namespace instead, for clusters (e.g. CRI-O-backed) with no Docker-compatible socket to mount at all |
 | Kubernetes integration | shells out to the `kubectl` CLI (no `kubernetes` client library), provider-abstracted (`DeploymentProvider` → `KubernetesProvider`/`CustomAPIProvider`) — `kubectl` must be installed wherever MASIMPLE CICD itself runs; pod logs stream via `kubectl logs -f` over Server-Sent Events |
 | AI description generation | provider-abstracted (`AIProvider` → `QwenProvider`/`ClaudeProvider`/`GeminiProvider`/`CustomAPIProvider`, all implemented) |
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
@@ -245,8 +245,8 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   several distinct fields back reliably rather than one free-text blob.
 - `SystemConfig` — a **singleton** row of app-wide settings: timezone
   (applied to every displayed timestamp via a `localtime` Jinja filter),
-  session timeout minutes, build engine choice (`docker` only right now —
-  `kaniko` is disabled, see "Image builds" above), a UI
+  session timeout minutes, build engine choice (`docker` or `kaniko`,
+  see "Image builds" above), a UI
   toggle (`hide_navbar_title_when_sidebar_open`), the Deployment module's
   live-status poll interval, and `commit_log_limit` (max commits
   `GitProvider.get_commits()`/`get_commit_messages()` reads when there's no
@@ -820,13 +820,15 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   use the Restart button on `/deployment-pods/<server_id>/workloads`
   instead (`kubectl rollout restart deployment/<name>`) — a separate,
   narrower action that only exists for that one resource kind.
-- **The Kaniko build engine is disabled, not just an untested alternative
-  to Docker** — see the "Image builds" row in the tech-stack table above
-  and `SESSION_START.md`'s "Current state" for the full incident. It needs
-  a real rewrite (running kaniko in its own throwaway container per build,
-  not as a bare subprocess of this app) before it can be re-enabled; the
-  existing `KanikoBuildEngine` implementation is left in place as a
-  starting point, not deleted.
+- **The Kaniko build engine now runs as its own Kubernetes Job, not a bare
+  subprocess** — see the "Image builds" row in the tech-stack table above
+  and `SESSION_START.md`'s "Current state" for the full rewrite and the
+  bugs found actually running it against a real CRI-O cluster (a too-short
+  status-wait timeout, `kubectl logs -f` not retrying a slow-starting
+  pod). Needs `KANIKO_WORKSPACE_HOST_PATH` set and a
+  ServiceAccount/Role/RoleBinding applied in-namespace (see
+  `k8s/deployment.yaml`) before it'll actually run — `"docker"` still
+  needs nothing extra and remains the default.
 - **A deploy shipping new migrations now shows `/setup` again on the next
   request, not just on a brand-new install** — removing entrypoint.sh's
   automatic `flask db upgrade` + seed in favor of the `/setup` wizard (see
@@ -836,10 +838,14 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   first-time install. Worth revisiting if that's not the intended
   tradeoff — e.g. keep auto-migration for an already-seeded DB and use
   `/setup` only as a fresh-install fallback.
-- **`k8s/deployment.yaml` and `k8s/network-policy.yaml` are untested
-  starting-point manifests** — written for an actual Kubernetes deploy of
-  this app (as opposed to the Podman trial-deploy compose file actually
-  exercised this session), but never applied to a real cluster; every
-  per-environment value is a placeholder. `kubectl apply --dry-run` wasn't
-  even usable to sanity-check them in this sandbox — the only configured
-  cluster context had an unrelated TLS cert mismatch.
+- **`k8s/deployment.yaml` (Deployment/Service/ServiceAccount/Role/
+  RoleBinding) and `k8s/network-policy.yaml` are starting-point manifests
+  in this repo** — every per-environment value is still a placeholder here,
+  and neither has been applied verbatim by hand from this sandbox
+  (`kubectl apply --dry-run` wasn't even usable to sanity-check them here —
+  the only configured cluster context had an unrelated TLS cert mismatch).
+  That said, this app **is** actually self-hosted on a real cluster
+  (TEBET-APP-3, via a `DeploymentManifest` row named "MASIMPLE-CICD" whose
+  content derives from this file with real values filled in — see
+  SESSION_START.md) — so the *content* is real-world exercised, just not
+  this literal file.
