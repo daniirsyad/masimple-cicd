@@ -27,8 +27,67 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **966 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below) — the "kaniko" build
+- **968 tests passing** (as of the last full run).
+- **This session's work** (on top of everything below) — two independent bug
+  fixes in the Deployment/Workflow pipeline, found via direct user reports
+  rather than the test suite. No migration needed for either. One commit so
+  far, `45464ac`; the second fix below is still uncommitted.
+  1. **A Deployment Manifest "Restart" now re-resolves the manifest fresh
+     before tearing down and reapplying, instead of blindly replaying
+     whatever YAML was last deployed** (`app/services/deployment/worker.py`
+     `_run_deployment`) — reported as "restarting to refresh a Secret
+     doesn't update it, only Stop+Deploy does." Root cause:
+     `run_action == "restart"` reused `execution.source_execution.
+     rendered_yaml` (the previous deploy's cached output) verbatim, on the
+     theory that "a restart doesn't change what's running, so there's
+     nothing to re-resolve" — true for the image/version, false for a
+     Secret's own literal YAML content or any other manifest edit made
+     since that last deploy. Restart now calls `resolve_manifest(manifest)`
+     the same way `deploy` does, then delete+applies the fresh result — so
+     it also picks up a newer image if a `{{SYS:VERSION}}` placeholder now
+     resolves to "latest," a real behavior change from "recycle exactly
+     what's running" to "Stop+Deploy via one click," called out in the
+     Restart confirmation modal's copy
+     (`app/templates/deployment_manifests/index.html`). New regression
+     test `test_restart_reresolves_instead_of_replaying_stale_content`
+     (`tests/test_deployment_worker.py`) edits a manifest's `yaml_content`
+     between deploy and restart and asserts the new content reaches both
+     the stored execution and what's actually applied.
+  2. **Fixed the Workflow orchestrator starting the same step 2–3 times on
+     one "Run" click** — reported with a screenshot showing three duplicate
+     "running" Build rows all as step #1 for a single trigger. Root cause:
+     `entrypoint.sh` runs gunicorn with `--workers 3`; each worker
+     *process* starts its own `workflow-orchestrator` background thread
+     (`app/services/workflow/worker.py` `start_worker`), and its
+     `_worker_started` guard is a process-local global — it only stops a
+     second thread in the *same* process, not the other two processes' own
+     threads (identical root cause, different symptom, to the Telegram
+     `getUpdates` 409 bug fixed in an earlier session — see below). Since
+     `_tick()`'s `WorkflowRun.query.filter_by(status="queued")` had no row
+     locking, all three processes' threads could see the same queued run
+     within the same ~2-second poll window and each call `_start_step()`
+     on it, each enqueueing its own `BuildBatch`. Fixed by adding
+     `.with_for_update(skip_locked=True)` to both of `_tick()`'s queries
+     (queued and running runs) — the exact `SELECT ... FOR UPDATE SKIP
+     LOCKED` claiming pattern the build/deploy workers already use safely,
+     just never applied here. New test
+     `TestTickSkipsLockedRuns::test_skips_a_run_locked_by_another_
+     connection` (`tests/test_workflow_worker.py`) holds the target row's
+     lock open on a second, independent DB connection (a real thread race
+     turned out to be too timing-dependent to assert on reliably — both
+     racing threads' plain SELECTs can easily complete before either
+     commits on a fast local test DB, whether or not the fix is present)
+     and asserts a concurrent `_tick()` skips it while locked, then picks
+     it up cleanly once released; run on a bounded background-thread join
+     so a missing fix fails fast with a clear message instead of hanging
+     the suite (confirmed: without the fix, the racing `_tick()`'s own
+     `UPDATE` blocks on the held lock rather than skipping past it).
+     **Not yet redeployed** — the reporting user's own instance (a
+     different machine this session has no access to) still has the three
+     duplicate rows from before the fix; they're inert leftovers (no
+     corruption, just wasted redundant builds), and that one run will keep
+     showing 3x "Build" until this fix is actually deployed there.
+- **A prior session's work** (on top of everything below) — the "kaniko" build
   engine now actually works, for a self-hosted deploy onto a real
   Kubernetes + CRI-O cluster (TEBET-APP-3) with no Docker-compatible socket
   to mount at all. No migration needed. Two commits, `928fa53` and
@@ -88,7 +147,7 @@ Then ask me what to work on next rather than assuming.
     through this app — including future builds of itself — should work
     end-to-end. The RBAC manifest also still needs an actual Deploy once
     TEBET-APP-3's cert is sorted.
-- **A prior session's work** (on top of everything below) — commit messages
+- **An earlier session's work** (on top of everything below) — commit messages
   now drive Bump Type/Object(s)/Change Type more directly, plus a way to
   actually try that out and understand it from `/ai-settings`. No
   migration needed for any of it.
@@ -165,7 +224,7 @@ Then ask me what to work on next rather than assuming.
   (+6, explicit word recognition and its priority over conflicting
   markers), `tests/test_ai_settings.py` (+6, the tester route including a
   regression test for the `is_submitted()` bug above).
-- **An earlier session's work** (on top of everything below) — a Telegram bot
+- **A session before that's work** (on top of everything below) — a Telegram bot
   integration, built in three parts in sequence (the first two planned via
   plan-mode with the user before implementation; the third — build/deploy
   notifications — was a small enough follow-up request to just implement
@@ -280,7 +339,7 @@ Then ask me what to work on next rather than assuming.
   (start/finish hooks + the workflow-driven skip); plus additions to the
   existing `tests/test_telegram.py` (`notify_run_finished`,
   `notify_awaiting_review`).
-- **A session before that's work** (on top of everything below), already
+- **Two sessions before that's work** (on top of everything below), already
   committed and pushed to `origin/main`:
   1. **Workflow build steps can auto-generate their Version Bump/Change
      Type/Object/Message at run time instead of requiring them typed in at
@@ -371,7 +430,7 @@ Then ask me what to work on next rather than assuming.
   the features themselves: the `menus` and `permissions` blueprints had **no
   test file at all** before this session (`tests/test_menus.py`,
   `tests/test_permissions.py` are new).
-- **Two sessions before that's work** (on top of everything below), already
+- **Three sessions before that's work** (on top of everything below), already
   pushed to `origin/main`:
   1. **The container image never had `kubectl` installed at all** — every
      `DeploymentServer` action (test-connection, apply/delete, pods/

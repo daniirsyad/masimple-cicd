@@ -289,8 +289,26 @@ def _check_current_step(run):
 
 
 def _tick(app):
+    """Runs one poll iteration. Both queries below use SELECT ... FOR UPDATE
+    SKIP LOCKED (same pattern as app/services/build/worker.py's
+    _claim_next_job/app/services/deployment/worker.py's own claim query) —
+    gunicorn runs multiple worker *processes* (see entrypoint.sh's
+    `--workers 3`), each starting its own workflow-orchestrator thread
+    (start_worker's _worker_started guard is a process-local global, so it
+    only stops a second thread in the *same* process, not the other
+    processes' own threads — identical root cause to the Telegram
+    getUpdates 409 bug this app already hit once before). Without row
+    locking here, two/three processes' threads could all see the same
+    WorkflowRun as "queued" (or "running", mid-step) in the same 2-second
+    window and each call _start_step/_check_current_step on it, creating
+    duplicate WorkflowStepRuns and duplicate BuildBatches/DeploymentRuns
+    for the same step. SKIP LOCKED means a process that loses the race
+    simply skips that row this tick rather than blocking or double-acting
+    on it — by its next tick the row's status has already moved on.
+    """
     with app.app_context():
-        for run in WorkflowRun.query.filter_by(status="queued").all():
+        queued_runs = WorkflowRun.query.filter_by(status="queued").with_for_update(skip_locked=True).all()
+        for run in queued_runs:
             step = _first_step(run.workflow_id)
             if step is None:
                 run.status = "success"
@@ -301,7 +319,8 @@ def _tick(app):
             else:
                 _start_step(run, step)
 
-        for run in WorkflowRun.query.filter_by(status="running").all():
+        running_runs = WorkflowRun.query.filter_by(status="running").with_for_update(skip_locked=True).all()
+        for run in running_runs:
             _check_current_step(run)
 
         db.session.remove()

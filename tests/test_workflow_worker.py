@@ -7,7 +7,10 @@ flips its status — exactly standing in for what those workers would do in
 production. _tick() is called directly (white-box) to advance the
 orchestrator one step at a time between those manual status flips.
 """
+import threading
+
 import pytest
+from sqlalchemy import text
 
 from app.extensions import db
 from app.models import (
@@ -381,3 +384,65 @@ class TestBuildStepValidation:
             assert run.status == "failed"
             step_run = WorkflowStepRun.query.filter_by(workflow_run_id=run.id).one()
             assert "same Version" in step_run.error
+
+
+class TestTickSkipsLockedRuns:
+    """gunicorn runs multiple worker *processes* (see entrypoint.sh's
+    --workers 3), each starting its own workflow-orchestrator thread;
+    start_worker's _worker_started guard only stops a second thread in the
+    *same* process, not the other processes' own threads. Without _tick()'s
+    SELECT ... FOR UPDATE SKIP LOCKED, racing _tick() calls could each see
+    the same queued WorkflowRun and each start its first step, enqueueing
+    duplicate BuildBatches for one workflow run — reproduced live once
+    already (three duplicate 'running' Build rows for step #1 on a single
+    trigger).
+
+    A real thread race is too timing-dependent to assert on reliably (both
+    threads' queries can easily complete before either commits, on a fast
+    local test DB, whether or not the locking fix is even present) — so
+    instead this deterministically holds the row's lock open on a second,
+    independent connection (simulating another process's _tick() already
+    mid-transaction on it) and asserts a concurrent _tick() skips it while
+    locked, then picks it up cleanly once released. Without the fix, a
+    plain (non-locking) SELECT still sees the row as "queued" and proceeds
+    to _start_step(), whose own UPDATE then blocks waiting on the lock held
+    here — run on a background thread with a bounded join so a missing fix
+    fails the test loudly instead of hanging the suite.
+    """
+
+    def test_skips_a_run_locked_by_another_connection(self, app, base_entities):
+        with app.app_context():
+            workflow = Workflow(name="wf")
+            db.session.add(workflow)
+            db.session.flush()
+            builder = _make_builder(base_entities)
+            _make_build_step(workflow, base_entities, [builder])
+            db.session.commit()
+
+            run = enqueue_workflow_run(workflow, triggered_by=None)
+            run_id = run.id
+
+            other_conn = db.engine.connect()
+            other_txn = other_conn.begin()
+            other_conn.execute(text("SELECT * FROM workflow_runs WHERE id = :id FOR UPDATE"), {"id": str(run_id)})
+
+            tick_thread = threading.Thread(target=_tick, args=(app,), daemon=True)
+            tick_thread.start()
+            tick_thread.join(timeout=5)
+            blocked = tick_thread.is_alive()
+            other_txn.rollback()
+            other_conn.close()
+            if blocked:
+                tick_thread.join(timeout=5)  # let it unblock now the lock is released, don't leak the thread
+                pytest.fail(
+                    "_tick() blocked on the locked WorkflowRun instead of skipping it — "
+                    "the SELECT ... FOR UPDATE SKIP LOCKED fix appears to be missing."
+                )
+
+            assert WorkflowStepRun.query.filter_by(workflow_run_id=run_id).count() == 0
+            assert WorkflowRun.query.get(run_id).status == "queued"
+
+            _tick(app)
+            step_runs = WorkflowStepRun.query.filter_by(workflow_run_id=run_id).all()
+            assert len(step_runs) == 1
+            assert BuildBatch.query.count() == 1
