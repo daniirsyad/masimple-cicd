@@ -22,8 +22,16 @@ MASIMPLE CICD is an internal Flask web app with four halves:
    Telegram bot also accepts commands (long-polled, no webhook needed) from
    any linked+permitted user: `/run` and `/status` to trigger and check a
    Workflow (see module 4 below), `/review` to approve/reject a paused
-   auto-generated build step, plus automatic push notifications when a
-   Workflow run, or a manually-triggered build/deploy, starts and finishes.
+   auto-generated build step, `/build` to trigger a manual (non-Workflow)
+   image build — a single Builder or a whole Builder group in one tap
+   (AI-prefills Bump Type/Object(s)/Change Type the same way the web
+   "Preview from Git" button does, only offering a one-tap Confirm when
+   every field resolved confidently — otherwise it points back to the web
+   UI), `/deploy`/`/update`/`/stop`/`/restart` to trigger a manual Deployment
+   Manifest action (single manifest or a whole group in one tap, the same
+   permission/`is_active`/accessibility rules the web routes enforce), plus
+   automatic push notifications when a Workflow run, or a manually-triggered
+   build/deploy (Telegram- or web-triggered alike), starts and finishes.
 2. A **Docker Image Builder module** built on top of it — register Git repos
    and container registries, define reusable "Builder" configs, trigger
    versioned builds (single or batched), push images, and auto-generate
@@ -80,7 +88,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | AWS SDK | `boto3` — ECR `RegistryProvider` only (SigV4-signed calls, doesn't fit the generic Docker Registry v2 bearer-token flow the other registry providers share) |
 | YAML generation | `PyYAML` — YAML Generator page only; everywhere else in this app deliberately avoids it in favor of dict→`json.dumps()` (JSON is valid YAML) since that output only ever feeds `kubectl apply -f -`, never a human — see `app/services/yaml_generator/render.py` |
 | Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 943 tests |
-| Telegram integration | `requests` against the Bot API (`app/services/telegram/`) — both directions now: outbound `sendMessage` (security notifications, forgot-password links, workflow/build/deploy start-finish pushes) **and** inbound, via a long-polling `getUpdates` background thread (no webhook/public HTTPS needed) handling `/run`, `/status`, `/review` bot commands and their inline-keyboard callbacks |
+| Telegram integration | `requests` against the Bot API (`app/services/telegram/`) — both directions now: outbound `sendMessage` (security notifications, forgot-password links, workflow/build/deploy start-finish pushes) **and** inbound, via a long-polling `getUpdates` background thread (no webhook/public HTTPS needed) handling `/run`, `/status`, `/review`, `/build`, `/deploy`, `/update`, `/stop`, `/restart` bot commands and their inline-keyboard callbacks |
 
 ## Architecture conventions
 
@@ -260,10 +268,10 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   `User` who receives Telegram security alerts for every account — see the
   RBAC/core section above), and `telegram_bot_commands_enabled` (a
   **separate** toggle from `telegram_notifications_enabled` — gates the
-  Telegram bot's inbound `/run`/`/status`/`/review` command handling, reusing
-  the same bot token) + `telegram_last_update_id` (persists the Bot API's
-  `getUpdates` offset across restarts so a redeploy doesn't replay
-  already-handled commands).
+  Telegram bot's inbound `/run`/`/status`/`/review`/`/build`/`/deploy`/
+  `/update`/`/stop`/`/restart` command handling, reusing the same bot token)
+  + `telegram_last_update_id` (persists the Bot API's `getUpdates` offset
+  across restarts so a redeploy doesn't replay already-handled commands).
 
 **Deployment module:**
 - `DeploymentServer` — a registered target: `connection_type` (`kube` or
@@ -752,11 +760,12 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   especially careful manual pass on the Form↔YAML toggles and their
   several independent add/remove-row widgets (Ingress paths; NetworkPolicy
   peers and ports, ×2 for Ingress/Egress), and on actually receiving a
-  Telegram message end-to-end against a real bot. The new inbound
-  `/run`/`/status`/`/review` commands and the manual-build/deploy/
-  Workflow-run push notifications are in the same boat — every test mocks
-  `TelegramNotifier`'s HTTP methods rather than hitting the real Bot API, so
-  none of it has been exercised against an actual Telegram chat yet either.
+  Telegram message end-to-end against a real bot. The inbound
+  `/run`/`/status`/`/review`/`/build`/`/deploy`/`/update`/`/stop`/`/restart`
+  commands and the manual-build/deploy/Workflow-run push notifications are
+  in the same boat — every test mocks `TelegramNotifier`'s HTTP methods
+  rather than hitting the real Bot API, so none of it has been exercised
+  against an actual Telegram chat yet either.
 - **A responsive-design pass touched 28 templates app-wide** (header rows
   now wrap via `flex flex-wrap ... gap-2`, modal form-field grids now
   collapse to one column below `sm:` instead of staying fixed at 2-3
@@ -786,11 +795,45 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   Discord integration for the same purpose has still not been started; the
   `SystemConfig`/`User` fields already in place (bot token, per-user chat
   ID) were built with that reuse in mind.
-- **Telegram's `/review` approval only ever applies the AI/heuristic's
-  suggested values as-is** — there's no way to edit a suggested Bump
-  Type/Change Type/Object(s)/Description from inside a Telegram chat the
-  way the web review panel's form fields allow; if either Bump Type or
-  Change Type wasn't confidently suggested, `/review`'s Approve button
+- **A later addition let the same Telegram bot trigger manual (non-Workflow)
+  Builds and Deployment Manifest actions directly**, not just Workflows:
+  `/build` (a linked user holding `builder.build`) picks an active,
+  accessible Builder and runs the same `compute_build_prefill()` "Preview
+  from Git" engine the web trigger modal uses — Telegram has no form to
+  collect Bump Type/Object(s)/Change Type, so a one-tap Confirm is only
+  offered when every field resolved confidently, otherwise it points back
+  to the web UI (same escape hatch `/review` already uses).
+  `/deploy`/`/update`/`/stop`/`/restart` (a linked user holding the matching
+  `deployment.deploy`/`.update`/`.stop`/`.restart` permission) pick a
+  manifest to act on, enforcing the exact same `is_active` (deploy/update
+  only — stop/restart deliberately skip it, same as the web routes) and
+  manifest/target-server accessibility rules
+  `deployment_manifests.routes._trigger_deploy_action`/
+  `_trigger_teardown_style_action` enforce; `/stop`/`/restart` only list
+  manifests currently deployed somewhere, so a tap is never a guaranteed
+  no-op. A manifest belonging to a `group_name` also gets a "whole group"
+  button alongside its individual one — since Telegram's `callback_data` is
+  capped at 64 bytes and can't embed every member's UUID, the group button
+  encodes a short SHA-1 hash of the group name instead, resolved back to
+  the real manifest set at callback time (`_group_hash`/`_manifests_in_group`
+  in `app/services/telegram/worker.py`). `/build` got the same "whole group"
+  treatment for a `Builder.group_name` group, with one extra constraint
+  `builders.routes.build()` already enforces: a group button is only
+  offered (and re-checked at callback time) when every member still shares
+  one Version — a mixed-Version group build always fails outright, so the
+  button just isn't shown rather than offering a guaranteed-fail tap; a
+  group build's AI-prefill runs across every member's commits together and
+  produces one `BuildBatch` covering the whole group, same as the web UI's
+  "Build Group" button. The existing `notify_build_started/finished`/
+  `notify_deploy_started/finished` push notifications already fired for any
+  manually-triggered (Telegram- or web-originated) build/deploy before
+  this — no new notification wiring was needed, only the trigger path
+  itself.
+- **Telegram's `/review` approval, and the newer `/build` confirmation,
+  only ever apply the AI/heuristic's suggested values as-is** — there's no
+  way to edit a suggested Bump Type/Change Type/Object(s)/Description from
+  inside a Telegram chat the way the web review/build-trigger forms allow;
+  if any required field wasn't confidently suggested, the Telegram flow
   declines and points back to the web UI instead of guessing.
 - Everything runs through a single in-process worker thread per queue (one
   each for builds and deploys, plus the workflow orchestrator, which only

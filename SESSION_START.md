@@ -27,11 +27,94 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **968 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below) — two independent bug
+- **991 tests passing** (as of the last full run).
+- **This session's work** (on top of everything below) — the Telegram bot
+  integration (previously Workflow-only: `/run`/`/status`/`/review`) can now
+  also trigger manual, non-Workflow Builds and Deployment Manifest
+  actions — requested directly, not via plan-mode. No migration needed.
+  1. **`/build`** (`app/services/telegram/worker.py`) — a linked user
+     holding `builder.build` picks an active, accessible Builder with a
+     `default_branch` set; the bot then runs
+     `services.build.prefill.compute_build_prefill()`, the exact same
+     "Preview from Git" engine the web trigger modal's AJAX preview uses,
+     and only offers a one-tap "✅ Confirm build" when Bump Type, at least
+     one Object (matched or new), and Change Type all resolved confidently
+     — otherwise it explains what's missing and points back to the web UI,
+     the same escape hatch `/review` already uses for build-metadata
+     approval (Telegram has no form to fill in a missing field). Confirming
+     recomputes the prefill fresh rather than trusting the earlier
+     preview's values (callback_data can't carry object names/description —
+     Telegram's 64-byte limit), then calls the same
+     `build/worker.enqueue_build_batch()` the web `builders.build()` route
+     calls, resolving objects via `Object.resolve()` the same way.
+  2. **`/deploy`, `/update`, `/stop`, `/restart`** — a linked user holding
+     the matching `deployment.deploy`/`.update`/`.stop`/`.restart`
+     permission picks a manifest to act on. Table-driven
+     (`DEPLOY_ACTIONS`) single handler
+     (`_handle_manifest_action_callback`) re-implements the same checks
+     `deployment_manifests.routes._trigger_deploy_action`/
+     `_trigger_teardown_style_action` make server-side: `deploy`/`update`
+     refuse a disabled (`is_active=False`) manifest, `stop`/`restart`
+     deliberately don't (an archived-but-still-live manifest must stay
+     stoppable — same reasoning as the web routes); all four re-check
+     manifest + every target server's accessibility at callback time, not
+     just at list-build time (a stale button — access revoked, or the
+     manifest disabled/deleted, in between — must still be caught here).
+     `/stop`/`/restart` only list manifests currently deployed on at least
+     one target server (`is_currently_deployed`), so a tap is never a
+     guaranteed "nothing currently deployed" dead end. All four funnel into
+     the same `deployment/worker.enqueue_deployment_run()` the web routes
+     call.
+  3. **A manifest belonging to a `group_name` also gets a "Whole group: X"
+     button** alongside its individual one, requested directly as part of
+     this session's scope (confirmed via AskUserQuestion up front, along
+     with the AI-prefill-approve-as-is approach for Build above) — tapping
+     it deploys/updates/stops/restarts every member manifest together, in
+     the same ascending-for-deploy/descending-for-teardown `manifest.order`
+     sequence the web UI's own group actions use. Telegram's `callback_data`
+     is capped at 64 bytes and can't embed every member's UUID, so the
+     button instead encodes a short SHA-1 hash of the group name
+     (`_group_hash`); the callback resolves it back to the real manifest set
+     via `_manifests_in_group`, scanning distinct group names for a hash
+     match (collision risk negligible at this app's real scale — a handful
+     of groups, not thousands). A single-member group doesn't get a
+     redundant group button (`_groups_among` only returns groups with more
+     than one eligible member).
+  4. **`/build` got the same "Whole group: X" treatment as a same-session
+     follow-up request** — a `Builder.group_name` group also gets a group
+     button (`_single_version_groups_among`/`_builder_keyboard`), reusing
+     `_group_hash`/the same `_groups_among` helper (works unchanged against
+     Builder too, since it only reads `.group_name`). One extra constraint
+     Build's group has that Deploy's doesn't: `builders.routes.build()`
+     hard-rejects a build spanning more than one Version, so a group button
+     is only offered when every eligible member already shares one
+     (checked again at callback time via `_resolve_group_build_target`, in
+     case membership drifted between the list being shown and the tap) —
+     otherwise it would be a guaranteed-fail tap. The group flow mirrors the
+     single-builder one exactly: `gbuild:<hash>` runs
+     `compute_build_prefill()` across every member's commits and only shows
+     `gbconfirm`/`gbcancel` when confident; `gbconfirm` recomputes fresh and
+     calls `enqueue_build_batch()` once with all members'
+     `(builder, branch)` pairs, producing one `BuildBatch` covering the
+     whole group (same as the web UI's own "Build Group" button).
+  5. **No new notification wiring was needed** — `notify_build_started/
+     finished` and `notify_deploy_started/finished`
+     (`app/services/telegram/helpers.py`) already fire on every manually
+     (non-Workflow-)triggered build/deploy regardless of whether it was
+     triggered via Telegram or the web, as long as `requested_by`/
+     `triggered_by` is set; Telegram-triggered ones just needed to actually
+     set that field, same as the web routes already did.
+  New `BOT_COMMANDS`/`HELP_TEXT` entries for all five commands. 41 tests
+  now in `tests/test_telegram_worker.py` (29 new): permission gating,
+  active/accessible/has-target-servers listing filters, single- and
+  whole-group action success + activity-log attribution, the
+  disabled-manifest and "nothing currently deployed" edge cases for
+  deploy/stop, the AI-prefill confident-vs-not-confident branches (plus
+  Confirm/Cancel) for Build, and the mixed-Version group-build rejection.
+- **A prior session's work** (on top of everything below) — two independent bug
   fixes in the Deployment/Workflow pipeline, found via direct user reports
-  rather than the test suite. No migration needed for either. One commit so
-  far, `45464ac`; the second fix below is still uncommitted.
+  rather than the test suite. No migration needed for either. Two commits,
+  `45464ac` and `95d3b93`.
   1. **A Deployment Manifest "Restart" now re-resolves the manifest fresh
      before tearing down and reapplying, instead of blindly replaying
      whatever YAML was last deployed** (`app/services/deployment/worker.py`
@@ -87,7 +170,7 @@ Then ask me what to work on next rather than assuming.
      duplicate rows from before the fix; they're inert leftovers (no
      corruption, just wasted redundant builds), and that one run will keep
      showing 3x "Build" until this fix is actually deployed there.
-- **A prior session's work** (on top of everything below) — the "kaniko" build
+- **An earlier session's work** (on top of everything below) — the "kaniko" build
   engine now actually works, for a self-hosted deploy onto a real
   Kubernetes + CRI-O cluster (TEBET-APP-3) with no Docker-compatible socket
   to mount at all. No migration needed. Two commits, `928fa53` and
@@ -147,7 +230,7 @@ Then ask me what to work on next rather than assuming.
     through this app — including future builds of itself — should work
     end-to-end. The RBAC manifest also still needs an actual Deploy once
     TEBET-APP-3's cert is sorted.
-- **An earlier session's work** (on top of everything below) — commit messages
+- **A session before that's work** (on top of everything below) — commit messages
   now drive Bump Type/Object(s)/Change Type more directly, plus a way to
   actually try that out and understand it from `/ai-settings`. No
   migration needed for any of it.
@@ -224,7 +307,7 @@ Then ask me what to work on next rather than assuming.
   (+6, explicit word recognition and its priority over conflicting
   markers), `tests/test_ai_settings.py` (+6, the tester route including a
   regression test for the `is_submitted()` bug above).
-- **A session before that's work** (on top of everything below) — a Telegram bot
+- **Two sessions before that's work** (on top of everything below) — a Telegram bot
   integration, built in three parts in sequence (the first two planned via
   plan-mode with the user before implementation; the third — build/deploy
   notifications — was a small enough follow-up request to just implement
@@ -339,7 +422,7 @@ Then ask me what to work on next rather than assuming.
   (start/finish hooks + the workflow-driven skip); plus additions to the
   existing `tests/test_telegram.py` (`notify_run_finished`,
   `notify_awaiting_review`).
-- **Two sessions before that's work** (on top of everything below), already
+- **Three sessions before that's work** (on top of everything below), already
   committed and pushed to `origin/main`:
   1. **Workflow build steps can auto-generate their Version Bump/Change
      Type/Object/Message at run time instead of requiring them typed in at
@@ -430,7 +513,7 @@ Then ask me what to work on next rather than assuming.
   the features themselves: the `menus` and `permissions` blueprints had **no
   test file at all** before this session (`tests/test_menus.py`,
   `tests/test_permissions.py` are new).
-- **Three sessions before that's work** (on top of everything below), already
+- **Four sessions before that's work** (on top of everything below), already
   pushed to `origin/main`:
   1. **The container image never had `kubectl` installed at all** — every
      `DeploymentServer` action (test-connection, apply/delete, pods/
