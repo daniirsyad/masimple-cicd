@@ -614,9 +614,8 @@ class TestRestartAction:
             assert restart_execution.source_execution_id == deploy_execution.id
 
     def test_successful_restart_does_not_undeploy(self, app, monkeypatch):
-        """A restart recycles pods without changing what's applied — the
-        manifest must still read as currently deployed afterward, unlike a
-        successful stop.
+        """A restart tears down and reapplies — the manifest must still read
+        as currently deployed afterward, unlike a successful stop.
         """
         monkeypatch.setattr(
             KubernetesProvider, "restart", lambda self, yaml: DeployResult(success=True, log="restarted ok")
@@ -642,12 +641,54 @@ class TestRestartAction:
             restart_execution = DeploymentExecution.query.get(restart_execution_id)
             assert restart_execution.status == "success"
             assert "restarted ok" in restart_execution.log
-            # Carried forward from the source so a later stop/restart can
-            # still chain off of this execution.
+            # Freshly re-resolved (same value here since nothing changed
+            # between deploy and restart) — see test_restart_reresolves_
+            # instead_of_replaying_stale_content below for the case where
+            # something *did* change.
             assert restart_execution.rendered_yaml == "image: u/app:DEV.0.0.1.x"
             assert restart_execution.resolved_version_string == "default=u/app:DEV.0.0.1.x"
             assert is_currently_deployed(manifest_id, server_id) is True
             assert get_current_deployment(manifest_id, server_id).id == restart_execution.id
+
+    def test_restart_reresolves_instead_of_replaying_stale_content(self, app, monkeypatch):
+        """A restart must re-render the manifest fresh (e.g. picking up an
+        edited Secret in yaml_content, or a newer image tag), not blindly
+        replay whatever was applied by the deploy it's restarting."""
+        applied_yaml = []
+        monkeypatch.setattr(
+            KubernetesProvider,
+            "restart",
+            lambda self, yaml: applied_yaml.append(yaml) or DeployResult(success=True, log="restarted ok"),
+        )
+        entities = _make_entities(app)
+        with app.app_context():
+            manifest_id, server_id = entities["manifest_id"], entities["server_ids"][0]
+            manifest = DeploymentManifest.query.get(manifest_id)
+
+            deploy_run, _count = enqueue_deployment_run(manifests=[manifest], triggered_by=None)
+            deploy_execution = DeploymentExecution.query.filter_by(run_id=deploy_run.id).first()
+            deploy_execution.status = "success"
+            deploy_execution.rendered_yaml = "image: u/app:DEV.0.0.1.x"
+            deploy_execution.resolved_version_string = "default=u/app:DEV.0.0.1.x"
+            db.session.commit()
+
+            # Simulate something changing after the deploy, the way editing
+            # a manifest's own Secret content or landing a newer image
+            # build would: edit the manifest's yaml_content directly.
+            manifest = DeploymentManifest.query.get(manifest_id)
+            manifest.yaml_content = "image: {{SYS:VERSION}}\nsecret: new-value"
+            db.session.commit()
+
+            restart_run, _count = enqueue_deployment_run(manifests=[manifest], triggered_by=None, action="restart")
+            restart_execution_id = DeploymentExecution.query.filter_by(run_id=restart_run.id).first().id
+
+        _run_deployment(app, restart_execution_id)
+
+        with app.app_context():
+            restart_execution = DeploymentExecution.query.get(restart_execution_id)
+            assert restart_execution.status == "success"
+            assert "secret: new-value" in restart_execution.rendered_yaml
+            assert "secret: new-value" in applied_yaml[0]
 
     def test_restart_failure_marks_execution_failed_and_still_currently_deployed(self, app, monkeypatch):
         monkeypatch.setattr(
@@ -678,8 +719,10 @@ class TestRestartAction:
             assert get_current_deployment(manifest_id, server_id).id == deploy_execution_id
 
     def test_can_restart_again_after_a_restart_via_chained_source(self, app, monkeypatch):
-        """A second restart must chain off the first restart's carried-
-        forward rendered_yaml, not fail for lack of a source."""
+        """A second restart must still find something "currently deployed"
+        to restart (enqueue_deployment_run's source_execution_id gate),
+        even though the first restart's own rendered_yaml came from a fresh
+        re-resolve rather than being carried forward from its source."""
         monkeypatch.setattr(
             KubernetesProvider, "restart", lambda self, yaml: DeployResult(success=True, log="restarted ok")
         )

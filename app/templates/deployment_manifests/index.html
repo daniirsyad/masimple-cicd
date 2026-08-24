@@ -448,9 +448,10 @@ MASIMPLE CICD{% endblock %}
   <div class="modal-box w-11/12 max-w-lg">
     <h3 class="text-lg font-bold">Restart Selected</h3>
     <p class="mt-1 text-xs text-base-content/60">
-      Tears down and reapplies the running workload(s) without changing the deployed image or config — there's a
-      brief gap with nothing running, not a zero-downtime rolling restart. A group restart goes bottom-to-top, same
-      order as Stop.
+      Tears down and reapplies the running workload(s), re-resolving the manifest fresh first — so this also picks up
+      any since-changed config/Secret content and, if a version placeholder resolves to "latest", a newer image too.
+      There's a brief gap with nothing running, not a zero-downtime rolling restart. A group restart goes
+      bottom-to-top, same order as Stop.
     </p>
     <div id="restart-trigger-content" class="mt-4 flex flex-col gap-3 text-sm">
       <span class="text-base-content/60">Checking what's currently deployed...</span>

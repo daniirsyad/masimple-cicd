@@ -35,10 +35,14 @@ class DeploymentExecution(db.Model):
     # its log, and its rendered_yaml survive for audit.
     manifest_id = db.Column(UUID(as_uuid=True), db.ForeignKey("deployment_manifests.id"), nullable=True)
     server_id = db.Column(UUID(as_uuid=True), db.ForeignKey("deployment_servers.id"), nullable=False)
-    # Only set on a "stop"-action execution (run.action == "stop") — points
-    # back at the "deploy"-action execution being torn down, so the worker
-    # deletes exactly the rendered_yaml that was actually applied rather
-    # than re-resolving placeholders (which may have since moved on).
+    # Set on "stop"- and "restart"-action executions — points back at the
+    # deployment being torn down/restarted. For "stop", the worker deletes
+    # exactly this execution's rendered_yaml, without re-resolving. For
+    # "restart" it's only used as a gate at enqueue time ("is anything
+    # currently deployed to restart?") — the worker re-resolves the
+    # manifest fresh rather than reusing this execution's rendered_yaml, so
+    # a restart also picks up anything since changed (an edited Secret, a
+    # newer image build).
     source_execution_id = db.Column(UUID(as_uuid=True), db.ForeignKey("deployment_executions.id"), nullable=True)
     # What each placeholder key actually resolved to, e.g.
     # "default=DEV.1.2.3.220726105433" or multiple joined with "; " for a

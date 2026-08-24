@@ -112,9 +112,13 @@ def enqueue_deployment_run(manifests, triggered_by, group_name=None, action="dep
     action="stop" or "restart": act only on (manifest, server) pairs that
     are actually currently deployed — each execution's source_execution_id
     points at the current deployment (deploy/update/restart, whichever was
-    most recent) being torn down or restarted, so the worker acts on
-    exactly what was applied rather than re-resolving. Pairs with nothing
-    currently live are silently skipped.
+    most recent) being torn down or restarted. A "stop" acts on exactly
+    what was applied, via source_execution_id's rendered_yaml, without
+    re-resolving; a "restart" only uses source_execution_id to confirm
+    something is actually live, then re-resolves the manifest fresh (see
+    _run_deployment) so it picks up any since-changed values (e.g. an
+    edited Secret) rather than blindly replaying stale content. Pairs with
+    nothing currently live are silently skipped.
 
     Either way, `manifests` must already be in the order the caller wants
     executions created in (ascending manifest.order for a group deploy,
@@ -340,8 +344,9 @@ def _reap_stale_running_job():
 
 def _run_deployment(app, execution_id):
     """Runs one claimed DeploymentExecution: resolve -> apply for a "deploy"
-    run, or a straight delete of the source execution's rendered_yaml for a
-    "stop" run (see enqueue_deployment_run).
+    run, resolve -> delete+apply for a "restart" run, or a straight delete of
+    the source execution's rendered_yaml for a "stop" run (see
+    enqueue_deployment_run).
 
     Always wrapped in try/except so one bad execution (unresolved
     placeholder, unreachable server, a rejected manifest, ...) marks that
@@ -364,30 +369,35 @@ def _run_deployment(app, execution_id):
             server = execution.server
             run_action = execution.run.action  # "deploy" | "stop" | "restart"
 
-            if run_action in ("stop", "restart"):
+            if run_action == "stop":
                 source = execution.source_execution
                 if source is None or not source.rendered_yaml:
-                    raise RuntimeError(f"No applied manifest recorded for this execution to {run_action}.")
+                    raise RuntimeError("No applied manifest recorded for this execution to stop.")
 
-                verb = "Stop" if run_action == "stop" else "Restart"
-                progress_verb = "Stopping" if run_action == "stop" else "Restarting"
-                log_lines.append(f"{progress_verb} '{manifest.name}' on server '{server.name}'...\n")
+                verb = "Stop"
+                log_lines.append(f"Stopping '{manifest.name}' on server '{server.name}'...\n")
                 flush_log()
 
-                provider = provider_for_server(server)
-                if run_action == "stop":
-                    result = provider.delete(source.rendered_yaml)
-                else:
-                    result = provider.restart(source.rendered_yaml)
+                result = provider_for_server(server).delete(source.rendered_yaml)
+            elif run_action == "restart":
+                # Re-resolve from scratch, same as a "deploy" — a restart
+                # should pick up whatever the manifest's current template/
+                # secret values are, not blindly replay whatever was last
+                # applied (that silently reapplied stale Secret data even
+                # after it had been edited).
+                verb = "Restart"
+                log_lines.append(f"Resolving version placeholders for '{manifest.name}'...\n")
+                flush_log()
 
-                if result.success and run_action == "restart":
-                    # Carry the applied YAML/version forward so this
-                    # execution can itself serve as the "current deployment"
-                    # for a later stop/restart/update-comparison — a restart
-                    # doesn't change what's actually running, so there's
-                    # nothing new to (re-)resolve.
-                    execution.rendered_yaml = source.rendered_yaml
-                    execution.resolved_version_string = source.resolved_version_string
+                rendered_yaml, resolved_versions = resolve_manifest(manifest)
+                execution.rendered_yaml = rendered_yaml
+                execution.resolved_version_string = (
+                    "; ".join(f"{key}={tag}" for key, tag in resolved_versions.items()) or None
+                )
+
+                log_lines.append(f"Restarting '{manifest.name}' on server '{server.name}'...\n")
+                flush_log()
+                result = provider_for_server(server).restart(rendered_yaml)
             else:
                 # Resolve placeholders before ever building a provider — an
                 # unresolvable {{SYS:VERSION[:key]}} is a manifest-authoring
