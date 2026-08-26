@@ -2,6 +2,7 @@ import uuid
 
 from flask import abort, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user
+from markupsafe import Markup
 
 from app.blueprints.deployment_manifests import deployment_manifests_bp
 from app.blueprints.deployment_manifests.forms import DeploymentManifestForm
@@ -678,8 +679,15 @@ def _trigger_deploy_action(manifests, activity_action, verb, no_manifest_message
         description=f"Triggered a {verb} run ({len(manifests)} manifest(s), {execution_count} execution(s))",
     )
 
-    flash(f"{verb.capitalize()} queued ({execution_count} execution(s)).", "success")
-    return redirect(url_for("deployment_runs.index"))
+    runs_url = url_for("deployment_runs.index")
+    flash(
+        Markup(
+            f"{verb.capitalize()} queued ({execution_count} execution(s)). "
+            f'<a href="{runs_url}" class="link link-primary">View in Deployment Runs</a>'
+        ),
+        "success",
+    )
+    return redirect(url_for("deployment_manifests.index"))
 
 
 @deployment_manifests_bp.route("/deploy", methods=["POST"])
@@ -748,8 +756,15 @@ def _trigger_teardown_style_action(
         description=f"Triggered a {verb} run ({len(manifests)} manifest(s), {execution_count} execution(s))",
     )
 
-    flash(f"{verb.capitalize()} queued ({execution_count} execution(s)).", "success")
-    return redirect(url_for("deployment_runs.index"))
+    runs_url = url_for("deployment_runs.index")
+    flash(
+        Markup(
+            f"{verb.capitalize()} queued ({execution_count} execution(s)). "
+            f'<a href="{runs_url}" class="link link-primary">View in Deployment Runs</a>'
+        ),
+        "success",
+    )
+    return redirect(url_for("deployment_manifests.index"))
 
 
 @deployment_manifests_bp.route("/api/stop-preview", methods=["POST"])

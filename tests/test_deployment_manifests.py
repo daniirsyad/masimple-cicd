@@ -550,7 +550,8 @@ class TestDeployTrigger:
             "/deployment-manifests/deploy", data={"manifest_ids": [str(manifest_id)]}, follow_redirects=True
         )
         assert response.status_code == 200
-        assert response.request.path == "/deployment-runs/"
+        assert response.request.path == "/deployment-manifests/"
+        assert b"View in Deployment Runs" in response.data
 
         with app.app_context():
             run = DeploymentRun.query.first()
@@ -754,7 +755,7 @@ class TestStopTrigger:
             follow_redirects=True,
         )
         assert response.status_code == 200
-        assert response.request.path == "/deployment-runs/"
+        assert response.request.path == "/deployment-manifests/"
 
         with app.app_context():
             stop_run = DeploymentRun.query.filter_by(action="stop").first()
@@ -839,7 +840,7 @@ class TestUpdateTrigger:
             "/deployment-manifests/update", data={"manifest_ids": [str(manifest_id)]}, follow_redirects=True
         )
         assert response.status_code == 200
-        assert response.request.path == "/deployment-runs/"
+        assert response.request.path == "/deployment-manifests/"
 
         with app.app_context():
             run = DeploymentRun.query.first()
@@ -899,7 +900,7 @@ class TestRestartTrigger:
             "/deployment-manifests/restart", data={"manifest_ids": [str(manifest_id)]}, follow_redirects=True
         )
         assert response.status_code == 200
-        assert response.request.path == "/deployment-runs/"
+        assert response.request.path == "/deployment-manifests/"
 
         with app.app_context():
             restart_run = DeploymentRun.query.filter_by(action="restart").first()
@@ -946,7 +947,7 @@ class TestManifestAllowedUsersAccess:
             "/deployment-manifests/deploy", data={"manifest_ids": [str(manifest_id)]}, follow_redirects=True
         )
         assert response.status_code == 200
-        assert response.request.path == "/deployment-runs/"
+        assert response.request.path == "/deployment-manifests/"
 
     def test_nonempty_allowed_users_blocks_a_user_not_on_the_list(self, client, app, base_entities, manifest_client):
         # manifest_client fixture ensures the "ManifestAdmin" role exists —
@@ -1023,4 +1024,4 @@ class TestManifestAllowedUsersAccess:
             "/deployment-manifests/deploy", data={"manifest_ids": [str(manifest_id)]}, follow_redirects=True
         )
         assert response.status_code == 200
-        assert response.request.path == "/deployment-runs/"
+        assert response.request.path == "/deployment-manifests/"

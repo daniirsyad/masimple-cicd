@@ -2,6 +2,7 @@ import uuid
 
 from flask import abort, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user
+from markupsafe import Markup
 
 from app.blueprints.builders import builders_bp
 from app.blueprints.builders.forms import BuilderForm
@@ -591,12 +592,15 @@ def build():
         description=f"Triggered a build batch ({len(builder_branches)} builder(s))",
     )
 
+    images_url = url_for("images.list_images")
     flash(
-        f"Batch queued ({len(builder_branches)} image(s)) — its version will be "
-        "assigned once the build starts.",
+        Markup(
+            f"Batch queued ({len(builder_branches)} image(s)) — its version will be "
+            f'assigned once the build starts. <a href="{images_url}" class="link link-primary">View in Images</a>'
+        ),
         "success",
     )
-    return redirect(url_for("images.list_images"))
+    return redirect(url_for("builders.index"))
 
 
 @builders_bp.route("/build/preview", methods=["POST"])

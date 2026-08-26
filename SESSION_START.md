@@ -28,7 +28,29 @@ Then ask me what to work on next rather than assuming.
 ## Current state
 
 - **991 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below) — the Telegram bot
+- **This session's work** (on top of everything below) — pressing Build,
+  Deploy, Update, Stop, or Restart (single or "Whole group") on the
+  Builders / Deployment Manifests index pages no longer navigates away to
+  the Images / Deployment Runs list on success — it stays on the same
+  index page, with the success flash message itself now containing a
+  "View in Images" / "View in Deployment Runs" link
+  (`markupsafe.Markup`-wrapped, since Jinja autoescapes plain `flash()`
+  strings by default) instead. Requested directly, not via plan-mode.
+  `app/blueprints/builders/routes.py`'s `build()` now redirects to
+  `builders.index` (was `images.list_images`); `app/blueprints/
+  deployment_manifests/routes.py`'s shared `_trigger_deploy_action()`/
+  `_trigger_teardown_style_action()` (covering `deploy()`/`update()`/
+  `stop()`/`restart()` alike, single-manifest or group) now redirect to
+  `deployment_manifests.index` (was `deployment_runs.index`). The
+  Deployment Pods `restart_workload()` action already redirected back to
+  its own originating page, so it needed no change. Error-path redirects
+  (validation failures, "nothing to do") were already same-page and are
+  unchanged. Six existing `tests/test_deployment_manifests.py` assertions
+  on the old `/deployment-runs/` redirect path were updated to
+  `/deployment-manifests/` accordingly; no new tests added since this is a
+  redirect-target/flash-content change to already-covered routes, not new
+  behavior. No migration needed.
+- **A prior session's work** (on top of everything below) — the Telegram bot
   integration (previously Workflow-only: `/run`/`/status`/`/review`) can now
   also trigger manual, non-Workflow Builds and Deployment Manifest
   actions — requested directly, not via plan-mode. No migration needed.
@@ -111,7 +133,7 @@ Then ask me what to work on next rather than assuming.
   disabled-manifest and "nothing currently deployed" edge cases for
   deploy/stop, the AI-prefill confident-vs-not-confident branches (plus
   Confirm/Cancel) for Build, and the mixed-Version group-build rejection.
-- **A prior session's work** (on top of everything below) — two independent bug
+- **An earlier session's work** (on top of everything below) — two independent bug
   fixes in the Deployment/Workflow pipeline, found via direct user reports
   rather than the test suite. No migration needed for either. Two commits,
   `45464ac` and `95d3b93`.
@@ -170,7 +192,7 @@ Then ask me what to work on next rather than assuming.
      duplicate rows from before the fix; they're inert leftovers (no
      corruption, just wasted redundant builds), and that one run will keep
      showing 3x "Build" until this fix is actually deployed there.
-- **An earlier session's work** (on top of everything below) — the "kaniko" build
+- **A session before that's work** (on top of everything below) — the "kaniko" build
   engine now actually works, for a self-hosted deploy onto a real
   Kubernetes + CRI-O cluster (TEBET-APP-3) with no Docker-compatible socket
   to mount at all. No migration needed. Two commits, `928fa53` and
@@ -230,7 +252,7 @@ Then ask me what to work on next rather than assuming.
     through this app — including future builds of itself — should work
     end-to-end. The RBAC manifest also still needs an actual Deploy once
     TEBET-APP-3's cert is sorted.
-- **A session before that's work** (on top of everything below) — commit messages
+- **Two sessions before that's work** (on top of everything below) — commit messages
   now drive Bump Type/Object(s)/Change Type more directly, plus a way to
   actually try that out and understand it from `/ai-settings`. No
   migration needed for any of it.
@@ -307,7 +329,7 @@ Then ask me what to work on next rather than assuming.
   (+6, explicit word recognition and its priority over conflicting
   markers), `tests/test_ai_settings.py` (+6, the tester route including a
   regression test for the `is_submitted()` bug above).
-- **Two sessions before that's work** (on top of everything below) — a Telegram bot
+- **Three sessions before that's work** (on top of everything below) — a Telegram bot
   integration, built in three parts in sequence (the first two planned via
   plan-mode with the user before implementation; the third — build/deploy
   notifications — was a small enough follow-up request to just implement
@@ -422,7 +444,7 @@ Then ask me what to work on next rather than assuming.
   (start/finish hooks + the workflow-driven skip); plus additions to the
   existing `tests/test_telegram.py` (`notify_run_finished`,
   `notify_awaiting_review`).
-- **Three sessions before that's work** (on top of everything below), already
+- **Four sessions before that's work** (on top of everything below), already
   committed and pushed to `origin/main`:
   1. **Workflow build steps can auto-generate their Version Bump/Change
      Type/Object/Message at run time instead of requiring them typed in at
@@ -513,7 +535,7 @@ Then ask me what to work on next rather than assuming.
   the features themselves: the `menus` and `permissions` blueprints had **no
   test file at all** before this session (`tests/test_menus.py`,
   `tests/test_permissions.py` are new).
-- **Four sessions before that's work** (on top of everything below), already
+- **Five sessions before that's work** (on top of everything below), already
   pushed to `origin/main`:
   1. **The container image never had `kubectl` installed at all** — every
      `DeploymentServer` action (test-connection, apply/delete, pods/
