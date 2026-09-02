@@ -39,7 +39,11 @@ class CustomAPIProvider(DeploymentProvider):
             raise RuntimeError(f"{self.api_url} responded with {response.status_code}: {response.text[:500]}")
         return True
 
-    def apply(self, manifest_yaml):
+    def apply(self, manifest_yaml, wait_timeout_seconds=None):
+        # No rollout/readiness concept for an "api"-type target —
+        # wait_timeout_seconds is accepted and silently ignored, same
+        # pattern as get_live_status/restart's NotImplementedError being
+        # caught gracefully by their own callers.
         try:
             response = requests.post(
                 self.api_url,
@@ -80,7 +84,7 @@ class CustomAPIProvider(DeploymentProvider):
         # treats this as "unknown" rather than guessing.
         raise NotImplementedError("Live-status checks aren't supported for 'api'-type deployment servers.")
 
-    def restart(self, manifest_yaml):
+    def restart(self, manifest_yaml, wait_timeout_seconds=None):
         # No agent contract exists for "restart what you already applied,
         # unchanged" either — unlike delete (a plausible symmetric guess at
         # POST/DELETE), there's no obvious HTTP verb for "restart", so this

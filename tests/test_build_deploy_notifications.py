@@ -303,7 +303,9 @@ class TestDeployStartedNotification:
 
 class TestDeployFinishedNotification:
     def test_notifies_once_on_reaching_a_terminal_status(self, app, monkeypatch):
-        monkeypatch.setattr(KubernetesProvider, "apply", lambda self, yaml: DeployResult(success=True, log="ok"))
+        monkeypatch.setattr(
+            KubernetesProvider, "apply", lambda self, yaml, wait_timeout_seconds=None: DeployResult(success=True, log="ok")
+        )
         _enable_notifications(app)
         sent = _patch_send_message(monkeypatch)
         user_id = _make_linked_user(app)
@@ -326,7 +328,9 @@ class TestDeployFinishedNotification:
         assert "succeeded" in sent[-1]["text"]
 
     def test_skipped_for_a_workflow_driven_run(self, app, monkeypatch):
-        monkeypatch.setattr(KubernetesProvider, "apply", lambda self, yaml: DeployResult(success=True, log="ok"))
+        monkeypatch.setattr(
+            KubernetesProvider, "apply", lambda self, yaml, wait_timeout_seconds=None: DeployResult(success=True, log="ok")
+        )
         _enable_notifications(app)
         sent = _patch_send_message(monkeypatch)
         user_id = _make_linked_user(app)

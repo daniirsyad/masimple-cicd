@@ -382,6 +382,7 @@ def create_manifest():
             name=form.name.data,
             yaml_content=form.yaml_content.data,
             group_name=(form.group_name.data or "").strip() or None,
+            wait_for_ready_timeout_seconds=form.wait_for_ready_timeout_seconds.data,
         )
         _apply_target_servers(manifest, form)
         _apply_allowed_users(manifest, form)
@@ -415,6 +416,7 @@ def edit_manifest(manifest_id):
         manifest.name = form.name.data
         manifest.yaml_content = form.yaml_content.data
         manifest.group_name = (form.group_name.data or "").strip() or None
+        manifest.wait_for_ready_timeout_seconds = form.wait_for_ready_timeout_seconds.data
         _apply_target_servers(manifest, form)
         _apply_allowed_users(manifest, form)
         _apply_version_bindings(manifest, _parse_version_bindings())

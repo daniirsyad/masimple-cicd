@@ -397,7 +397,9 @@ def _run_deployment(app, execution_id):
 
                 log_lines.append(f"Restarting '{manifest.name}' on server '{server.name}'...\n")
                 flush_log()
-                result = provider_for_server(server).restart(rendered_yaml)
+                result = provider_for_server(server).restart(
+                    rendered_yaml, wait_timeout_seconds=manifest.wait_for_ready_timeout_seconds
+                )
             else:
                 # Resolve placeholders before ever building a provider — an
                 # unresolvable {{SYS:VERSION[:key]}} is a manifest-authoring
@@ -415,7 +417,9 @@ def _run_deployment(app, execution_id):
 
                 log_lines.append(f"Applying to server '{server.name}'...\n")
                 flush_log()
-                result = provider_for_server(server).apply(rendered_yaml)
+                result = provider_for_server(server).apply(
+                    rendered_yaml, wait_timeout_seconds=manifest.wait_for_ready_timeout_seconds
+                )
 
             log_lines.append(result.log or "")
 

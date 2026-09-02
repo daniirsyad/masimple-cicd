@@ -1,8 +1,12 @@
 import base64
 import json
+import math
 import os
 import subprocess
 import tempfile
+import time
+
+import yaml
 
 from app.services.deployment.base import DeployResult, DeploymentProvider
 
@@ -13,6 +17,14 @@ POD_LOG_TAIL_LINES = 500
 KUBECTL_PATH = os.environ.get("KUBECTL_PATH", "kubectl")
 TEST_CONNECTION_TIMEOUT_SECONDS = 10
 APPLY_TIMEOUT_SECONDS = 120
+
+# The only three kinds `kubectl rollout status`/`rollout restart` actually
+# understand — same set restart()'s own docstring already calls out.
+ROLLOUT_WAIT_KINDS = {"Deployment", "StatefulSet", "DaemonSet"}
+# Buffer over a rollout wait's own requested timeout so `kubectl rollout
+# status --timeout=Ns`'s graceful timeout always fires (and returns a clean
+# nonzero exit) before subprocess.run's hard kill would.
+ROLLOUT_STATUS_TIMEOUT_BUFFER_SECONDS = 15
 
 
 class KubernetesProvider(DeploymentProvider):
@@ -61,7 +73,7 @@ class KubernetesProvider(DeploymentProvider):
             raise RuntimeError(process.stderr.strip() or "kubectl cluster-info failed.")
         return True
 
-    def apply(self, manifest_yaml):
+    def apply(self, manifest_yaml, wait_timeout_seconds=None):
         try:
             process = self._run_kubectl(["apply", "-f", "-"], input_text=manifest_yaml)
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -72,7 +84,13 @@ class KubernetesProvider(DeploymentProvider):
             return DeployResult(
                 success=False, log=log, error=f"kubectl apply exited with code {process.returncode}"
             )
-        return DeployResult(success=True, log=log)
+
+        if not wait_timeout_seconds or wait_timeout_seconds <= 0:
+            return DeployResult(success=True, log=log)
+
+        rollout_result = self._wait_for_rollout(manifest_yaml, wait_timeout_seconds)
+        combined_log = log + "\n" + rollout_result.log
+        return DeployResult(success=rollout_result.success, log=combined_log, error=rollout_result.error)
 
     def delete(self, manifest_yaml):
         try:
@@ -90,7 +108,7 @@ class KubernetesProvider(DeploymentProvider):
             )
         return DeployResult(success=True, log=log)
 
-    def restart(self, manifest_yaml):
+    def restart(self, manifest_yaml, wait_timeout_seconds=None):
         """Tears down and reapplies exactly what's already applied — a
         delete() of `manifest_yaml` followed by an apply() of the same
         text, rather than `kubectl rollout restart -f -`. Deliberately not
@@ -103,14 +121,102 @@ class KubernetesProvider(DeploymentProvider):
         real teardown-then-recreate, not a live rolling recycle — there's a
         genuine gap with nothing running in between, unlike a rollout
         restart's zero-downtime pod-by-pod replacement.
+
+        `wait_timeout_seconds` is threaded straight into the apply() half —
+        no separate rollout-wait logic here, restart's readiness wait is
+        just apply's.
         """
         delete_result = self.delete(manifest_yaml)
         if not delete_result.success:
             return delete_result
 
-        apply_result = self.apply(manifest_yaml)
+        apply_result = self.apply(manifest_yaml, wait_timeout_seconds=wait_timeout_seconds)
         combined_log = delete_result.log + "\n" + apply_result.log
         return DeployResult(success=apply_result.success, log=combined_log, error=apply_result.error)
+
+    def _rollout_targets(self, manifest_yaml):
+        """[(kind, name, namespace_or_None), ...] for every Deployment/
+        StatefulSet/DaemonSet document in `manifest_yaml`, in document
+        order — the three kinds `kubectl rollout status` understands (see
+        restart()'s own docstring for why `rollout restart -f -` isn't used
+        elsewhere either). A manifest with none of these (ConfigMap/Secret/
+        Service/... only) yields an empty list, meaning "nothing to wait
+        on". This only ever runs after a *successful* `kubectl apply` of
+        this exact text (see apply()), which would itself have already
+        rejected unparsable YAML — but a YAMLError is still swallowed
+        defensively rather than raised, since a wait-target scan failing
+        must never turn an already-successful apply into a hard error.
+        """
+        targets = []
+        try:
+            documents = yaml.safe_load_all(manifest_yaml)
+            for doc in documents:
+                if not isinstance(doc, dict):
+                    continue
+                if doc.get("kind") not in ROLLOUT_WAIT_KINDS:
+                    continue
+                metadata = doc.get("metadata") or {}
+                name = metadata.get("name")
+                if name:
+                    targets.append((doc["kind"], name, metadata.get("namespace")))
+        except yaml.YAMLError:
+            return []
+        return targets
+
+    def _wait_for_rollout(self, manifest_yaml, wait_timeout_seconds):
+        """Runs `kubectl rollout status <kind>/<name> [-n <namespace>]
+        --timeout=<remaining>s` for every workload _rollout_targets() finds,
+        sequentially, against ONE SHARED DEADLINE
+        (time.monotonic() + wait_timeout_seconds, set once up front) rather
+        than a fresh wait_timeout_seconds per resource — a manifest bundling
+        several workloads must not let one slow resource multiply the time
+        the global single-flight deploy slot is held for; the configured
+        value is a total budget. Any one resource not becoming ready
+        (including running out of the shared deadline before its own turn)
+        fails the whole result — a workload that never comes up is a real
+        deploy failure, not a partial success.
+        """
+        targets = self._rollout_targets(manifest_yaml)
+        if not targets:
+            return DeployResult(success=True, log="")
+
+        deadline = time.monotonic() + wait_timeout_seconds
+        log_parts = []
+        failed_labels = []
+
+        for kind, name, namespace in targets:
+            resource_ref = f"{kind.lower()}/{name}"
+            label = f"{resource_ref} -n {namespace}" if namespace else resource_ref
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                log_parts.append(f"Skipped rollout wait for {label}: timeout budget already exhausted.\n")
+                failed_labels.append(label)
+                continue
+
+            args = ["rollout", "status", resource_ref, f"--timeout={math.ceil(remaining)}s"]
+            if namespace:
+                args += ["-n", namespace]
+
+            try:
+                process = self._run_kubectl(args, timeout=remaining + ROLLOUT_STATUS_TIMEOUT_BUFFER_SECONDS)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                log_parts.append(f"{label}: {exc}\n")
+                failed_labels.append(label)
+                continue
+
+            log_parts.append(process.stdout + process.stderr)
+            if process.returncode != 0:
+                failed_labels.append(label)
+
+        combined_log = "".join(log_parts)
+        if failed_labels:
+            return DeployResult(
+                success=False,
+                log=combined_log,
+                error=f"Rollout did not become ready within {wait_timeout_seconds}s: {', '.join(failed_labels)}",
+            )
+        return DeployResult(success=True, log=combined_log)
 
     def get_live_status(self, manifest_yaml):
         try:

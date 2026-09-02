@@ -29,11 +29,19 @@ class DeploymentProvider(ABC):
         """
 
     @abstractmethod
-    def apply(self, manifest_yaml):
+    def apply(self, manifest_yaml, wait_timeout_seconds=None):
         """Apply `manifest_yaml` (already placeholder-resolved, see
         app/services/deployment/resolver.py) to this target. Returns a
         DeployResult — never raises for an ordinary apply failure, only for
         a truly unexpected error the caller (the worker) should still catch.
+
+        If `wait_timeout_seconds` is a positive number and this provider
+        has a readiness concept (KubernetesProvider), apply() blocks after
+        a successful apply, polling until every workload resource in
+        `manifest_yaml` reports Ready or the timeout elapses — a timeout
+        counts as a failed DeployResult, not a raised exception. None or
+        <= 0 skips the wait entirely. A provider with no readiness concept
+        (CustomAPIProvider) accepts and silently ignores this argument.
         """
 
     @abstractmethod
@@ -58,7 +66,7 @@ class DeploymentProvider(ABC):
         """
 
     @abstractmethod
-    def restart(self, manifest_yaml):
+    def restart(self, manifest_yaml, wait_timeout_seconds=None):
         """Restart whatever's currently running from `manifest_yaml` — tears
         it down and reapplies it (delete then apply of the same rendered
         YAML) without changing the applied image or config (see
@@ -67,5 +75,7 @@ class DeploymentProvider(ABC):
         between the delete and the apply. `manifest_yaml` is the exact
         rendered YAML that was actually applied, same as delete(). Same
         DeployResult contract as apply()/delete(); raise NotImplementedError
-        if this provider type has no equivalent operation.
+        if this provider type has no equivalent operation. Same
+        `wait_timeout_seconds` contract as apply() — restart's own re-apply
+        half waits the same way.
         """

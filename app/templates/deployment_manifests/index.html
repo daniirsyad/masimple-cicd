@@ -276,6 +276,20 @@ MASIMPLE CICD{% endblock %}
   </p>
 </div>
 
+<div>
+  {{ form.wait_for_ready_timeout_seconds.label(class="label text-sm") }}
+  {{ form.wait_for_ready_timeout_seconds(class="input input-bordered input-sm w-32", min="0", max="1800") }}
+  {% for error in form.wait_for_ready_timeout_seconds.errors %}
+  <p class="text-error text-sm">{{ error }}</p>
+  {% endfor %}
+  <p class="mt-1 text-xs text-base-content/60">
+    After a successful apply, Deploy/Update/Restart will wait up to this long for this manifest's Deployment/
+    StatefulSet/DaemonSet resources to report Ready before counting as success (0 skips the wait). This holds the
+    app's single deploy slot for the whole wait, so every other queued deploy is blocked until it finishes or
+    times out.
+  </p>
+</div>
+
 <div class="relative">
   {{ form.group_name.label(class="label text-sm") }}
   {{ form.group_name(class="group-name-input input input-bordered input-sm w-full", autocomplete="off", placeholder="ungrouped") }}

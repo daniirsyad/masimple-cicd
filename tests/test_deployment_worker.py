@@ -241,7 +241,11 @@ class TestHeartbeatTick:
 
 class TestRunDeployment:
     def test_successful_apply_marks_execution_success(self, app, monkeypatch):
-        monkeypatch.setattr(KubernetesProvider, "apply", lambda self, yaml: DeployResult(success=True, log="applied ok"))
+        monkeypatch.setattr(
+            KubernetesProvider,
+            "apply",
+            lambda self, yaml, wait_timeout_seconds=None: DeployResult(success=True, log="applied ok"),
+        )
         entities = _make_entities(app)
         with app.app_context():
             manifest = DeploymentManifest.query.get(entities["manifest_id"])
@@ -261,7 +265,11 @@ class TestRunDeployment:
 
     def test_provider_failure_marks_execution_failed(self, app, monkeypatch):
         monkeypatch.setattr(
-            KubernetesProvider, "apply", lambda self, yaml: DeployResult(success=False, log="", error="apply rejected")
+            KubernetesProvider,
+            "apply",
+            lambda self, yaml, wait_timeout_seconds=None: DeployResult(
+                success=False, log="", error="apply rejected"
+            ),
         )
         entities = _make_entities(app)
         with app.app_context():
@@ -275,6 +283,32 @@ class TestRunDeployment:
             execution = DeploymentExecution.query.get(execution_id)
             assert execution.status == "failed"
             assert "apply rejected" in execution.log
+
+    def test_apply_is_called_with_the_manifests_wait_for_ready_timeout_seconds(self, app, monkeypatch):
+        captured = {}
+
+        def _fake_apply(self, yaml, wait_timeout_seconds=None):
+            captured["wait_timeout_seconds"] = wait_timeout_seconds
+            return DeployResult(success=True, log="applied ok")
+
+        monkeypatch.setattr(KubernetesProvider, "apply", _fake_apply)
+        entities = _make_entities(app)
+        with app.app_context():
+            manifest = DeploymentManifest.query.get(entities["manifest_id"])
+            manifest.wait_for_ready_timeout_seconds = 45
+            db.session.commit()
+            run, _count = enqueue_deployment_run(manifests=[manifest], triggered_by=None)
+            execution_id = DeploymentExecution.query.filter_by(run_id=run.id).first().id
+
+        _run_deployment(app, execution_id)
+
+        assert captured["wait_timeout_seconds"] == 45
+
+    def test_manifest_created_without_explicit_timeout_defaults_to_300(self, app):
+        entities = _make_entities(app)
+        with app.app_context():
+            manifest = DeploymentManifest.query.get(entities["manifest_id"])
+            assert manifest.wait_for_ready_timeout_seconds == 300
 
     def test_unresolvable_placeholder_marks_execution_failed_without_raising(self, app):
         with app.app_context():
@@ -618,7 +652,9 @@ class TestRestartAction:
         as currently deployed afterward, unlike a successful stop.
         """
         monkeypatch.setattr(
-            KubernetesProvider, "restart", lambda self, yaml: DeployResult(success=True, log="restarted ok")
+            KubernetesProvider,
+            "restart",
+            lambda self, yaml, wait_timeout_seconds=None: DeployResult(success=True, log="restarted ok"),
         )
         entities = _make_entities(app)
         with app.app_context():
@@ -650,6 +686,34 @@ class TestRestartAction:
             assert is_currently_deployed(manifest_id, server_id) is True
             assert get_current_deployment(manifest_id, server_id).id == restart_execution.id
 
+    def test_restart_is_called_with_the_manifests_wait_for_ready_timeout_seconds(self, app, monkeypatch):
+        captured = {}
+
+        def _fake_restart(self, yaml, wait_timeout_seconds=None):
+            captured["wait_timeout_seconds"] = wait_timeout_seconds
+            return DeployResult(success=True, log="restarted ok")
+
+        monkeypatch.setattr(KubernetesProvider, "restart", _fake_restart)
+        entities = _make_entities(app)
+        with app.app_context():
+            manifest_id = entities["manifest_id"]
+            manifest = DeploymentManifest.query.get(manifest_id)
+            manifest.wait_for_ready_timeout_seconds = 45
+            db.session.commit()
+
+            deploy_run, _count = enqueue_deployment_run(manifests=[manifest], triggered_by=None)
+            deploy_execution = DeploymentExecution.query.filter_by(run_id=deploy_run.id).first()
+            deploy_execution.status = "success"
+            deploy_execution.rendered_yaml = "image: u/app:DEV.0.0.1.x"
+            db.session.commit()
+
+            restart_run, _count = enqueue_deployment_run(manifests=[manifest], triggered_by=None, action="restart")
+            restart_execution_id = DeploymentExecution.query.filter_by(run_id=restart_run.id).first().id
+
+        _run_deployment(app, restart_execution_id)
+
+        assert captured["wait_timeout_seconds"] == 45
+
     def test_restart_reresolves_instead_of_replaying_stale_content(self, app, monkeypatch):
         """A restart must re-render the manifest fresh (e.g. picking up an
         edited Secret in yaml_content, or a newer image tag), not blindly
@@ -658,7 +722,8 @@ class TestRestartAction:
         monkeypatch.setattr(
             KubernetesProvider,
             "restart",
-            lambda self, yaml: applied_yaml.append(yaml) or DeployResult(success=True, log="restarted ok"),
+            lambda self, yaml, wait_timeout_seconds=None: applied_yaml.append(yaml)
+            or DeployResult(success=True, log="restarted ok"),
         )
         entities = _make_entities(app)
         with app.app_context():
@@ -692,7 +757,11 @@ class TestRestartAction:
 
     def test_restart_failure_marks_execution_failed_and_still_currently_deployed(self, app, monkeypatch):
         monkeypatch.setattr(
-            KubernetesProvider, "restart", lambda self, yaml: DeployResult(success=False, log="", error="restart rejected")
+            KubernetesProvider,
+            "restart",
+            lambda self, yaml, wait_timeout_seconds=None: DeployResult(
+                success=False, log="", error="restart rejected"
+            ),
         )
         entities = _make_entities(app)
         with app.app_context():
@@ -724,7 +793,9 @@ class TestRestartAction:
         even though the first restart's own rendered_yaml came from a fresh
         re-resolve rather than being carried forward from its source."""
         monkeypatch.setattr(
-            KubernetesProvider, "restart", lambda self, yaml: DeployResult(success=True, log="restarted ok")
+            KubernetesProvider,
+            "restart",
+            lambda self, yaml, wait_timeout_seconds=None: DeployResult(success=True, log="restarted ok"),
         )
         entities = _make_entities(app)
         with app.app_context():

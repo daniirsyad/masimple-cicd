@@ -226,6 +226,81 @@ class TestCreateManifest:
         with app.app_context():
             assert DeploymentManifest.query.filter_by(name="m3").first() is None
 
+    def test_create_with_explicit_wait_timeout_persists_it(self, manifest_client, app, base_entities):
+        manifest_client.post(
+            "/deployment-manifests/create",
+            data={
+                "create-manifest-name": "m-wait",
+                "create-manifest-yaml_content": "image: nginx",
+                "create-manifest-server_ids": [str(base_entities["server_id"])],
+                "create-manifest-wait_for_ready_timeout_seconds": "60",
+            },
+            follow_redirects=True,
+        )
+        with app.app_context():
+            manifest = DeploymentManifest.query.filter_by(name="m-wait").first()
+            assert manifest.wait_for_ready_timeout_seconds == 60
+
+    def test_create_without_timeout_field_uses_default(self, manifest_client, app, base_entities):
+        manifest_client.post(
+            "/deployment-manifests/create",
+            data={
+                "create-manifest-name": "m-wait-default",
+                "create-manifest-yaml_content": "image: nginx",
+                "create-manifest-server_ids": [str(base_entities["server_id"])],
+            },
+            follow_redirects=True,
+        )
+        with app.app_context():
+            manifest = DeploymentManifest.query.filter_by(name="m-wait-default").first()
+            assert manifest.wait_for_ready_timeout_seconds == 300
+
+    def test_create_rejects_timeout_above_max(self, manifest_client, app, base_entities):
+        response = manifest_client.post(
+            "/deployment-manifests/create",
+            data={
+                "create-manifest-name": "m-wait-too-high",
+                "create-manifest-yaml_content": "image: nginx",
+                "create-manifest-server_ids": [str(base_entities["server_id"])],
+                "create-manifest-wait_for_ready_timeout_seconds": "1801",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert b"Must be between 0 and 1800 seconds" in response.data
+        with app.app_context():
+            assert DeploymentManifest.query.filter_by(name="m-wait-too-high").first() is None
+
+    def test_create_rejects_negative_timeout(self, manifest_client, app, base_entities):
+        manifest_client.post(
+            "/deployment-manifests/create",
+            data={
+                "create-manifest-name": "m-wait-negative",
+                "create-manifest-yaml_content": "image: nginx",
+                "create-manifest-server_ids": [str(base_entities["server_id"])],
+                "create-manifest-wait_for_ready_timeout_seconds": "-1",
+            },
+            follow_redirects=True,
+        )
+        with app.app_context():
+            assert DeploymentManifest.query.filter_by(name="m-wait-negative").first() is None
+
+    def test_create_accepts_zero_timeout_as_skip_wait(self, manifest_client, app, base_entities):
+        manifest_client.post(
+            "/deployment-manifests/create",
+            data={
+                "create-manifest-name": "m-wait-zero",
+                "create-manifest-yaml_content": "image: nginx",
+                "create-manifest-server_ids": [str(base_entities["server_id"])],
+                "create-manifest-wait_for_ready_timeout_seconds": "0",
+            },
+            follow_redirects=True,
+        )
+        with app.app_context():
+            manifest = DeploymentManifest.query.filter_by(name="m-wait-zero").first()
+            assert manifest is not None
+            assert manifest.wait_for_ready_timeout_seconds == 0
+
 
 class TestEditManifest:
     def test_edit_replaces_bindings(self, manifest_client, app, base_entities):
@@ -259,6 +334,29 @@ class TestEditManifest:
             bindings = manifest.version_bindings.all()
             assert len(bindings) == 1
             assert bindings[0].placeholder_key == "other"
+
+    def test_edit_updates_wait_for_ready_timeout_seconds(self, manifest_client, app, base_entities):
+        with app.app_context():
+            manifest = DeploymentManifest(name="m1", yaml_content="image: nginx")
+            manifest.target_servers = [DeploymentServer.query.get(base_entities["server_id"])]
+            db.session.add(manifest)
+            db.session.commit()
+            manifest_id = manifest.id
+            assert manifest.wait_for_ready_timeout_seconds == 300
+
+        manifest_client.post(
+            f"/deployment-manifests/{manifest_id}/edit",
+            data={
+                f"manifest-{manifest_id}-name": "m1",
+                f"manifest-{manifest_id}-yaml_content": "image: nginx",
+                f"manifest-{manifest_id}-server_ids": [str(base_entities["server_id"])],
+                f"manifest-{manifest_id}-wait_for_ready_timeout_seconds": "90",
+            },
+        )
+
+        with app.app_context():
+            manifest = DeploymentManifest.query.get(manifest_id)
+            assert manifest.wait_for_ready_timeout_seconds == 90
 
     def test_edit_without_target_servers_is_rejected(self, manifest_client, app, base_entities):
         with app.app_context():

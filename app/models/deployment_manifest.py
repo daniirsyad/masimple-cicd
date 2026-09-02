@@ -44,6 +44,24 @@ class DeploymentManifest(db.Model):
     # drops a disabled manifest from group resolution on every future
     # workflow run, not just new step authoring.
     is_active = db.Column(db.Boolean, default=True, nullable=False)
+    # Total seconds Deploy/Update/Restart will block after a successful
+    # `kubectl apply`, polling `kubectl rollout status` until every
+    # Deployment/StatefulSet/DaemonSet in this manifest reports Ready,
+    # before the action counts as a success (see
+    # app/services/deployment/kubernetes_provider.py's
+    # apply()/_wait_for_rollout()). 0 skips the wait entirely — an escape
+    # hatch for a workload with a known-flaky readiness probe. Lives here,
+    # not on a global SystemConfig, since it needs to travel automatically
+    # with both manual triggers and Workflow-resolved manifests (see
+    # app/services/deployment/worker.py._run_deployment) with no extra
+    # plumbing — different manifests have very different startup times.
+    # NOTE: this wait runs synchronously inside the deploy worker, holding
+    # the system-wide single-flight deploy slot
+    # (ix_deployment_executions_single_running) for its full duration —
+    # every other queued deploy is blocked until it finishes or times out.
+    # Capped at 1800s by the form's NumberRange validator for exactly that
+    # reason.
+    wait_for_ready_timeout_seconds = db.Column(db.Integer, default=300, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

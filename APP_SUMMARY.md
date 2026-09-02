@@ -512,7 +512,20 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   — computed server-side from live deploy-run history, not client state.
   Each action (Deploy/Update/Stop/Restart) has its own confirmation modal
   (fetched preview, no page navigation) and its own permission
-  (`deployment.deploy`/`update`/`stop`/`restart`).
+  (`deployment.deploy`/`update`/`stop`/`restart`). Each manifest also has a
+  "Rollout Wait Timeout (seconds)" field (`wait_for_ready_timeout_seconds`,
+  default 300, `0` disables the wait): after a successful `kubectl apply`,
+  Deploy/Update/Restart poll `kubectl rollout status` for every Deployment/
+  StatefulSet/DaemonSet the manifest declares (against one shared deadline
+  across all of them, not a fresh timeout per resource) before the action
+  counts as a success — closes the gap where a pod that crash-loops right
+  after a "successful" apply used to still show green. This runs
+  synchronously inside the deploy worker and so holds the app's global
+  single-flight deploy slot for the whole wait — every other queued deploy
+  is blocked until it finishes or times out (same tradeoff Kaniko's own
+  single-flight build slot already accepts for a slow build). Workflow
+  deploy steps inherit this automatically with no orchestrator changes,
+  since a step already just watches its `DeploymentRun`'s terminal status.
 - **`/yaml-generator`** (`yaml_generator.view`, nested under the Deployment
   sidebar group) — a standalone Kubernetes YAML builder: pick a resource
   kind (Deployment/Service/ConfigMap/Secret/Ingress/NetworkPolicy), fill in form fields

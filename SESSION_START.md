@@ -27,23 +27,69 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **991 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below) — on the Deployment
-  Manifests index page, each manifest group's card now starts **collapsed**
-  instead of always showing its full manifest table. Requested directly, not
-  via plan-mode. `app/templates/deployment_manifests/index.html` — the group
-  name, manifest-count badge, and action buttons (Deploy/Update/Restart/Stop
-  Group) stay outside the collapse and always visible/clickable, so acting on
-  a whole group never requires expanding it first; only the drag-to-reorder
-  hint text and the manifest table itself sit inside a checkbox-driven daisyUI
-  `collapse collapse-arrow` (no `checked` attribute, so it starts closed) —
-  the same no-JS pattern already used for Documentation's Filters section.
-  The "Ungrouped" table (not a real group) was left as-is. No JS/backend/
-  migration changes were needed; SortableJS's drag-reorder still initializes
-  fine against the collapsed table since daisyUI hides collapse content via a
-  zero-height grid row, not `display:none`. Existing
-  `tests/test_deployment_manifests.py` (51 tests) pass unchanged, since this
-  is a pure template/CSS change with no route or data behavior to cover.
+- **1012 tests passing** (as of the last full run).
+- **This session's work** (on top of everything below):
+  1. **Deploy/Update/Restart now waits for the rollout to actually become
+     Ready before counting as a success, with a configurable timeout** —
+     planned via plan-mode (AskUserQuestion locked the design up front, then
+     a Plan agent detailed it) before implementing. Previously a
+     `DeploymentExecution` was marked `"success"` the instant `kubectl apply`
+     exited 0, never confirming the resulting pods actually came up healthy
+     (the separate live-status poller only checks the resource still
+     *exists*, not that it's *ready*). New `DeploymentManifest.
+     wait_for_ready_timeout_seconds` (Integer, default 300, `0` = skip the
+     wait — migration `77f615f52447`) travels with the manifest itself, so
+     both manual triggers and Workflow-resolved manifests get it for free
+     with zero orchestrator changes (a Workflow deploy step already just
+     watches `DeploymentRun.status` for a terminal value).
+     `KubernetesProvider.apply()`/`.restart()`
+     (`app/services/deployment/kubernetes_provider.py`) now accept
+     `wait_timeout_seconds`: after a successful apply, new
+     `_rollout_targets()`/`_wait_for_rollout()` parse the rendered manifest
+     YAML for every Deployment/StatefulSet/DaemonSet document and run
+     `kubectl rollout status <kind>/<name> [-n <namespace>] --timeout=Ns` for
+     each, against **one shared deadline** (not a fresh timeout per
+     resource) so a manifest bundling several workloads can't multiply how
+     long it holds the app's global single-flight deploy slot
+     (`ix_deployment_executions_single_running`) — this wait runs
+     synchronously inside the deploy worker, so every other queued deploy is
+     blocked for its duration (a deliberate, precedented tradeoff — Kaniko
+     builds already hold their own single-flight slot for up to 3600s), and
+     the manifest form's new "Rollout Wait Timeout (seconds)" field (capped
+     at 1800s) calls this out directly.
+     `CustomAPIProvider`/`base.DeploymentProvider` accept and silently
+     ignore `wait_timeout_seconds` — no rollout concept for "api"-type
+     targets, matching the existing `get_live_status`/`restart`
+     `NotImplementedError` pattern there. New
+     `tests/test_kubernetes_provider_wait_for_ready.py` (12 tests: skip
+     cases, namespace present/absent, multi-kind manifests, one-of-several
+     failing, the shared-deadline math, restart threading the kwarg into its
+     own apply() call, CustomAPIProvider ignoring it); `test_deployment_worker.py`
+     (+3) and `test_deployment_manifests.py` (+6) cover the worker plumbing
+     and the new form field/validation (including the classic WTForms
+     `DataRequired`-treats-`0`-as-empty gotcha — used `Optional()` instead so
+     the meaningful "0 = skip" value isn't rejected). Also had to fix a
+     handful of pre-existing `monkeypatch.setattr(KubernetesProvider, "apply"/
+     "restart", lambda self, yaml: ...)` two-arg lambdas across
+     `test_deployment_worker.py` and `test_build_deploy_notifications.py`
+     that broke once the worker started always passing the new
+     `wait_timeout_seconds=` kwarg — caught by a full-suite run, not by
+     the targeted test files alone.
+  2. **Deployment Manifests index page: each manifest group's card now
+     starts collapsed** instead of always showing its full manifest table —
+     requested directly, not via plan-mode.
+     `app/templates/deployment_manifests/index.html` — the group name,
+     manifest-count badge, and action buttons (Deploy/Update/Restart/Stop
+     Group) stay outside the collapse and always visible/clickable, so
+     acting on a whole group never requires expanding it first; only the
+     drag-to-reorder hint text and the manifest table itself sit inside a
+     checkbox-driven daisyUI `collapse collapse-arrow` (no `checked`
+     attribute, so it starts closed) — the same no-JS pattern already used
+     for Documentation's Filters section. The "Ungrouped" table (not a real
+     group) was left as-is. No JS/backend/migration changes were needed;
+     SortableJS's drag-reorder still initializes fine against the collapsed
+     table since daisyUI hides collapse content via a zero-height grid row,
+     not `display:none`.
 - **A prior session's work** (on top of everything below) — pressing Build,
   Deploy, Update, Stop, or Restart (single or "Whole group") on the
   Builders / Deployment Manifests index pages no longer navigates away to
@@ -801,19 +847,20 @@ Then ask me what to work on next rather than assuming.
      one-off backfill (`migrate_add_missing_icons`) so already-seeded
      databases pick them up too, not just fresh installs.
   Anything older is covered by `git log`/`AI_CONTEXT.md`, not repeated here.
-- **Migration head is still `041a67231254`** (unchanged this session — no
-  new migration needed for the commit-message-priority/bump-heuristic/
-  ai-settings-tester work below) (`7d79f7acc529` → `12fa3cb1cfd5` →
-  `c5ebe879231b` (an earlier session's workflow-auto-generate and
+- **Migration head is now `77f615f52447`** (this session's
+  `wait_for_ready_timeout_seconds` column on `deployment_manifests`, added
+  with `server_default='300'` so existing rows backfilled with no manual
+  script — see this session's work above) (`7d79f7acc529` → `12fa3cb1cfd5`
+  → `c5ebe879231b` (an earlier session's workflow-auto-generate and
   `is_active` columns) → `041a67231254` (a prior session's
   `telegram_bot_commands_enabled`/`telegram_last_update_id` columns on
-  `SystemConfig`)) — applied to the bare-metal `.venv` dev DB
-  (`masimple_cicd`). **Not yet applied to the Podman
+  `SystemConfig`) → `77f615f52447`) — applied to the bare-metal `.venv` dev
+  DB (`masimple_cicd`). **Not yet applied to the Podman
   trial-deploy DB** (an external Postgres server, dbname `postgres` — see
   `docker-compose.podman.yml`'s `PODMAN_DATABASE_URL` in `.env`) — that
   deploy hasn't been re-run since `c5ebe879231b` landed, let alone
-  `041a67231254`; it'll show `/setup` again (or need `flask db
-  upgrade` run against it directly) next time it's touched.
+  `041a67231254`/`77f615f52447`; it'll show `/setup` again (or need `flask
+  db upgrade` run against it directly) next time it's touched.
 - **This session's Podman trial deploy is worth repeating after any future
   change to the build/deploy pipeline** — every fix in commit 3/4 above was
   found only by actually running the app end-to-end this way; none of it
