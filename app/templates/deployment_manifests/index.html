@@ -184,26 +184,36 @@ MASIMPLE CICD{% endblock %}
         {% endif %}
       </div>
     </div>
-    <p class="mt-1 text-xs text-base-content/60">
-      Drag <span class="drag-handle">⠿</span> to set deploy order — a group deploys/updates top-to-bottom and
-      stops/restarts bottom-to-top.
-    </p>
-    <div class="mt-2 overflow-x-auto">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th></th>
-            <th>Name</th>
-            <th>Target Servers</th>
-            <th>Version Bindings</th>
-            <th>Access</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody class="manifest-group-body" data-reorder-url="{{ url_for('deployment_manifests.reorder_manifests') }}">
-          {% for manifest in group.manifests %} {{ manifest_row(manifest, show_deploy_button=False, draggable=True) }} {% endfor %}
-        </tbody>
-      </table>
+    {# collapse-arrow, checkbox-driven (no JS needed) — collapsed by default
+       so a page with many groups doesn't open with every group's full
+       manifest table already expanded; the group name/badge/action buttons
+       above stay outside the collapse so acting on the whole group never
+       requires expanding it first. #}
+    <div class="collapse collapse-arrow mt-1 bg-base-100">
+      <input type="checkbox" />
+      <div class="collapse-title min-h-0 px-0 py-1 text-xs text-base-content/60">
+        Drag <span class="drag-handle">⠿</span> to set deploy order — a group deploys/updates top-to-bottom and
+        stops/restarts bottom-to-top.
+      </div>
+      <div class="collapse-content px-0">
+        <div class="overflow-x-auto">
+          <table class="table table-sm">
+            <thead>
+              <tr>
+                <th></th>
+                <th>Name</th>
+                <th>Target Servers</th>
+                <th>Version Bindings</th>
+                <th>Access</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody class="manifest-group-body" data-reorder-url="{{ url_for('deployment_manifests.reorder_manifests') }}">
+              {% for manifest in group.manifests %} {{ manifest_row(manifest, show_deploy_button=False, draggable=True) }} {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </div>
 </div>
