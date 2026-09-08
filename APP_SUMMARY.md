@@ -519,13 +519,20 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   StatefulSet/DaemonSet the manifest declares (against one shared deadline
   across all of them, not a fresh timeout per resource) before the action
   counts as a success — closes the gap where a pod that crash-loops right
-  after a "successful" apply used to still show green. This runs
-  synchronously inside the deploy worker and so holds the app's global
-  single-flight deploy slot for the whole wait — every other queued deploy
-  is blocked until it finishes or times out (same tradeoff Kaniko's own
-  single-flight build slot already accepts for a slow build). Workflow
-  deploy steps inherit this automatically with no orchestrator changes,
-  since a step already just watches its `DeploymentRun`'s terminal status.
+  after a "successful" apply used to still show green. While a rollout is in
+  progress its pods are also polled every 3s for a known-bad container state
+  (`CrashLoopBackOff`, `ImagePullBackOff`, `ErrImagePull`, `InvalidImageName`,
+  `CreateContainerConfigError`, `CreateContainerError`) — seeing one aborts
+  the wait immediately (and, for a manifest bundling several workloads,
+  aborts waiting on the rest of them too) instead of blocking out the full
+  configured timeout, since a workload already in one of these states is
+  never going to recover on its own. This runs synchronously inside the
+  deploy worker and so holds the app's global single-flight deploy slot for
+  the whole wait — every other queued deploy is blocked until it finishes,
+  fails fast, or times out (same tradeoff Kaniko's own single-flight build
+  slot already accepts for a slow build). Workflow deploy steps inherit this
+  automatically with no orchestrator changes, since a step already just
+  watches its `DeploymentRun`'s terminal status.
 - **`/yaml-generator`** (`yaml_generator.view`, nested under the Deployment
   sidebar group) — a standalone Kubernetes YAML builder: pick a resource
   kind (Deployment/Service/ConfigMap/Secret/Ingress/NetworkPolicy), fill in form fields

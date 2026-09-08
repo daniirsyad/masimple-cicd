@@ -27,8 +27,60 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1012 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below):
+- **1026 tests passing** (as of the last full run).
+- **This session's work** (on top of everything below) — Deploy/Update/
+  Restart's rollout wait (see the prior session's work just below for how
+  that wait itself was added) now stops immediately on an obviously-fatal
+  pod state instead of blocking out the full configured timeout — requested
+  directly, then designed via plan-mode (AskUserQuestion locked the trigger
+  set/poll interval/multi-target scope up front, then a Plan agent detailed
+  the implementation) before implementing.
+  `app/services/deployment/kubernetes_provider.py`'s `_wait_for_rollout()`
+  used to just block on `kubectl rollout status --timeout=Ns`, which itself
+  never reports failure early — a pod stuck in `CrashLoopBackOff`/
+  `ImagePullBackOff`/etc. still held the app's single-flight deploy slot for
+  the whole configured timeout (up to 1800s) before failing. New
+  `FAIL_FAST_WAITING_REASONS` (`CrashLoopBackOff`, `ImagePullBackOff`,
+  `ErrImagePull`, `InvalidImageName`, `CreateContainerConfigError`,
+  `CreateContainerError`) is checked against every matching pod's
+  `state.waiting.reason` (main and init containers alike) via new
+  `_pod_fail_fast_reason()`, itself resolved from each rollout target's own
+  `spec.selector.matchLabels` (now also extracted by `_rollout_targets()` —
+  an absent/empty selector, or one expressed only via `matchExpressions`,
+  just falls back to the old timeout-only behavior for that target, never an
+  error). `_wait_for_rollout()`'s blocking per-target `_run_kubectl` call was
+  replaced with new `_run_rollout_status_poll()`, which runs `kubectl
+  rollout status` as its own `subprocess.Popen` and polls it every 3s (new
+  `ROLLOUT_POLL_INTERVAL_SECONDS`) — checking natural completion first, then
+  its own `hard_deadline` (Popen has no built-in `timeout=` like
+  `subprocess.run`, so this replaces that), then the fail-fast probe — with
+  the fail-fast probe running before the very first sleep so a bad state is
+  caught immediately rather than after a full poll cycle. A detected
+  fail-fast reason terminates the process (new `_terminate_process()`,
+  reusing `stream_pod_logs()`'s own terminate/wait/kill-fallback idiom) and
+  **aborts the whole wait right there** — for a manifest bundling several
+  workloads, no remaining target is even started — since one workload
+  already in one of these states means the deploy has already failed. An
+  *ordinary* rollout failure/timeout (no fail-fast reason seen) keeps the
+  pre-existing behavior of still attempting every remaining target.
+  `tests/test_kubernetes_provider_wait_for_ready.py` grew from 12 to 26
+  tests: the 6 pre-existing rollout-status tests were ported from mocking
+  `subprocess.run` directly to a new `_FakePopen`/`_popen_factory` pair (a
+  scripted `.poll()` sequence drives natural-exit-vs-still-running, same as
+  a real Popen) with no behavior change; 7 new tests cover fail-fast
+  aborting before the timeout, one target's fail-fast aborting the rest of a
+  3-target manifest, an unselected/selector-less manifest falling back to
+  timeout-only behavior unchanged (and never even calling the pod probe), a
+  failing/erroring pod probe not crashing or being mistaken for fail-fast,
+  and a fail-fast reason that only appears after the process already exited
+  naturally never being checked; plus a parametrized test over all 6 trigger
+  reasons and one for an init-container match, both directly against
+  `_pod_fail_fast_reason()`. `APP_SUMMARY.md`'s "Rollout Wait Timeout
+  (seconds)" paragraph was updated to describe this fail-fast behavior
+  alongside the existing timeout description. No migration needed — no
+  model/schema change, this only changes `KubernetesProvider`'s own internal
+  polling.
+- **A prior session's work** (on top of everything below):
   1. **Deploy/Update/Restart now waits for the rollout to actually become
      Ready before counting as a success, with a configurable timeout** —
      planned via plan-mode (AskUserQuestion locked the design up front, then
@@ -90,7 +142,7 @@ Then ask me what to work on next rather than assuming.
      SortableJS's drag-reorder still initializes fine against the collapsed
      table since daisyUI hides collapse content via a zero-height grid row,
      not `display:none`.
-- **A prior session's work** (on top of everything below) — pressing Build,
+- **An earlier session's work** (on top of everything below) — pressing Build,
   Deploy, Update, Stop, or Restart (single or "Whole group") on the
   Builders / Deployment Manifests index pages no longer navigates away to
   the Images / Deployment Runs list on success — it stays on the same
@@ -112,7 +164,7 @@ Then ask me what to work on next rather than assuming.
   `/deployment-manifests/` accordingly; no new tests added since this is a
   redirect-target/flash-content change to already-covered routes, not new
   behavior. No migration needed.
-- **An earlier session's work** (on top of everything below) — the Telegram bot
+- **A session before that's work** (on top of everything below) — the Telegram bot
   integration (previously Workflow-only: `/run`/`/status`/`/review`) can now
   also trigger manual, non-Workflow Builds and Deployment Manifest
   actions — requested directly, not via plan-mode. No migration needed.
@@ -195,7 +247,7 @@ Then ask me what to work on next rather than assuming.
   disabled-manifest and "nothing currently deployed" edge cases for
   deploy/stop, the AI-prefill confident-vs-not-confident branches (plus
   Confirm/Cancel) for Build, and the mixed-Version group-build rejection.
-- **A session before that's work** (on top of everything below) — two independent bug
+- **Two sessions before that's work** (on top of everything below) — two independent bug
   fixes in the Deployment/Workflow pipeline, found via direct user reports
   rather than the test suite. No migration needed for either. Two commits,
   `45464ac` and `95d3b93`.
@@ -254,7 +306,7 @@ Then ask me what to work on next rather than assuming.
      duplicate rows from before the fix; they're inert leftovers (no
      corruption, just wasted redundant builds), and that one run will keep
      showing 3x "Build" until this fix is actually deployed there.
-- **Two sessions before that's work** (on top of everything below) — the "kaniko" build
+- **Three sessions before that's work** (on top of everything below) — the "kaniko" build
   engine now actually works, for a self-hosted deploy onto a real
   Kubernetes + CRI-O cluster (TEBET-APP-3) with no Docker-compatible socket
   to mount at all. No migration needed. Two commits, `928fa53` and
@@ -314,7 +366,7 @@ Then ask me what to work on next rather than assuming.
     through this app — including future builds of itself — should work
     end-to-end. The RBAC manifest also still needs an actual Deploy once
     TEBET-APP-3's cert is sorted.
-- **Three sessions before that's work** (on top of everything below) — commit messages
+- **Four sessions before that's work** (on top of everything below) — commit messages
   now drive Bump Type/Object(s)/Change Type more directly, plus a way to
   actually try that out and understand it from `/ai-settings`. No
   migration needed for any of it.
@@ -391,7 +443,7 @@ Then ask me what to work on next rather than assuming.
   (+6, explicit word recognition and its priority over conflicting
   markers), `tests/test_ai_settings.py` (+6, the tester route including a
   regression test for the `is_submitted()` bug above).
-- **Four sessions before that's work** (on top of everything below) — a Telegram bot
+- **Five sessions before that's work** (on top of everything below) — a Telegram bot
   integration, built in three parts in sequence (the first two planned via
   plan-mode with the user before implementation; the third — build/deploy
   notifications — was a small enough follow-up request to just implement
@@ -506,7 +558,7 @@ Then ask me what to work on next rather than assuming.
   (start/finish hooks + the workflow-driven skip); plus additions to the
   existing `tests/test_telegram.py` (`notify_run_finished`,
   `notify_awaiting_review`).
-- **Five sessions before that's work** (on top of everything below), already
+- **Six sessions before that's work** (on top of everything below), already
   committed and pushed to `origin/main`:
   1. **Workflow build steps can auto-generate their Version Bump/Change
      Type/Object/Message at run time instead of requiring them typed in at
@@ -597,7 +649,7 @@ Then ask me what to work on next rather than assuming.
   the features themselves: the `menus` and `permissions` blueprints had **no
   test file at all** before this session (`tests/test_menus.py`,
   `tests/test_permissions.py` are new).
-- **Six sessions before that's work** (on top of everything below), already
+- **Seven sessions before that's work** (on top of everything below), already
   pushed to `origin/main`:
   1. **The container image never had `kubectl` installed at all** — every
      `DeploymentServer` action (test-connection, apply/delete, pods/

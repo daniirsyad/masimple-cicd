@@ -23,8 +23,26 @@ APPLY_TIMEOUT_SECONDS = 120
 ROLLOUT_WAIT_KINDS = {"Deployment", "StatefulSet", "DaemonSet"}
 # Buffer over a rollout wait's own requested timeout so `kubectl rollout
 # status --timeout=Ns`'s graceful timeout always fires (and returns a clean
-# nonzero exit) before subprocess.run's hard kill would.
+# nonzero exit) before this module's own hard-deadline kill would.
 ROLLOUT_STATUS_TIMEOUT_BUFFER_SECONDS = 15
+
+# A container `state.waiting.reason` in this set means the workload is never
+# going to recover on its own — the kubelet only sets these after at least
+# one real failed attempt (a failed pull, or a crash-and-restart), so there's
+# no flakiness from reacting on first sight. Seeing one of these means the
+# rollout wait should stop immediately rather than waiting out the full
+# configured timeout.
+FAIL_FAST_WAITING_REASONS = {
+    "CrashLoopBackOff",
+    "ImagePullBackOff",
+    "ErrImagePull",
+    "InvalidImageName",
+    "CreateContainerConfigError",
+    "CreateContainerError",
+}
+# How often the rollout wait re-checks pod statuses for the reasons above
+# while `kubectl rollout status` is still running.
+ROLLOUT_POLL_INTERVAL_SECONDS = 3
 
 
 class KubernetesProvider(DeploymentProvider):
@@ -135,17 +153,25 @@ class KubernetesProvider(DeploymentProvider):
         return DeployResult(success=apply_result.success, log=combined_log, error=apply_result.error)
 
     def _rollout_targets(self, manifest_yaml):
-        """[(kind, name, namespace_or_None), ...] for every Deployment/
-        StatefulSet/DaemonSet document in `manifest_yaml`, in document
-        order — the three kinds `kubectl rollout status` understands (see
-        restart()'s own docstring for why `rollout restart -f -` isn't used
-        elsewhere either). A manifest with none of these (ConfigMap/Secret/
-        Service/... only) yields an empty list, meaning "nothing to wait
-        on". This only ever runs after a *successful* `kubectl apply` of
-        this exact text (see apply()), which would itself have already
-        rejected unparsable YAML — but a YAMLError is still swallowed
-        defensively rather than raised, since a wait-target scan failing
-        must never turn an already-successful apply into a hard error.
+        """[(kind, name, namespace_or_None, match_labels), ...] for every
+        Deployment/StatefulSet/DaemonSet document in `manifest_yaml`, in
+        document order — the three kinds `kubectl rollout status`
+        understands (see restart()'s own docstring for why `rollout
+        restart -f -` isn't used elsewhere either). A manifest with none of
+        these (ConfigMap/Secret/Service/... only) yields an empty list,
+        meaning "nothing to wait on". This only ever runs after a
+        *successful* `kubectl apply` of this exact text (see apply()),
+        which would itself have already rejected unparsable YAML — but a
+        YAMLError is still swallowed defensively rather than raised, since a
+        wait-target scan failing must never turn an already-successful
+        apply into a hard error.
+
+        `match_labels` is `spec.selector.matchLabels` (a dict), used by
+        `_pod_fail_fast_reason()` to find this target's own pods. An empty
+        dict (selector absent, or expressed only via `matchExpressions`
+        rather than `matchLabels` — out of scope here) means "skip fail-fast
+        detection for this target", never an error — it just falls back to
+        plain timeout-only waiting.
         """
         targets = []
         try:
@@ -158,10 +184,64 @@ class KubernetesProvider(DeploymentProvider):
                 metadata = doc.get("metadata") or {}
                 name = metadata.get("name")
                 if name:
-                    targets.append((doc["kind"], name, metadata.get("namespace")))
+                    spec = doc.get("spec") or {}
+                    match_labels = (spec.get("selector") or {}).get("matchLabels") or {}
+                    targets.append((doc["kind"], name, metadata.get("namespace"), match_labels))
         except yaml.YAMLError:
             return []
         return targets
+
+    def _pod_fail_fast_reason(self, namespace, match_labels):
+        """(reason, pod_name) for the first pod matching `match_labels`
+        whose container (or init container) is waiting on one of
+        FAIL_FAST_WAITING_REASONS — (None, None) if nothing bad is found.
+
+        This is a best-effort supplementary probe: any error running or
+        parsing `kubectl get pods` (including a nonzero exit) is treated the
+        same as "nothing found" rather than raised — a flaky check must
+        never itself fail an otherwise-healthy deploy. It's also poll-based
+        sampling, not a watch, so a container that flaps in and out of a bad
+        state between polls can in principle be missed; acceptable, not
+        something this needs to solve.
+        """
+        selector = ",".join(f"{key}={value}" for key, value in sorted(match_labels.items()))
+        args = ["get", "pods", "-l", selector, "-o", "json"]
+        if namespace:
+            args += ["-n", namespace]
+
+        try:
+            process = self._run_kubectl(args, timeout=POD_LIST_TIMEOUT_SECONDS)
+        except (OSError, subprocess.TimeoutExpired):
+            return None, None
+        if process.returncode != 0:
+            return None, None
+
+        try:
+            items = json.loads(process.stdout).get("items", [])
+        except json.JSONDecodeError:
+            return None, None
+
+        for pod in items:
+            status = pod.get("status") or {}
+            statuses = status.get("containerStatuses", []) + status.get("initContainerStatuses", [])
+            for container_status in statuses:
+                reason = ((container_status.get("state") or {}).get("waiting") or {}).get("reason")
+                if reason in FAIL_FAST_WAITING_REASONS:
+                    return reason, (pod.get("metadata") or {}).get("name")
+        return None, None
+
+    @staticmethod
+    def _terminate_process(process):
+        """Same terminate/wait-with-timeout/kill fallback stream_pod_logs()
+        already uses for its own long-lived Popen.
+        """
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
 
     def _wait_for_rollout(self, manifest_yaml, wait_timeout_seconds):
         """Runs `kubectl rollout status <kind>/<name> [-n <namespace>]
@@ -175,6 +255,17 @@ class KubernetesProvider(DeploymentProvider):
         (including running out of the shared deadline before its own turn)
         fails the whole result — a workload that never comes up is a real
         deploy failure, not a partial success.
+
+        While a resource's rollout status is in progress, its pods are also
+        polled (every ROLLOUT_POLL_INTERVAL_SECONDS) for a
+        FAIL_FAST_WAITING_REASONS container state — see
+        _run_rollout_status_poll()/_pod_fail_fast_reason(). Hitting one of
+        those aborts the wait immediately, for this resource *and* every
+        remaining one in this manifest, rather than waiting out the rest of
+        the shared deadline: one workload already in CrashLoopBackOff/
+        ImagePullBackOff/etc. means the deploy has already failed. An
+        ordinary rollout failure/timeout (no fail-fast reason seen) keeps
+        the existing behavior of still attempting every remaining resource.
         """
         targets = self._rollout_targets(manifest_yaml)
         if not targets:
@@ -184,7 +275,7 @@ class KubernetesProvider(DeploymentProvider):
         log_parts = []
         failed_labels = []
 
-        for kind, name, namespace in targets:
+        for kind, name, namespace, match_labels in targets:
             resource_ref = f"{kind.lower()}/{name}"
             label = f"{resource_ref} -n {namespace}" if namespace else resource_ref
 
@@ -194,19 +285,15 @@ class KubernetesProvider(DeploymentProvider):
                 failed_labels.append(label)
                 continue
 
-            args = ["rollout", "status", resource_ref, f"--timeout={math.ceil(remaining)}s"]
-            if namespace:
-                args += ["-n", namespace]
+            log_text, ordinary_failure, fail_fast_detail = self._run_rollout_status_poll(
+                resource_ref, namespace, match_labels, remaining, label
+            )
+            log_parts.append(log_text)
 
-            try:
-                process = self._run_kubectl(args, timeout=remaining + ROLLOUT_STATUS_TIMEOUT_BUFFER_SECONDS)
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                log_parts.append(f"{label}: {exc}\n")
-                failed_labels.append(label)
-                continue
-
-            log_parts.append(process.stdout + process.stderr)
-            if process.returncode != 0:
+            if fail_fast_detail:
+                failed_labels.append(f"{label} ({fail_fast_detail})")
+                break
+            if ordinary_failure:
                 failed_labels.append(label)
 
         combined_log = "".join(log_parts)
@@ -217,6 +304,64 @@ class KubernetesProvider(DeploymentProvider):
                 error=f"Rollout did not become ready within {wait_timeout_seconds}s: {', '.join(failed_labels)}",
             )
         return DeployResult(success=True, log=combined_log)
+
+    def _run_rollout_status_poll(self, resource_ref, namespace, match_labels, remaining_seconds, label):
+        """Runs `kubectl rollout status <resource_ref> [-n namespace]
+        --timeout=<remaining_seconds>s` as its own Popen (not the blocking
+        `_run_kubectl`), polling every ROLLOUT_POLL_INTERVAL_SECONDS for
+        either natural completion or a FAIL_FAST_WAITING_REASONS pod state
+        (when `match_labels` is non-empty), and enforcing its own
+        `hard_deadline` kill since Popen has no built-in timeout= like
+        subprocess.run does.
+
+        Returns (log_text, ordinary_failure: bool, fail_fast_detail: str | None).
+        `fail_fast_detail` set means a bad pod state was found; otherwise
+        `ordinary_failure` reflects a nonzero rollout-status exit or a
+        hard-deadline kill (both "waited, never became ready" cases).
+        """
+        args = ["rollout", "status", resource_ref, f"--timeout={math.ceil(remaining_seconds)}s"]
+        if namespace:
+            args += ["-n", namespace]
+
+        # Kept open for the whole poll loop (unlike _run_kubectl, which
+        # closes its tempdir right after a blocking call returns) — closing
+        # it early would delete the kubeconfig out from under a still-running
+        # kubectl process.
+        with tempfile.TemporaryDirectory() as config_dir:
+            config_path = os.path.join(config_dir, "kubeconfig.yaml")
+            with open(config_path, "w") as config_file:
+                config_file.write(self.kubeconfig)
+            env = {**os.environ, "KUBECONFIG": config_path}
+
+            try:
+                process = subprocess.Popen(
+                    [KUBECTL_PATH, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env
+                )
+            except OSError as exc:
+                return f"{label}: {exc}\n", True, None
+
+            hard_deadline = time.monotonic() + remaining_seconds + ROLLOUT_STATUS_TIMEOUT_BUFFER_SECONDS
+
+            while True:
+                if process.poll() is not None:
+                    stdout, stderr = process.communicate()
+                    return stdout + stderr, process.returncode != 0, None
+
+                if time.monotonic() >= hard_deadline:
+                    self._terminate_process(process)
+                    return (
+                        f"{label}: rollout status did not exit within {math.ceil(remaining_seconds)}s (killed)\n",
+                        True,
+                        None,
+                    )
+
+                if match_labels:
+                    reason, pod_name = self._pod_fail_fast_reason(namespace, match_labels)
+                    if reason:
+                        self._terminate_process(process)
+                        return f"{label}: pod {pod_name} is {reason}\n", False, f"pod {pod_name}: {reason}"
+
+                time.sleep(ROLLOUT_POLL_INTERVAL_SECONDS)
 
     def get_live_status(self, manifest_yaml):
         try:
