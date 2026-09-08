@@ -17,6 +17,8 @@ from app.models import BuildBatch, DeploymentRun, Object, Version, WorkflowRun, 
 from app.services.build.prefill import compute_build_prefill
 from app.services.build.worker import enqueue_build_batch
 from app.services.deployment.worker import enqueue_deployment_run
+from app.services.discord.helpers import notify_awaiting_review as discord_notify_awaiting_review
+from app.services.discord.helpers import notify_run_finished as discord_notify_run_finished
 from app.services.telegram.helpers import notify_awaiting_review, notify_run_finished
 from app.services.workflow.resolver import resolve_step_builders, resolve_step_manifests
 from app.utils.error_logger import log_error
@@ -68,6 +70,7 @@ def finish_step(run, step, success):
             run.finished_at = datetime.utcnow()
             db.session.commit()
             notify_run_finished(run)
+            discord_notify_run_finished(run)
             return
 
     next_step = _next_step(step)
@@ -76,6 +79,7 @@ def finish_step(run, step, success):
         run.finished_at = datetime.utcnow()
         db.session.commit()
         notify_run_finished(run)
+        discord_notify_run_finished(run)
     else:
         db.session.commit()
         _start_step(run, next_step)
@@ -202,6 +206,7 @@ def _start_step(run, step):
                 db.session.add(step_run)
                 db.session.commit()
                 notify_awaiting_review(step_run)
+                discord_notify_awaiting_review(step_run)
                 return
 
             bump_type = prefill["bump_type"]
@@ -316,6 +321,7 @@ def _tick(app):
                 run.finished_at = datetime.utcnow()
                 db.session.commit()
                 notify_run_finished(run)
+                discord_notify_run_finished(run)
             else:
                 _start_step(run, step)
 

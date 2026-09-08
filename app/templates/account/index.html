@@ -38,6 +38,21 @@
         {% endfor %}
       </div>
 
+      <div class="form-control">
+        <label class="label" for="{{ form.discord_user_id.id }}">
+          <span class="label-text">Discord User ID</span>
+        </label>
+        {{ form.discord_user_id(class="input input-bordered input-sm w-full", placeholder="e.g. 123456789012345678") }}
+        <p class="mt-1 text-xs text-base-content/60">
+          Same purpose as the Telegram Chat ID above, for the Discord bot integration. Find your own numeric
+          user ID by enabling Developer Mode in Discord's settings, then right-clicking your own name and
+          choosing "Copy User ID".
+        </p>
+        {% for error in form.discord_user_id.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
       <div class="divider my-0">Change Password</div>
 
       <div class="form-control">

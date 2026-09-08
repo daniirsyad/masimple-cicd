@@ -90,6 +90,7 @@ def create_user():
             full_name=form.full_name.data or None,
             role_id=uuid.UUID(form.role_id.data),
             telegram_chat_id=form.telegram_chat_id.data or None,
+            discord_user_id=form.discord_user_id.data or None,
             created_by=current_user.id,
         )
         db.session.add(user)
@@ -120,6 +121,7 @@ def edit_user(user_id):
         user.role_id = uuid.UUID(form.role_id.data)
         user.is_active = form.is_active.data
         user.telegram_chat_id = form.telegram_chat_id.data or None
+        user.discord_user_id = form.discord_user_id.data or None
 
         if form.new_password.data:
             user.password_hash = generate_password_hash(form.new_password.data)

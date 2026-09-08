@@ -15,6 +15,8 @@ from app.services.build.history import get_last_built_commit
 from app.services.build.versioning import bump_version
 from app.services.git.helpers import provider_for_git_source
 from app.services.registry.factory import get_registry_provider
+from app.services.discord.helpers import notify_build_finished as discord_notify_build_finished
+from app.services.discord.helpers import notify_build_started as discord_notify_build_started
 from app.services.telegram.helpers import notify_build_finished, notify_build_started
 from app.utils.crypto import decrypt
 from app.utils.error_logger import log_error
@@ -186,6 +188,7 @@ def _claim_next_job():
 
     if batch_just_started:
         notify_build_started(batch)
+        discord_notify_build_started(batch)
     return build.id
 
 
@@ -367,6 +370,7 @@ def _update_batch_status(batch_id):
 
     if not was_terminal and batch.status in TERMINAL_STATUSES:
         notify_build_finished(batch)
+        discord_notify_build_finished(batch)
 
 
 def _record_commit_history(git_provider, repository, build):

@@ -27,8 +27,154 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1026 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below) — Deploy/Update/
+- **1079 tests passing** (as of the last full run).
+- **This session's work** (on top of everything below) — a full Discord bot
+  integration, feature-parity with the existing Telegram integration (both
+  directions: outbound notifications and inbound commands). Scoped up front
+  via AskUserQuestion (Discord Gateway WebSocket transport, not an HTTP
+  Interactions endpoint — this app is routinely deployed with no public
+  HTTPS, the same reason Telegram uses long-polling; native slash commands
+  + message components, not privileged-intent plain-text DM commands; full
+  command parity, not notifications-only), then planned via plan-mode
+  (2 Explore agents surveyed the existing Telegram implementation in full,
+  a Plan agent validated/detailed the Gateway protocol design and caught a
+  real design bug — see point 2 below — before implementing).
+  1. **New shared module `app/services/bot_shared.py`**, extracted out of
+     `app/services/telegram/worker.py`/`helpers.py` before adding Discord,
+     so neither provider duplicates the provider-agnostic pieces:
+     `DEPLOY_ACTIONS`/`GROUP_ACTION_PREFIX`/`GROUP_ACTION_LOOKUP`/
+     `BUILD_GROUP_ACTIONS` (the deploy/update/stop/restart action table and
+     group-callback-token maps), the group-resolution helpers
+     (`_group_hash`, `_manifests_in_group`, `_groups_among`,
+     `_builders_in_group`, `_single_version_groups_among`,
+     `_target_manifests`, `_accessible_with_servers`, `_currently_live`),
+     the build-prefill wrappers (`_build_prefill_for`,
+     `_group_build_prefill_for`, `_build_is_ready`), `format_review_summary`,
+     and the notification dedup guards (`_is_workflow_driven_batch`,
+     `_is_workflow_driven_run`, `_deploy_label`). Telegram's own modules
+     were refactored to import (re-export) from here rather than keeping a
+     second copy — confirmed safe since `tests/test_telegram_worker.py`
+     imports these by path through `telegram.worker`, which still resolves
+     identically after the re-export (Python binds imported names into the
+     importing module's namespace); all 59 existing Telegram tests pass
+     unchanged after the refactor (5 needed their `compute_build_prefill`
+     monkeypatch target moved from `telegram.worker` to `bot_shared`, since
+     that's where the call now actually happens). One new generalization
+     along the way: Telegram's `_resolve_group_build_target` (took a
+     notifier and replied inline on failure) became provider-agnostic
+     `resolve_group_build_target(user, group_hash) -> (builders,
+     group_name, error_or_None)` in the shared module, with each provider's
+     own thin wrapper doing the reply — worth the signature change since a
+     version-mismatch check drifting between two independently-maintained
+     copies would be a real correctness bug, not just style.
+  2. **`app/services/discord/` package** (`client.py`, `gateway.py`,
+     `worker.py`, `helpers.py`), mirroring `app/services/telegram/`'s
+     layout wherever Discord's protocol allows, differing where it
+     genuinely can't:
+     - **`gateway.py`** — hand-rolled Gateway WebSocket protocol state
+       machine on top of the new `websocket-client` dependency (added to
+       `requirements.txt` — no async library anywhere in this app, so a
+       synchronous WebSocket client was the only fit): fetches the connect
+       URL via `GET /gateway/bot` fresh each attempt (not hardcoded, so
+       `session_start_limit.remaining` can be checked), Identify
+       (`intents: 0` — `INTERACTION_CREATE` isn't gated by any intent, so
+       none, privileged or not, is needed at all) vs. Resume decided by
+       close-code + held session state, a jittered heartbeat sub-thread
+       with missed-ACK zombie detection (closes and lets the outer loop
+       reconnect), and real exponential backoff (1s→60s, capped, reset
+       after a connection survives 60s) rather than Telegram's flat 5s
+       retry, since Discord penalizes reconnect storms. Covered by a
+       dedicated `tests/test_discord_gateway.py` (13 tests) driving the
+       op-code state machine directly against a fake `ws` object — no real
+       socket/thread, the one part of this feature that genuinely can't be
+       exercised against live Discord infrastructure in CI.
+     - **`worker.py`** — same `_become_poll_leader` Postgres advisory-lock
+       pattern as Telegram (new key `917_442_102`, distinct from Telegram's
+       `917_442_101`), but a `_supervise` loop instead of a poll loop:
+       Discord's Gateway is a persistent connection, not a one-shot
+       long-poll, so this loop's job is starting/stopping a background
+       `discord-gateway` thread as config changes, actively tearing down a
+       live connection the moment `discord_bot_commands_enabled` is turned
+       off (not just skipping an iteration, which is all Telegram's
+       already-connectionless tick needs to do). Command/interaction
+       dispatch structurally mirrors Telegram's three-tier
+       `action.partition(":")` scheme (group-deploy, group-build,
+       single-UUID — reusing the shared module's tables verbatim), with
+       Discord's real protocol differences handled explicitly: Discord's
+       5-ActionRow-per-message cap (not "25 buttons" — an early design
+       mistake a Plan agent's validation pass caught) meant every "pick one
+       of N" list (`/run`, `/status`, `/review`, `/build`, `/deploy` &
+       friends) uses a String Select component instead of Telegram's
+       one-button-per-row inline keyboard, with confirm/cancel and
+       approve/reject pairs staying literal 2-button rows. The 4 AI-backed
+       build-prefill interactions (`build`/`bconfirm`/`gbuild`/`gbconfirm`
+       — `compute_build_prefill` has real, unbounded latency) can't run
+       inline against Discord's 3-second interaction-ack deadline the way
+       Telegram's synchronous single-round-trip model allowed: these now
+       ack with a deferred response immediately, then hand off to a bounded
+       `concurrent.futures.ThreadPoolExecutor(max_workers=8)` which does
+       the real prefill work and `PATCH`es the followup — keeping the
+       Gateway's own read thread free to keep heartbeating (a slow AI call
+       running inline there would starve heartbeats, get the connection
+       zombie-killed, and risk blowing the ack deadline on the very
+       reconnect it caused). Command registration (`PUT
+       /applications/{id}/commands`) happens on every Gateway `READY`
+       (idempotent bulk overwrite) rather than needing Telegram's
+       "register once" flag.
+     - **`client.py`** — thin `requests`-based REST wrapper (DM channel
+       open/send, bulk command registration, interaction
+       respond/defer/followup endpoints), same shape as
+       `TelegramNotifier`. **`helpers.py`** — near-verbatim `notify_*` port
+       of Telegram's (same guard-clause order, same never-raises contract),
+       swapping in `DiscordClient`'s DM send and Button components in place
+       of Telegram's inline keyboard for the review Approve/Reject pair.
+  3. **`User.discord_user_id`** (mirrors `telegram_chat_id`, admin/self-
+     entered, "plausibly numeric" validation only — `^\d{17,20}$`, no
+     leading `-` since Discord snowflakes are never negative, unlike a
+     Telegram chat ID) and 4 new `SystemConfig` fields
+     (`discord_notifications_enabled`, `encrypted_discord_bot_token`,
+     `discord_bot_commands_enabled`, `discord_application_id` — the last
+     one NOT secret, needed for the command-registration/followup REST
+     URLs; no Discord equivalent of `telegram_last_update_id`, since a
+     Gateway Resume's session state is inherently in-memory/per-connection
+     and a fresh reconnect on restart is a valid, cheap fallback).
+     Migration `0ac24b6bdb62` — hand-added `server_default='false'` to the
+     two new NOT NULL booleans (Alembic's autogenerate doesn't infer one
+     from the model's Python-side `default=False`, and `system_configs`
+     already has an existing singleton row to backfill — same fixup this
+     repo's own `telegram_notifications_enabled`/
+     `telegram_bot_commands_enabled` migrations needed before it).
+  4. **Mirrored form/route/template fields** across `account`, `users`, and
+     `system_config` blueprints (Discord User ID next to Telegram Chat ID
+     everywhere it appears; a new "Discord Integration" card on `/config`
+     next to "Telegram Integration", sharing its Security Notification
+     Recipient dropdown rather than duplicating it) — and the 5 existing
+     Telegram notification call sites (`workflow/worker.py`'s
+     `finish_step`/`_start_step`, `build/worker.py`'s
+     `_claim_next_job`/`_update_batch_status`, `deployment/worker.py`'s
+     `_claim_next_job`/`_update_run_status`, `auth/routes.py`'s `login()`
+     security alerts) each gained an identical, independent Discord call
+     right alongside — both are best-effort/never-raising, so calling both
+     unconditionally is safe even when only one provider is configured for
+     a given user. Forgot-password reset links deliberately stay
+     Telegram-only (not part of this feature's scope).
+  5. **New tests**: `tests/test_discord.py` (19, mirrors `test_telegram.py`
+     — client REST behavior + every `notify_*`'s guard clauses),
+     `tests/test_discord_worker.py` (21, mirrors `test_telegram_worker.py`'s
+     white-box style at the interaction level — no `_tick()` equivalent to
+     call since dispatch is event-driven, not polled; includes ordering
+     assertions for the 4 deferred build interactions: ack before
+     `compute_build_prefill`, followup after), `tests/test_discord_
+     gateway.py` (13, op-code state machine in isolation). 1026 → 1079
+     tests; full suite re-run clean after the `bot_shared.py` extraction
+     specifically, and again after wiring in the 5 notification call
+     sites, to catch anything the refactor reasoning missed.
+  **Not done this session** (out of scope, no infrastructure to test
+  against): actually creating a Discord Application/Bot and exercising this
+  end-to-end against real Discord infrastructure — the Gateway protocol and
+  interaction-ack timing genuinely can't be verified by the automated suite
+  alone, called out explicitly in the plan's own verification section.
+- **A prior session's work** (on top of everything below) — Deploy/Update/
   Restart's rollout wait (see the prior session's work just below for how
   that wait itself was added) now stops immediately on an obviously-fatal
   pod state instead of blocking out the full configured timeout — requested
@@ -80,7 +226,7 @@ Then ask me what to work on next rather than assuming.
   alongside the existing timeout description. No migration needed — no
   model/schema change, this only changes `KubernetesProvider`'s own internal
   polling.
-- **A prior session's work** (on top of everything below):
+- **An earlier session's work** (on top of everything below):
   1. **Deploy/Update/Restart now waits for the rollout to actually become
      Ready before counting as a success, with a configurable timeout** —
      planned via plan-mode (AskUserQuestion locked the design up front, then
@@ -142,7 +288,7 @@ Then ask me what to work on next rather than assuming.
      SortableJS's drag-reorder still initializes fine against the collapsed
      table since daisyUI hides collapse content via a zero-height grid row,
      not `display:none`.
-- **An earlier session's work** (on top of everything below) — pressing Build,
+- **A session before that's work** (on top of everything below) — pressing Build,
   Deploy, Update, Stop, or Restart (single or "Whole group") on the
   Builders / Deployment Manifests index pages no longer navigates away to
   the Images / Deployment Runs list on success — it stays on the same
@@ -164,7 +310,7 @@ Then ask me what to work on next rather than assuming.
   `/deployment-manifests/` accordingly; no new tests added since this is a
   redirect-target/flash-content change to already-covered routes, not new
   behavior. No migration needed.
-- **A session before that's work** (on top of everything below) — the Telegram bot
+- **Two sessions before that's work** (on top of everything below) — the Telegram bot
   integration (previously Workflow-only: `/run`/`/status`/`/review`) can now
   also trigger manual, non-Workflow Builds and Deployment Manifest
   actions — requested directly, not via plan-mode. No migration needed.
@@ -247,7 +393,7 @@ Then ask me what to work on next rather than assuming.
   disabled-manifest and "nothing currently deployed" edge cases for
   deploy/stop, the AI-prefill confident-vs-not-confident branches (plus
   Confirm/Cancel) for Build, and the mixed-Version group-build rejection.
-- **Two sessions before that's work** (on top of everything below) — two independent bug
+- **Three sessions before that's work** (on top of everything below) — two independent bug
   fixes in the Deployment/Workflow pipeline, found via direct user reports
   rather than the test suite. No migration needed for either. Two commits,
   `45464ac` and `95d3b93`.
@@ -306,7 +452,7 @@ Then ask me what to work on next rather than assuming.
      duplicate rows from before the fix; they're inert leftovers (no
      corruption, just wasted redundant builds), and that one run will keep
      showing 3x "Build" until this fix is actually deployed there.
-- **Three sessions before that's work** (on top of everything below) — the "kaniko" build
+- **Four sessions before that's work** (on top of everything below) — the "kaniko" build
   engine now actually works, for a self-hosted deploy onto a real
   Kubernetes + CRI-O cluster (TEBET-APP-3) with no Docker-compatible socket
   to mount at all. No migration needed. Two commits, `928fa53` and
@@ -366,7 +512,7 @@ Then ask me what to work on next rather than assuming.
     through this app — including future builds of itself — should work
     end-to-end. The RBAC manifest also still needs an actual Deploy once
     TEBET-APP-3's cert is sorted.
-- **Four sessions before that's work** (on top of everything below) — commit messages
+- **Five sessions before that's work** (on top of everything below) — commit messages
   now drive Bump Type/Object(s)/Change Type more directly, plus a way to
   actually try that out and understand it from `/ai-settings`. No
   migration needed for any of it.
@@ -443,7 +589,7 @@ Then ask me what to work on next rather than assuming.
   (+6, explicit word recognition and its priority over conflicting
   markers), `tests/test_ai_settings.py` (+6, the tester route including a
   regression test for the `is_submitted()` bug above).
-- **Five sessions before that's work** (on top of everything below) — a Telegram bot
+- **Six sessions before that's work** (on top of everything below) — a Telegram bot
   integration, built in three parts in sequence (the first two planned via
   plan-mode with the user before implementation; the third — build/deploy
   notifications — was a small enough follow-up request to just implement
@@ -558,7 +704,7 @@ Then ask me what to work on next rather than assuming.
   (start/finish hooks + the workflow-driven skip); plus additions to the
   existing `tests/test_telegram.py` (`notify_run_finished`,
   `notify_awaiting_review`).
-- **Six sessions before that's work** (on top of everything below), already
+- **Seven sessions before that's work** (on top of everything below), already
   committed and pushed to `origin/main`:
   1. **Workflow build steps can auto-generate their Version Bump/Change
      Type/Object/Message at run time instead of requiring them typed in at
@@ -649,7 +795,7 @@ Then ask me what to work on next rather than assuming.
   the features themselves: the `menus` and `permissions` blueprints had **no
   test file at all** before this session (`tests/test_menus.py`,
   `tests/test_permissions.py` are new).
-- **Seven sessions before that's work** (on top of everything below), already
+- **Eight sessions before that's work** (on top of everything below), already
   pushed to `origin/main`:
   1. **The container image never had `kubectl` installed at all** — every
      `DeploymentServer` action (test-connection, apply/delete, pods/

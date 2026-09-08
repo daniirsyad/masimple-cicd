@@ -1,4 +1,5 @@
-from app.models import User, WorkflowStepRun
+from app.models import User
+from app.services.bot_shared import _deploy_label, _is_workflow_driven_batch, _is_workflow_driven_run, format_review_summary
 from app.services.telegram.client import TelegramNotifier
 from app.utils.crypto import decrypt
 from app.utils.error_logger import log_error
@@ -66,24 +67,6 @@ def notify_run_finished(run):
     return notify_user(user, text)
 
 
-def format_review_summary(step_run):
-    """Plain-text rendering of an awaiting_review WorkflowStepRun's
-    AI-suggested build values — shared by the push notification below and
-    Telegram's /review command detail view
-    (app/services/telegram/worker.py), so both show the same thing the web
-    review panel does (see workflows/run.html's review form, pre-filled
-    from these same suggested_* columns).
-    """
-    change_type_name = step_run.suggested_change_type.name if step_run.suggested_change_type else None
-    return (
-        f'Workflow "{step_run.run.workflow.name}" needs review before building:\n'
-        f"Version Bump: {step_run.suggested_bump_type or '(not suggested — set on the web)'}\n"
-        f"Change Type: {change_type_name or '(not suggested — set on the web)'}\n"
-        f"Object(s): {step_run.suggested_object_names or '(none)'}\n"
-        f"Description: {step_run.suggested_description or '(none)'}"
-    )
-
-
 def review_keyboard(step_run):
     """Inline Approve/Reject buttons for an awaiting_review WorkflowStepRun
     — callback_data parsed by app/services/telegram/worker.py's
@@ -119,17 +102,6 @@ def notify_awaiting_review(step_run):
 BATCH_STATUS_LABELS = {"success": "succeeded", "failed": "failed", "partial_failure": "completed with failures"}
 
 
-def _is_workflow_driven_batch(batch):
-    """True if this BuildBatch was enqueued by a Workflow step
-    (app/services/workflow/worker.py._start_step), not triggered directly
-    by a human via Builders/Images. Workflow-driven batches are covered by
-    the WorkflowRun-level notify_run_finished above instead — this stops a
-    single workflow build step from also firing its own, redundant
-    build-level notification.
-    """
-    return WorkflowStepRun.query.filter_by(batch_id=batch.id).first() is not None
-
-
 def notify_build_started(batch):
     """Best-effort Telegram push to whoever manually triggered a BuildBatch
     (Builders/Images 'Build' button), the moment its first image actually
@@ -161,25 +133,6 @@ def notify_build_finished(batch):
     status_label = BATCH_STATUS_LABELS.get(batch.status, batch.status)
     text = f'Build for "{batch.version.name} {batch.full_version_string}" {status_label}.'
     return notify_user(user, text)
-
-
-def _is_workflow_driven_run(run):
-    """Same idea as _is_workflow_driven_batch above, for a DeploymentRun a
-    Workflow deploy step enqueued.
-    """
-    return WorkflowStepRun.query.filter_by(deployment_run_id=run.id).first() is not None
-
-
-def _deploy_label(run):
-    """What to call this DeploymentRun in a notification: its group name if
-    it was a group deploy, otherwise the name(s) of the manifest(s)
-    involved (a standalone-manifest run has no group_name — see
-    DeploymentRun's own docstring).
-    """
-    if run.group_name:
-        return run.group_name
-    names = sorted({execution.manifest.name for execution in run.executions if execution.manifest is not None})
-    return ", ".join(names) if names else "a manifest"
 
 
 DEPLOY_ACTION_LABELS = {"deploy": "Deployment", "stop": "Stop", "restart": "Restart"}

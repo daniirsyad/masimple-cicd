@@ -21,29 +21,35 @@ Independent poll thread from the build/deploy/workflow workers — same
 "start once, TESTING/reloader-parent guarded, per-iteration try/except"
 shape as app/services/workflow/worker.py.
 """
-import hashlib
 import threading
 import time
 import uuid
 
 from app.extensions import db
-from app.models import (
-    Builder,
-    ChangeType,
-    DeploymentManifest,
-    Object,
-    User,
-    Version,
-    Workflow,
-    WorkflowRun,
-    WorkflowStepRun,
+from app.models import Builder, ChangeType, DeploymentManifest, Object, User, Version, Workflow, WorkflowRun, WorkflowStepRun
+from app.services.bot_shared import (
+    BUILD_GROUP_ACTIONS,
+    DEPLOY_ACTIONS,
+    GROUP_ACTION_LOOKUP,
+    GROUP_ACTION_PREFIX,
+    _accessible_with_servers,
+    _build_is_ready,
+    _build_prefill_for,
+    _builders_in_group,
+    _currently_live,
+    _group_build_prefill_for,
+    _group_hash,
+    _groups_among,
+    _manifests_in_group,
+    _single_version_groups_among,
+    _target_manifests,
+    format_review_summary,
+    resolve_group_build_target,
 )
-from app.services.build.prefill import compute_build_prefill
-from app.services.build.versioning import BUMP_TYPES
 from app.services.build.worker import enqueue_build_batch
-from app.services.deployment.worker import enqueue_deployment_run, is_currently_deployed
+from app.services.deployment.worker import enqueue_deployment_run
 from app.services.telegram.client import TelegramNotifier
-from app.services.telegram.helpers import format_review_summary, review_keyboard
+from app.services.telegram.helpers import review_keyboard
 from app.services.workflow.worker import approve_awaiting_step, enqueue_workflow_run, reject_awaiting_step
 from app.utils.crypto import decrypt
 from app.utils.error_logger import log_error
@@ -181,91 +187,12 @@ def _run_keyboard(runs):
     }
 
 
-# Shared spec for the four Deployment Manifest trigger actions — mirrors
-# deployment_manifests.routes._trigger_deploy_action /
-# _trigger_teardown_style_action, just table-driven instead of two near-
-# identical route functions, since a single generic handler below serves
-# both the single-manifest and whole-group callback shapes for all four.
-# "teardown": True means "only act on (manifest, server) pairs that are
-# actually currently deployed, don't check is_active" (stop/restart);
-# False means "check is_active first, act on every target server
-# unconditionally" (deploy/update — an update IS a deploy, see
-# enqueue_deployment_run's own docstring).
-DEPLOY_ACTIONS = {
-    "deploy": {"permission": "deployment.deploy", "activity": "TRIGGER_DEPLOYMENT_RUN", "verb": "deployment", "teardown": False},
-    "update": {"permission": "deployment.update", "activity": "TRIGGER_DEPLOYMENT_UPDATE", "verb": "update", "teardown": False},
-    "stop": {"permission": "deployment.stop", "activity": "TRIGGER_DEPLOYMENT_STOP", "verb": "stop", "teardown": True},
-    "restart": {"permission": "deployment.restart", "activity": "TRIGGER_DEPLOYMENT_RESTART", "verb": "restart", "teardown": True},
-}
-
-# callback_data for a whole-group action can't embed every member manifest's
-# UUID (Telegram's 64-byte limit) — a short, deterministic hash of the group
-# name stands in instead, resolved back to actual manifests at callback time
-# via _manifests_in_group. Collision risk is negligible at this app's scale
-# (a handful of groups, not thousands).
-GROUP_ACTION_PREFIX = {"deploy": "gdeploy", "update": "gupdate", "stop": "gstop", "restart": "grestart"}
-GROUP_ACTION_LOOKUP = {prefix: base for base, prefix in GROUP_ACTION_PREFIX.items()}
-
-
-def _group_hash(group_name):
-    return hashlib.sha1(group_name.encode()).hexdigest()[:16]
-
-
-def _target_manifests(active_only):
-    query = DeploymentManifest.query
-    if active_only:
-        query = query.filter_by(is_active=True)
-    return query.order_by(DeploymentManifest.name).all()
-
-
-def _accessible_with_servers(manifests, user):
-    """Manifests this user can act on and that actually have somewhere to
-    act on — same two checks _enforce_trigger_access
-    (deployment_manifests.routes) makes at trigger time, applied here up
-    front so the /deploy-style keyboards don't even offer a choice that
-    would just 403 or "no target servers" on tap.
-    """
-    result = []
-    for manifest in manifests:
-        if not manifest.target_servers:
-            continue
-        if not manifest.is_accessible_to(user):
-            continue
-        if any(not server.is_accessible_to(user) for server in manifest.target_servers):
-            continue
-        result.append(manifest)
-    return result
-
-
-def _currently_live(manifests):
-    return [
-        manifest
-        for manifest in manifests
-        if any(is_currently_deployed(manifest.id, server.id) for server in manifest.target_servers)
-    ]
-
-
-def _groups_among(manifests):
-    """{group_name: [manifest, ...]} — only groups with more than one
-    member here, since a single-member "group" button would just duplicate
-    that manifest's own individual button.
-    """
-    groups = {}
-    for manifest in manifests:
-        if manifest.group_name:
-            groups.setdefault(manifest.group_name, []).append(manifest)
-    return {name: members for name, members in groups.items() if len(members) > 1}
-
-
-def _manifests_in_group(group_hash, active_only):
-    query = DeploymentManifest.query.filter(DeploymentManifest.group_name.isnot(None))
-    if active_only:
-        query = query.filter_by(is_active=True)
-    manifests = query.all()
-    matched_name = next((m.group_name for m in manifests if _group_hash(m.group_name) == group_hash), None)
-    if matched_name is None:
-        return [], None
-    return [m for m in manifests if m.group_name == matched_name], matched_name
+# DEPLOY_ACTIONS/GROUP_ACTION_PREFIX/GROUP_ACTION_LOOKUP and the
+# _group_hash/_target_manifests/_accessible_with_servers/_currently_live/
+# _groups_among/_manifests_in_group helpers now live in app.services.
+# bot_shared (imported above) — shared verbatim with the Discord
+# integration, which needs the identical action-token strings and group
+# resolution to reuse the same three-tier dispatch shape.
 
 
 def _manifest_keyboard(base_action, manifests, groups):
@@ -319,32 +246,6 @@ def _handle_stop_command(notifier, chat_id, user):
 
 def _handle_restart_command(notifier, chat_id, user):
     _handle_manifest_list_command(notifier, chat_id, user, "restart")
-
-
-BUILD_GROUP_ACTIONS = {"gbuild", "gbconfirm", "gbcancel"}
-
-
-def _single_version_groups_among(builders):
-    """Same _groups_among (>1 eligible member) plus the one extra constraint
-    a group *build* has that a group deploy doesn't: every member must share
-    one Version — builders.routes.build() rejects a mixed-Version selection
-    outright, so a group whose members disagree never gets a "Whole group"
-    button here (it would just fail on tap).
-    """
-    groups = _groups_among(builders)
-    return {name: members for name, members in groups.items() if len({b.version_id for b in members}) == 1}
-
-
-def _builders_in_group(group_hash):
-    builders = [
-        builder
-        for builder in Builder.query.filter(Builder.group_name.isnot(None), Builder.is_active.is_(True)).all()
-        if builder.default_branch
-    ]
-    matched_name = next((b.group_name for b in builders if _group_hash(b.group_name) == group_hash), None)
-    if matched_name is None:
-        return [], None
-    return [b for b in builders if b.group_name == matched_name], matched_name
 
 
 def _builder_keyboard(builders, groups):
@@ -702,15 +603,6 @@ def _handle_manifest_action_callback(notifier, callback_query_id, chat_id, user,
     _reply(notifier, chat_id, f'{spec["verb"].capitalize()} queued for "{label}" ({execution_count} execution(s)).')
 
 
-def _build_prefill_for(builder):
-    return compute_build_prefill([(builder, builder.default_branch)], additional_description="")
-
-
-def _build_is_ready(prefill):
-    has_objects = bool(prefill["matched_objects"]) or any((name or "").strip() for name in prefill["new_object_names"])
-    return bool(prefill["bump_type"] in BUMP_TYPES and has_objects and prefill["change_type_id"])
-
-
 def _format_build_summary(builder, prefill):
     change_type = ChangeType.query.get(prefill["change_type_id"]) if prefill["change_type_id"] else None
     objects = [obj.name for obj in prefill["matched_objects"]] + list(prefill["new_object_names"])
@@ -813,10 +705,6 @@ def _handle_build_cancel_callback(notifier, callback_query_id, chat_id, user, bu
     _answer(notifier, callback_query_id, "Cancelled.")
 
 
-def _group_build_prefill_for(builders):
-    return compute_build_prefill([(builder, builder.default_branch) for builder in builders], additional_description="")
-
-
 def _format_group_build_summary(group_name, builders, prefill):
     change_type = ChangeType.query.get(prefill["change_type_id"]) if prefill["change_type_id"] else None
     objects = [obj.name for obj in prefill["matched_objects"]] + list(prefill["new_object_names"])
@@ -842,26 +730,14 @@ def _group_build_confirm_keyboard(group_hash):
 
 
 def _resolve_group_build_target(callback_query_id, notifier, user, group_hash):
-    """Shared resolve+validate for both the preview and confirm group-build
-    callbacks: group still exists, every member still accessible, and every
-    member still shares one Version (builders.routes.build()'s own hard
-    requirement — a mixed-Version group can never actually build). Returns
-    (builders, group_name) on success, (None, None) after already answering
-    the callback with why not.
+    """Telegram-side wrapper over the shared resolve_group_build_target
+    (app.services.bot_shared): answers the callback with the error text on
+    failure (this provider's own reply mechanism), same (builders,
+    group_name) success shape as before.
     """
-    builders, group_name = _builders_in_group(group_hash)
-    if not builders:
-        _answer(notifier, callback_query_id, "That group is no longer available.")
-        return None, None
-    if any(not builder.is_accessible_to(user) for builder in builders):
-        _answer(notifier, callback_query_id, "You don't have access to one or more builders in this group.")
-        return None, None
-    if len({builder.version_id for builder in builders}) > 1:
-        _answer(
-            notifier,
-            callback_query_id,
-            "Builders in this group no longer share one Version — build them individually or from the web UI.",
-        )
+    builders, group_name, error = resolve_group_build_target(user, group_hash)
+    if error:
+        _answer(notifier, callback_query_id, error)
         return None, None
     return builders, group_name
 

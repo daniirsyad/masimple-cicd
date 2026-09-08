@@ -10,6 +10,7 @@ from app.blueprints.auth import auth_bp
 from app.blueprints.auth.forms import ForgotPasswordForm, LoginForm, ResetPasswordForm
 from app.extensions import db
 from app.models import PasswordResetToken, User
+from app.services.discord.helpers import notify_security_contact as discord_notify_security_contact
 from app.services.telegram.helpers import notify_security_contact, notify_user
 from app.utils.logger import log_activity
 from app.utils.system_config import get_system_config
@@ -64,14 +65,14 @@ def login():
                 # learns about this from the screen, only the security
                 # contact does, via Telegram.
                 if just_locked:
-                    notify_security_contact(
+                    text = (
                         f"🔒 Account '{user.username}' has been locked after too many failed "
-                        "login attempts. A user.unlock permission holder must unlock it.",
+                        "login attempts. A user.unlock permission holder must unlock it."
                     )
                 else:
-                    notify_security_contact(
-                        f"⚠️ A failed login attempt (wrong password) was just made on account '{user.username}'.",
-                    )
+                    text = f"⚠️ A failed login attempt (wrong password) was just made on account '{user.username}'."
+                notify_security_contact(text)
+                discord_notify_security_contact(text)
 
             log_activity(
                 action="LOGIN_FAILED",
@@ -95,9 +96,9 @@ def login():
             target_id=str(user.id),
             description=f"User '{user.username}' logged in",
         )
-        notify_security_contact(
-            f"✅ User '{user.username}' just signed in to MASIMPLE CICD (IP: {request.remote_addr or 'unknown'})."
-        )
+        login_text = f"✅ User '{user.username}' just signed in to MASIMPLE CICD (IP: {request.remote_addr or 'unknown'})."
+        notify_security_contact(login_text)
+        discord_notify_security_contact(login_text)
 
         next_page = request.args.get("next")
         return redirect(next_page or url_for("main.index"))

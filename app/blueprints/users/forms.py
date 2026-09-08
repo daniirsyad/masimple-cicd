@@ -16,6 +16,12 @@ class CreateUserForm(FlaskForm):
     telegram_chat_id = StringField(
         "Telegram Chat ID (optional)", validators=[Optional(), Length(max=64), Regexp(r"^-?\d+$", message="Must be a numeric Telegram chat ID.")]
     )
+    # Discord snowflake user ID — see app/services/discord/. Same
+    # "plausibly numeric only" validation as telegram_chat_id above; unlike
+    # a Telegram chat ID, a Discord snowflake is never negative.
+    discord_user_id = StringField(
+        "Discord User ID (optional)", validators=[Optional(), Length(max=32), Regexp(r"^\d{17,20}$", message="Must be a numeric Discord user ID.")]
+    )
     submit = SubmitField("Create User")
 
     def validate_username(self, field):
@@ -30,5 +36,8 @@ class EditUserForm(FlaskForm):
     new_password = PasswordField("Reset Password", validators=[Optional(), Length(min=8)])
     telegram_chat_id = StringField(
         "Telegram Chat ID (optional)", validators=[Optional(), Length(max=64), Regexp(r"^-?\d+$", message="Must be a numeric Telegram chat ID.")]
+    )
+    discord_user_id = StringField(
+        "Discord User ID (optional)", validators=[Optional(), Length(max=32), Regexp(r"^\d{17,20}$", message="Must be a numeric Discord user ID.")]
     )
     submit = SubmitField("Save Changes")

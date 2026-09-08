@@ -180,13 +180,82 @@ MASIMPLE CICD{% endblock %} {% block content %}
           {{ form.security_notification_user_id(class="select select-bordered select-sm w-full") }}
           <p class="mt-1 text-xs text-base-content/60">
             The one user who receives wrong-password/lockout/login alerts for <em>every</em> account, not
-            just their own — needs their own Telegram Chat ID set on the Users page to actually receive
-            them. Forgot-password reset links are separate and always go straight to the account owner
-            requesting one.
+            just their own — needs their own Telegram Chat ID and/or Discord User ID set on the Users page
+            to actually receive them (whichever provider(s) are enabled below). Forgot-password reset links
+            are separate and always go straight to the account owner requesting one, via Telegram only.
           </p>
           {% for error in form.security_notification_user_id.errors %}
           <p class="text-error text-sm">{{ error }}</p>
           {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card bg-base-100 shadow-sm">
+    <div class="card-body p-4">
+      <h2 class="card-title text-base">Discord Integration</h2>
+      <p class="text-xs text-base-content/60">
+        The Discord counterpart to Telegram above — same notifications and the same bot commands
+        (/run, /status, /review, /build, /deploy, /update, /stop, /restart), connected via a persistent
+        Gateway WebSocket rather than a webhook, so no public HTTPS endpoint is required. Create an
+        Application + Bot at the
+        <a href="https://discord.com/developers/applications" target="_blank" class="link link-primary">Discord Developer Portal</a>,
+        copy its Bot Token and Application ID below, and invite the bot to a server you and each relevant
+        user share (a bot can only DM someone it shares a server with). No privileged Discord intents are
+        needed. Each user then finds their own numeric Discord User ID via Discord's Developer Mode
+        ("Copy User ID") and sets it on their row on the Users page.
+      </p>
+
+      <div class="mt-2 flex flex-col gap-4">
+        <div class="form-control">
+          <label class="label cursor-pointer justify-start gap-2" for="{{ form.discord_notifications_enabled.id }}">
+            {{ form.discord_notifications_enabled(class="checkbox checkbox-sm") }}
+            <span class="label-text">Enable Discord Notifications</span>
+          </label>
+          <p class="mt-1 text-xs text-base-content/60">
+            Off by default so adding a bot token alone doesn't start sending messages.
+          </p>
+        </div>
+
+        <div class="form-control">
+          <label class="label" for="{{ form.discord_bot_token.id }}">
+            <span class="label-text">Discord Bot Token</span>
+          </label>
+          {{ form.discord_bot_token(class="input input-bordered input-sm w-full font-mono", placeholder="leave blank to keep the current one") }}
+          <p class="mt-1 text-xs text-base-content/60">
+            Write-only — never shown again once saved, same as the Telegram Bot Token above.
+          </p>
+          {% for error in form.discord_bot_token.errors %}
+          <p class="text-error text-sm">{{ error }}</p>
+          {% endfor %}
+        </div>
+
+        <div class="form-control">
+          <label class="label" for="{{ form.discord_application_id.id }}">
+            <span class="label-text">Discord Application ID</span>
+          </label>
+          {{ form.discord_application_id(class="input input-bordered input-sm w-full font-mono") }}
+          <p class="mt-1 text-xs text-base-content/60">
+            Not secret — from the same Application's General Information page. Needed to register the "/"
+            command menu and to respond to build previews.
+          </p>
+          {% for error in form.discord_application_id.errors %}
+          <p class="text-error text-sm">{{ error }}</p>
+          {% endfor %}
+        </div>
+
+        <div class="form-control">
+          <label class="label cursor-pointer justify-start gap-2" for="{{ form.discord_bot_commands_enabled.id }}">
+            {{ form.discord_bot_commands_enabled(class="checkbox checkbox-sm") }}
+            <span class="label-text">Enable Discord Bot Commands (/run, /status)</span>
+          </label>
+          <p class="mt-1 text-xs text-base-content/60">
+            Lets a user with their Discord User ID linked (Users page) run and check Workflows straight
+            from Discord's own "/" command picker, provided they also hold the <code>workflow.run</code>
+            permission. Separate from the notifications toggle above — turning this on opens a persistent
+            background WebSocket connection to Discord.
+          </p>
         </div>
       </div>
     </div>

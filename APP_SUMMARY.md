@@ -31,7 +31,18 @@ MASIMPLE CICD is an internal Flask web app with four halves:
    Manifest action (single manifest or a whole group in one tap, the same
    permission/`is_active`/accessibility rules the web routes enforce), plus
    automatic push notifications when a Workflow run, or a manually-triggered
-   build/deploy (Telegram- or web-triggered alike), starts and finishes.
+   build/deploy (Telegram- or web-triggered alike), starts and finishes. A
+   **Discord integration** covers the exact same notifications and the same
+   9 commands (`/help` instead of `/start`, otherwise identical) — connected
+   via a persistent Gateway WebSocket rather than long-polling (no public
+   HTTPS needed either way), using native slash commands + Button/Select
+   Menu components instead of a bot-menu + inline keyboard. The two
+   providers share their group-resolution/action-table logic
+   (`app/services/bot_shared.py`) and are otherwise fully independent —
+   either, both, or neither can be configured per-user (`User.discord_
+   user_id` alongside `telegram_chat_id`) and per-installation (their own
+   `SystemConfig` enable toggles/tokens). Forgot-password reset links remain
+   Telegram-only.
 2. A **Docker Image Builder module** built on top of it — register Git repos
    and container registries, define reusable "Builder" configs, trigger
    versioned builds (single or batched), push images, and auto-generate
@@ -77,7 +88,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | Database | PostgreSQL, UUID primary keys everywhere |
 | Auth | Flask-Login (session-based) + Flask-WTF (CSRF) + Werkzeug password hashing |
 | Frontend | Jinja2 + Tailwind CSS 3 + daisyUI 4 — **no JS framework/SPA**; vanilla JS per page, vendored SortableJS for drag-and-drop |
-| Background work | Python `threading`/`queue` — independent in-process worker threads (one for builds, one for deploys, one deploy live-status poller, one workflow orchestrator, one Telegram bot long-poller), no Celery/Redis |
+| Background work | Python `threading`/`queue` — independent in-process worker threads (one for builds, one for deploys, one deploy live-status poller, one workflow orchestrator, one Telegram bot long-poller, one Discord Gateway WebSocket connection), no Celery/Redis |
 | Deployment (of MASIMPLE CICD itself) | Docker (multi-stage: Node build for CSS, then Python/gunicorn `--worker-class gthread --threads 4`), Docker Compose (`web` + `db`) |
 | Git integration | GitPython, provider-abstracted (`GitProvider` → `GitHubProvider`) |
 | Registry integration | docker-py, provider-abstracted (`RegistryProvider` → `DockerHubProvider`/`GHCRProvider`/`HarborProvider`/`ECRProvider`, all implemented) |
@@ -89,6 +100,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | YAML generation | `PyYAML` — YAML Generator page only; everywhere else in this app deliberately avoids it in favor of dict→`json.dumps()` (JSON is valid YAML) since that output only ever feeds `kubectl apply -f -`, never a human — see `app/services/yaml_generator/render.py` |
 | Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 943 tests |
 | Telegram integration | `requests` against the Bot API (`app/services/telegram/`) — both directions now: outbound `sendMessage` (security notifications, forgot-password links, workflow/build/deploy start-finish pushes) **and** inbound, via a long-polling `getUpdates` background thread (no webhook/public HTTPS needed) handling `/run`, `/status`, `/review`, `/build`, `/deploy`, `/update`, `/stop`, `/restart` bot commands and their inline-keyboard callbacks |
+| Discord integration | `requests` (REST) + `websocket-client` (Gateway) against the Discord API (`app/services/discord/`) — same notifications/commands as Telegram above (`/help` instead of `/start`), reached via a persistent Gateway WebSocket + native slash commands/Button/Select Menu components instead of long-polling + inline keyboards; group-resolution/action-table logic shared with Telegram via `app/services/bot_shared.py` |
 
 ## Architecture conventions
 
@@ -272,6 +284,14 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   `/update`/`/stop`/`/restart` command handling, reusing the same bot token)
   + `telegram_last_update_id` (persists the Bot API's `getUpdates` offset
   across restarts so a redeploy doesn't replay already-handled commands).
+  Discord mirrors 4 of these 5 fields — `discord_notifications_enabled`,
+  `encrypted_discord_bot_token`, `discord_bot_commands_enabled` — plus
+  `discord_application_id` (not secret, needed for slash-command
+  registration/interaction-followup REST calls) in place of
+  `telegram_last_update_id` (no equivalent needed — a Gateway WebSocket's
+  Resume state is in-memory/per-connection, so a fresh reconnect on restart
+  is a valid, cheap fallback). `security_notification_user_id` is shared
+  across both providers unchanged.
 
 **Deployment module:**
 - `DeploymentServer` — a registered target: `connection_type` (`kube` or
@@ -407,12 +427,14 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   descriptions, not raw codes. Users support both soft-delete
   (`is_active=False`) and hard delete (blocks self-deletion, reassigns
   `activity_logs.user_id`/`created_by` references first). Each row also
-  shows a Telegram Chat ID field (admin-set) and, once a user's
-  `failed_login_attempts` reaches the configured max, a "Locked" badge plus
-  an Unlock button gated by a separate `user.unlock` permission.
+  shows a Telegram Chat ID and a Discord User ID field (both admin-set) and,
+  once a user's `failed_login_attempts` reaches the configured max, a
+  "Locked" badge plus an Unlock button gated by a separate `user.unlock`
+  permission.
 - **`/account`** (any logged-in user, no permission gate — linked from the
   navbar's user dropdown as "My Account") — self-service editor for the
-  current user's own Full Name, Telegram Chat ID, and password (changing
+  current user's own Full Name, Telegram Chat ID, Discord User ID, and
+  password (changing
   the password requires re-entering the current one). Username, role, and
   active status are deliberately not on this form — those stay admin-only
   via `/users`.
@@ -491,11 +513,15 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   timeout, build engine, duplicate-title toggle, deploy live-status poll
   interval, commit log limit (see the data model section above), plus two
   newer sections — **Security** (max failed login attempts before
-  lockout) and **Telegram Integration** (enable-notifications toggle, bot
+  lockout), **Telegram Integration** (enable-notifications toggle, bot
   token — write-only, blank on submit keeps the current one — the Security
   Notification Recipient dropdown, and a separate **Enable Telegram Bot
   Commands** toggle for the `/run`/`/status`/`/review` inbound command
-  handling, see the RBAC/core and Workflow data model sections above).
+  handling, see the RBAC/core and Workflow data model sections above), and
+  **Discord Integration** (its own enable-notifications toggle, bot token —
+  same write-only pattern — Application ID, and Enable Discord Bot Commands
+  toggle; the Security Notification Recipient dropdown above is shared
+  across both providers, not duplicated here).
 - **`/deployment-servers`** — register/edit target servers (kubeconfig or
   custom-agent credentials, never re-shown after save), per-server "Test
   Connection", `allowed_roles` picker, per-row "Kubernetes" link into that

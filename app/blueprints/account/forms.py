@@ -2,11 +2,15 @@ from flask_wtf import FlaskForm
 from wtforms import PasswordField, StringField, SubmitField
 from wtforms.validators import EqualTo, Length, Optional, Regexp
 
-# Same pattern as app/blueprints/users/forms.py's telegram_chat_id (not
-# imported from there — this is a small, self-contained blueprint, not
-# meant to depend on the admin Users blueprint).
+# Same pattern as app/blueprints/users/forms.py's telegram_chat_id/
+# discord_user_id (not imported from there — this is a small, self-
+# contained blueprint, not meant to depend on the admin Users blueprint).
 TELEGRAM_CHAT_ID_RE = r"^-?\d+$"
 TELEGRAM_CHAT_ID_MESSAGE = "Must be a numeric Telegram chat ID."
+# Discord snowflake IDs are unsigned (no leading "-", unlike a Telegram
+# group-chat ID) and always 17-20 digits at today's scale.
+DISCORD_USER_ID_RE = r"^\d{17,20}$"
+DISCORD_USER_ID_MESSAGE = "Must be a numeric Discord user ID."
 
 
 class AccountForm(FlaskForm):
@@ -20,6 +24,9 @@ class AccountForm(FlaskForm):
     full_name = StringField("Full Name", validators=[Optional(), Length(max=120)])
     telegram_chat_id = StringField(
         "Telegram Chat ID (optional)", validators=[Optional(), Length(max=64), Regexp(TELEGRAM_CHAT_ID_RE, message=TELEGRAM_CHAT_ID_MESSAGE)]
+    )
+    discord_user_id = StringField(
+        "Discord User ID (optional)", validators=[Optional(), Length(max=32), Regexp(DISCORD_USER_ID_RE, message=DISCORD_USER_ID_MESSAGE)]
     )
     current_password = PasswordField("Current Password", validators=[Optional()])
     new_password = PasswordField("New Password", validators=[Optional(), Length(min=8)])

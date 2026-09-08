@@ -182,6 +182,18 @@ block content %}
         {% endfor %}
       </div>
 
+      <div>
+        {{ create_form.discord_user_id.label(class="label text-sm") }}
+        {{ create_form.discord_user_id(class="input input-bordered input-sm w-full", placeholder="e.g. 123456789012345678") }}
+        <p class="text-xs text-base-content/60">
+          Same purpose as the Telegram Chat ID above, for the Discord bot integration — the user finds their
+          own numeric ID via Discord's Developer Mode ("Copy User ID").
+        </p>
+        {% for error in create_form.discord_user_id.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
       <div class="modal-action">
         <button
           type="button"
@@ -244,6 +256,14 @@ block content %}
         {{ form.telegram_chat_id.label(class="label text-sm") }}
         {{ form.telegram_chat_id(class="input input-bordered input-sm w-full", placeholder="e.g. 123456789") }}
         {% for error in form.telegram_chat_id.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div>
+        {{ form.discord_user_id.label(class="label text-sm") }}
+        {{ form.discord_user_id(class="input input-bordered input-sm w-full", placeholder="e.g. 123456789012345678") }}
+        {% for error in form.discord_user_id.errors %}
         <p class="text-error text-sm">{{ error }}</p>
         {% endfor %}
       </div>

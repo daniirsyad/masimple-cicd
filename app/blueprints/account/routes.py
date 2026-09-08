@@ -26,6 +26,7 @@ def index():
 
         current_user.full_name = form.full_name.data or None
         current_user.telegram_chat_id = form.telegram_chat_id.data or None
+        current_user.discord_user_id = form.discord_user_id.data or None
         db.session.commit()
 
         log_activity(

@@ -47,6 +47,11 @@ def index():
         if form.telegram_bot_token.data:
             config.encrypted_telegram_bot_token = encrypt(form.telegram_bot_token.data)
         config.telegram_bot_commands_enabled = form.telegram_bot_commands_enabled.data
+        config.discord_notifications_enabled = form.discord_notifications_enabled.data
+        if form.discord_bot_token.data:
+            config.encrypted_discord_bot_token = encrypt(form.discord_bot_token.data)
+        config.discord_bot_commands_enabled = form.discord_bot_commands_enabled.data
+        config.discord_application_id = form.discord_application_id.data or None
         config.security_notification_user_id = (
             uuid.UUID(form.security_notification_user_id.data) if form.security_notification_user_id.data else None
         )
@@ -66,6 +71,9 @@ def index():
                 f"max_login_attempts={config.max_login_attempts}, "
                 f"telegram_notifications_enabled={config.telegram_notifications_enabled}, "
                 f"telegram_bot_commands_enabled={config.telegram_bot_commands_enabled}, "
+                f"discord_notifications_enabled={config.discord_notifications_enabled}, "
+                f"discord_bot_commands_enabled={config.discord_bot_commands_enabled}, "
+                f"discord_application_id={config.discord_application_id}, "
                 f"security_notification_user_id={config.security_notification_user_id})"
             ),
         )

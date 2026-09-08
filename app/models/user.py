@@ -38,6 +38,12 @@ class User(UserMixin, db.Model):
     # @userinfobot) since this app has no self-service account page and no
     # public signup.
     telegram_chat_id = db.Column(db.String, nullable=True)
+    # Discord snowflake user ID (stored as a string, same as Discord's own
+    # API — a snowflake exceeds 32-bit int range). Same two uses and same
+    # admin/self-entered provenance as telegram_chat_id above — see
+    # app/services/discord/. Unlike a Telegram chat ID, a Discord snowflake
+    # is never negative.
+    discord_user_id = db.Column(db.String, nullable=True)
 
     role = db.relationship("Role", back_populates="users")
     creator = db.relationship("User", remote_side=[id])

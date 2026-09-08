@@ -16,6 +16,8 @@ from app.extensions import db
 from app.models import DeploymentExecution, DeploymentRun
 from app.services.deployment.helpers import provider_for_server
 from app.services.deployment.resolver import UnresolvedPlaceholderError, resolve_manifest
+from app.services.discord.helpers import notify_deploy_finished as discord_notify_deploy_finished
+from app.services.discord.helpers import notify_deploy_started as discord_notify_deploy_started
 from app.services.telegram.helpers import notify_deploy_finished, notify_deploy_started
 from app.utils.error_logger import log_error
 from app.utils.runtime import is_werkzeug_reloader_parent
@@ -218,6 +220,7 @@ def _claim_next_job():
     ).count()
     if started_count == 1:
         notify_deploy_started(execution.run)
+        discord_notify_deploy_started(execution.run)
     return execution.id
 
 
@@ -263,6 +266,7 @@ def _update_run_status(run_id):
 
     if not was_terminal and run.status in TERMINAL_STATUSES:
         notify_deploy_finished(run)
+        discord_notify_deploy_finished(run)
 
 
 def _heartbeat_tick(app):

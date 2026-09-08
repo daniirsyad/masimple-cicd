@@ -897,10 +897,10 @@ class TestBuildCallback:
             db.session.commit()
             builder_id = builder.id
 
-        import app.services.telegram.worker as telegram_worker_module
+        import app.services.bot_shared as bot_shared_module
 
         monkeypatch.setattr(
-            telegram_worker_module,
+            bot_shared_module,
             "compute_build_prefill",
             lambda *a, **k: self._confident_prefill(base_entities["change_type_id"]),
         )
@@ -926,10 +926,10 @@ class TestBuildCallback:
             db.session.commit()
             builder_id = builder.id
 
-        import app.services.telegram.worker as telegram_worker_module
+        import app.services.bot_shared as bot_shared_module
 
         monkeypatch.setattr(
-            telegram_worker_module,
+            bot_shared_module,
             "compute_build_prefill",
             lambda *a, **k: {
                 "bump_type": "patch",
@@ -959,10 +959,10 @@ class TestBuildConfirmCallback:
             db.session.commit()
             builder_id = builder.id
 
-        import app.services.telegram.worker as telegram_worker_module
+        import app.services.bot_shared as bot_shared_module
 
         monkeypatch.setattr(
-            telegram_worker_module,
+            bot_shared_module,
             "compute_build_prefill",
             lambda *a, **k: {
                 "bump_type": "minor",
@@ -1103,10 +1103,10 @@ class TestGroupBuildCallback:
             db.session.commit()
             group_hash = _group_hash("grp")
 
-        import app.services.telegram.worker as telegram_worker_module
+        import app.services.bot_shared as bot_shared_module
 
         monkeypatch.setattr(
-            telegram_worker_module,
+            bot_shared_module,
             "compute_build_prefill",
             lambda *a, **k: self._confident_prefill(base_entities["change_type_id"]),
         )
@@ -1173,10 +1173,10 @@ class TestGroupBuildConfirmCallback:
             b1_id, b2_id = b1.id, b2.id
             group_hash = _group_hash("grp")
 
-        import app.services.telegram.worker as telegram_worker_module
+        import app.services.bot_shared as bot_shared_module
 
         monkeypatch.setattr(
-            telegram_worker_module,
+            bot_shared_module,
             "compute_build_prefill",
             lambda *a, **k: {
                 "bump_type": "minor",

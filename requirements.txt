@@ -13,3 +13,4 @@ cryptography
 requests
 PyYAML
 tzdata
+websocket-client

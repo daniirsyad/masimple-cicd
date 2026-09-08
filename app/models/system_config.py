@@ -40,13 +40,13 @@ class SystemConfig(db.Model):
     # login attempt via get_system_config(), same "no restart needed"
     # pattern as commit_log_limit above.
     max_login_attempts = db.Column(db.Integer, nullable=False, default=5)
-    # Telegram Bot API integration (app/services/telegram/) — used today for
+    # Telegram Bot API integration (app/services/telegram/) — used for
     # security notifications (wrong password, lockout, login — see
-    # security_notification_user_id below) and forgot-password reset links;
-    # the bot/chat plumbing here is also what a future workflow-run
-    # Telegram/Discord trigger integration would reuse, not built yet.
-    # Disabled by default so adding a token alone doesn't start sending
-    # messages.
+    # security_notification_user_id below), forgot-password reset links,
+    # and running/checking Workflows plus manual Build/Deployment actions
+    # via bot commands. Discord (app/services/discord/, below) is a second,
+    # independent provider covering the exact same features. Disabled by
+    # default so adding a token alone doesn't start sending messages.
     telegram_notifications_enabled = db.Column(db.Boolean, nullable=False, default=False)
     # Fernet-encrypted via app/utils/crypto.py, same convention as every
     # other stored credential in this app (encrypted_token/
@@ -77,6 +77,31 @@ class SystemConfig(db.Model):
     # doesn't re-deliver, and re-execute, already-handled /run commands.
     # NULL means "no updates processed yet".
     telegram_last_update_id = db.Column(db.Integer, nullable=True)
+    # Discord Bot API integration (app/services/discord/) — the Discord
+    # counterpart to the four Telegram fields above, same purpose and same
+    # "off by default" reasoning. security_notification_user_id above is
+    # shared across both providers (whichever channel that user has linked
+    # and enabled receives the alert); there is no Discord equivalent of
+    # telegram_last_update_id, since a Gateway WebSocket's Resume state
+    # (session_id/sequence number) is inherently in-memory/per-connection —
+    # a fresh Identify on process restart is a valid, cheap fallback,
+    # unlike losing Telegram's persisted long-poll offset.
+    discord_notifications_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    # Fernet-encrypted via app/utils/crypto.py, same convention as
+    # encrypted_telegram_bot_token above.
+    encrypted_discord_bot_token = db.Column(db.String, nullable=True)
+    # Separate from discord_notifications_enabled, same reasoning as
+    # telegram_bot_commands_enabled above: gates the persistent Gateway
+    # WebSocket connection (app/services/discord/worker.py) that lets a
+    # linked user run/check Workflows and trigger Builds/Deployments via
+    # Discord slash commands.
+    discord_bot_commands_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    # Discord's numeric Application ID (from the Developer Portal's General
+    # Information page) — NOT a secret, unlike the bot token above; needed
+    # for the slash-command bulk-registration and interaction-followup REST
+    # endpoints (PUT/POST/PATCH /applications/{id}/... and
+    # /webhooks/{id}/...).
+    discord_application_id = db.Column(db.String, nullable=True)
     updated_at = db.Column(
         db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
