@@ -27,7 +27,7 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1079 tests passing** (as of the last full run).
+- **1086 tests passing** (as of the last full run).
 - **This session's work** (on top of everything below) — a full Discord bot
   integration, feature-parity with the existing Telegram integration (both
   directions: outbound notifications and inbound commands). Scoped up front
@@ -174,6 +174,78 @@ Then ask me what to work on next rather than assuming.
   end-to-end against real Discord infrastructure — the Gateway protocol and
   interaction-ack timing genuinely can't be verified by the automated suite
   alone, called out explicitly in the plan's own verification section.
+  6. **A same-session follow-up**: replaced a couple of "type a command
+     manually" instructions with real Discord buttons, and gave the
+     Discord-only message copy a friendlier pass — scoped up front via
+     AskUserQuestion (Discord only, not Telegram; which messages: the
+     `/run` confirmation, build/deploy/run-finished notifications, and the
+     awaiting-review notification), then a mid-turn follow-up asked for
+     warmer tone generally, then planned via plan-mode before implementing.
+     - The `/run` confirmation's old "Use /status to check progress" text
+       is now a real **Check Status** Button (`custom_id=f"status:
+       {run.id}"`) that re-enters the exact same `_handle_status_select`
+       `/status`'s own select already dispatches through — no new handler.
+       `notify_run_finished` reuses the identical button (see
+       `status_components()`, `app/services/discord/helpers.py`), so a
+       finished-run push notification also needs nothing typed to check on
+       it — entirely avoids needing a web link for this one.
+     - `notify_deploy_finished`/`notify_build_finished`/
+       `notify_awaiting_review` gained a **View Details**/**View in app**
+       Link-style Button (style `5`, opens client-side, no bot round-trip)
+       to `deployment_runs.detail`/`images.list_images`/`workflows.view_run`
+       respectively — the first because there's no per-build detail page in
+       this app at all (reuses the same `images.list_images` target the
+       existing web success-flash link already points at,
+       `app/blueprints/builders/routes.py:595`), the last because the web
+       review panel can edit a Version Bump/Change Type the AI didn't
+       confidently suggest, which Discord's approve-as-is-only buttons
+       already explicitly punt back to the web UI for.
+     - **The real design problem**: these three notifications fire from a
+       background worker thread with only `app.app_context()`, no live
+       HTTP request, and `url_for(..., _external=True)` raises outside one
+       unless `SERVER_NAME` is configured — confirmed by grep that both
+       existing `_external=True` call sites in this repo (forgot-password,
+       an error-log share link) only ever run from a real request handler.
+       Deliberately did **not** set a global `app.config["SERVER_NAME"]`
+       to fix this — Flask then rejects any real request whose Host header
+       doesn't match it exactly, a real risk given this app is reached by
+       different hostnames/IPs across environments (bare-metal dev, a
+       Podman trial by IP, various clusters). Instead: new
+       `SystemConfig.app_base_url` (String, nullable, admin-set on
+       `/config`'s existing General card — migration `3037a33b2e3e`) plus
+       `app/services/discord/helpers.py`'s new `_external_url(endpoint,
+       **values)`, which wraps a real `url_for(..., _external=True)` call
+       in `current_app.test_request_context(base_url=config.app_base_url)`
+       — Flask's own supported pattern for building a URL from outside a
+       request, transient and thrown away immediately, touching no global
+       config and risking no real request routing. Returns `None` (never
+       raises) when `app_base_url` is unset, and every caller just omits
+       the button in that case — same "auxiliary feature must never break
+       the main flow" contract `notify_user` itself already follows.
+     - Tone pass across `app/services/discord/worker.py`'s and `helpers.py`'s
+       message strings (list prompts, permission/not-found/cancelled
+       replies, `HELP_TEXT`, the build/group-build summaries) — warmer
+       wording, no emoji anywhere (tried emoji first, including real
+       Discord button `emoji` fields on the Confirm/Cancel and
+       Approve/Reject pairs; removed everywhere per direct follow-up
+       request). Deliberately left `format_review_summary`
+       (`app/services/bot_shared.py`) untouched since it's shared with
+       Telegram, and touching it would've leaked the tone change into a
+       bot this follow-up's scope explicitly excluded.
+     - New tests: a `test_discord_worker.py` case confirming the `/run`
+       confirmation's button (not typed text) actually re-enters
+       `_handle_status_select` when tapped; a new `TestNotificationButtons`
+       class in `test_discord.py` (6 tests) covering each of the 3 Link
+       buttons' presence/URL when `app_base_url` is set, their graceful
+       omission when it isn't, and that `notify_run_finished`'s button is
+       the interactive kind, not a Link. A handful of existing assertions
+       on old exact/substring message text were updated to match the new
+       copy (`test_status_select_rejects_someone_elses_run`,
+       `test_reject_review_fails_the_step`,
+       `test_build_cancel_is_immediate_not_deferred`). 1079 → 1086 tests;
+       full suite re-run clean (an earlier run showed spurious failures in
+       unrelated files purely from two `pytest` processes hitting the same
+       Postgres test DB concurrently — a re-run by itself was clean).
 - **A prior session's work** (on top of everything below) — Deploy/Update/
   Restart's rollout wait (see the prior session's work just below for how
   that wait itself was added) now stops immediately on an obviously-fatal

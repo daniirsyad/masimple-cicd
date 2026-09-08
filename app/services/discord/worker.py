@@ -52,7 +52,7 @@ from app.services.build.worker import enqueue_build_batch
 from app.services.deployment.worker import enqueue_deployment_run
 from app.services.discord.client import DiscordClient
 from app.services.discord.gateway import DiscordGateway
-from app.services.discord.helpers import review_components
+from app.services.discord.helpers import review_components, status_components
 from app.services.workflow.worker import approve_awaiting_step, enqueue_workflow_run, reject_awaiting_step
 from app.utils.crypto import decrypt
 from app.utils.error_logger import log_error
@@ -99,15 +99,16 @@ COMMANDS = [
 ]
 
 HELP_TEXT = (
-    "MASIMPLE CICD bot.\n"
-    "/run - pick a workflow to run\n"
-    "/status - check your recent workflow runs\n"
-    "/review - review a build awaiting approval\n"
-    "/build - build an image directly (no workflow)\n"
-    "/deploy - deploy a manifest directly (no workflow)\n"
-    "/update - update a live manifest directly\n"
-    "/stop - stop a live manifest\n"
-    "/restart - restart a live manifest"
+    "Hey, I'm the MASIMPLE CICD bot! Here's what I can do:\n"
+    "`/run` — pick a workflow and I'll kick it off\n"
+    "`/status` — see how your recent runs are doing\n"
+    "`/review` — approve or reject a build that's waiting on you\n"
+    "`/build` — build an image directly, no workflow needed\n"
+    "`/deploy` — deploy a manifest directly\n"
+    "`/update` — update a manifest that's already live\n"
+    "`/stop` — stop a live manifest\n"
+    "`/restart` — restart a live manifest's workload(s)\n\n"
+    "Tip: you can DM me these commands directly, no need to use a server channel."
 )
 
 _worker_started = False
@@ -198,8 +199,18 @@ def _confirm_cancel_components(confirm_id, cancel_id):
         {
             "type": ACTION_ROW,
             "components": [
-                {"type": BUTTON, "style": BUTTON_STYLE_SUCCESS, "label": "Confirm build", "custom_id": confirm_id},
-                {"type": BUTTON, "style": BUTTON_STYLE_DANGER, "label": "Cancel", "custom_id": cancel_id},
+                {
+                    "type": BUTTON,
+                    "style": BUTTON_STYLE_SUCCESS,
+                    "label": "Confirm build",
+                    "custom_id": confirm_id,
+                },
+                {
+                    "type": BUTTON,
+                    "style": BUTTON_STYLE_DANGER,
+                    "label": "Cancel",
+                    "custom_id": cancel_id,
+                },
             ],
         }
     ]
@@ -221,14 +232,14 @@ def _manifest_options(base_action, manifests, groups):
     options = [_option(m.name, f"{base_action}:{m.id}") for m in manifests]
     group_prefix = GROUP_ACTION_PREFIX[base_action]
     for name in sorted(groups)[:GROUP_LIST_LIMIT]:
-        options.append(_option(f"\U0001F4E6 Whole group: {name}", f"{group_prefix}:{_group_hash(name)}"))
+        options.append(_option(f"Whole group: {name}", f"{group_prefix}:{_group_hash(name)}"))
     return options
 
 
 def _builder_options(builders, groups):
     options = [_option(b.name, f"build:{b.id}") for b in builders]
     for name in sorted(groups)[:GROUP_LIST_LIMIT]:
-        options.append(_option(f"\U0001F4E6 Whole group: {name}", f"gbuild:{_group_hash(name)}"))
+        options.append(_option(f"Whole group: {name}", f"gbuild:{_group_hash(name)}"))
     return options
 
 
@@ -241,24 +252,24 @@ def _handle_help_command(client, interaction, user):
 
 def _handle_run_command(client, interaction, user):
     if not user.has_permission("workflow.run"):
-        _ack_message(client, interaction, "You don't have permission to run workflows.")
+        _ack_message(client, interaction, "You don't have permission to run workflows — ask an admin if you think that's wrong.")
         return
 
     workflows = [w for w in Workflow.query.filter_by(is_active=True).order_by(Workflow.name).all() if w.is_accessible_to(user)][:RUN_LIST_LIMIT]
     if not workflows:
-        _ack_message(client, interaction, "No workflows available to run.")
+        _ack_message(client, interaction, "No workflows available for you to run right now.")
         return
 
-    _ack_message(client, interaction, "Pick a workflow to run:", components=_select_component("run_select", "Pick a workflow", _workflow_options(workflows)))
+    _ack_message(client, interaction, "Which workflow would you like to run?", components=_select_component("run_select", "Pick a workflow", _workflow_options(workflows)))
 
 
 def _handle_status_command(client, interaction, user):
     runs = WorkflowRun.query.filter_by(triggered_by=user.id).order_by(WorkflowRun.created_at.desc()).limit(STATUS_LIST_LIMIT).all()
     if not runs:
-        _ack_message(client, interaction, "No workflow runs yet.")
+        _ack_message(client, interaction, "You haven't triggered any workflow runs yet.")
         return
 
-    _ack_message(client, interaction, "Pick a run to check:", components=_select_component("status_select", "Pick a run", _run_status_options(runs)))
+    _ack_message(client, interaction, "Which run would you like to check?", components=_select_component("status_select", "Pick a run", _run_status_options(runs)))
 
 
 def _handle_review_command(client, interaction, user):
@@ -266,7 +277,7 @@ def _handle_review_command(client, interaction, user):
     # any workflow.run holder who can see the workflow, not just whoever
     # triggered the run — a shared review queue.
     if not user.has_permission("workflow.run"):
-        _ack_message(client, interaction, "You don't have permission to review workflow builds.")
+        _ack_message(client, interaction, "You don't have permission to review workflow builds — ask an admin if you think that's wrong.")
         return
 
     step_runs = [
@@ -274,27 +285,27 @@ def _handle_review_command(client, interaction, user):
         if sr.run.workflow.is_accessible_to(user)
     ][:REVIEW_LIST_LIMIT]
     if not step_runs:
-        _ack_message(client, interaction, "Nothing awaiting review.")
+        _ack_message(client, interaction, "Nothing's waiting on a review right now.")
         return
 
-    _ack_message(client, interaction, "Pick a build to review:", components=_select_component("review_select", "Pick a build", _review_options(step_runs)))
+    _ack_message(client, interaction, "Which build would you like to review?", components=_select_component("review_select", "Pick a build", _review_options(step_runs)))
 
 
 def _handle_build_command(client, interaction, user):
     if not user.has_permission("builder.build"):
-        _ack_message(client, interaction, "You don't have permission to trigger builds.")
+        _ack_message(client, interaction, "You don't have permission to trigger builds — ask an admin if you think that's wrong.")
         return
 
     builders = [
         b for b in Builder.query.filter_by(is_active=True).order_by(Builder.name).all() if b.default_branch and b.is_accessible_to(user)
     ][:BUILD_LIST_LIMIT]
     if not builders:
-        _ack_message(client, interaction, "No builders available to build.")
+        _ack_message(client, interaction, "No builders available for you to build right now.")
         return
 
     groups = _single_version_groups_among(builders)
     _ack_message(
-        client, interaction, "Pick a builder to build (or a whole group):",
+        client, interaction, "Which builder would you like to build (or pick a whole group)?",
         components=_select_component("build_select", "Pick a builder", _builder_options(builders, groups)),
     )
 
@@ -302,7 +313,7 @@ def _handle_build_command(client, interaction, user):
 def _handle_manifest_list_command(client, interaction, user, base_action):
     spec = DEPLOY_ACTIONS[base_action]
     if not user.has_permission(spec["permission"]):
-        _ack_message(client, interaction, f"You don't have permission to {spec['verb']} manifests.")
+        _ack_message(client, interaction, f"You don't have permission to {spec['verb']} manifests — ask an admin if you think that's wrong.")
         return
 
     manifests = _accessible_with_servers(_target_manifests(active_only=not spec["teardown"]), user)
@@ -310,13 +321,13 @@ def _handle_manifest_list_command(client, interaction, user, base_action):
         manifests = _currently_live(manifests)
 
     if not manifests:
-        _ack_message(client, interaction, f"No manifests available to {spec['verb']}.")
+        _ack_message(client, interaction, f"No manifests available for you to {spec['verb']} right now.")
         return
 
     manifests = manifests[:MANIFEST_LIST_LIMIT]
     groups = _groups_among(manifests)
     _ack_message(
-        client, interaction, f"Pick a manifest to {spec['verb']} (or a whole group):",
+        client, interaction, f"Which manifest would you like to {spec['verb']} (or pick a whole group)?",
         components=_select_component(f"{base_action}_select", "Pick a manifest", _manifest_options(base_action, manifests, groups)),
     )
 
@@ -344,7 +355,7 @@ def _handle_run_select(client, interaction, user, workflow_id):
 
     workflow = Workflow.query.get(workflow_id)
     if workflow is None or not workflow.is_active or not workflow.is_accessible_to(user):
-        _ack_update(client, interaction, "That workflow is no longer available.")
+        _ack_update(client, interaction, "That workflow isn't available anymore.")
         return
 
     run = enqueue_workflow_run(workflow, triggered_by=user.id)
@@ -352,11 +363,17 @@ def _handle_run_select(client, interaction, user, workflow_id):
         action="RUN_WORKFLOW", target_type="workflow_run", target_id=str(run.id),
         description=f"Workflow '{workflow.name}' run via Discord by {user.username}", user=user,
     )
-    _ack_update(client, interaction, f'Queued a run of "{workflow.name}". Use /status to check progress.')
+    # A real Check Status button instead of a "type /status" instruction —
+    # tapping it reuses _handle_status_select directly, same status:<uuid>
+    # action token /status's own select already dispatches through.
+    _ack_update(
+        client, interaction, f'Queued a run of **{workflow.name}**! I\'ll let you know how it goes.',
+        components=status_components(run.id),
+    )
 
 
 def _format_run_status(run):
-    lines = [f'Workflow "{run.workflow.name}" — {run.status}']
+    lines = [f'**{run.workflow.name}** — {run.status}']
     for step_run in run.step_runs.all():
         line = f"  Step {step_run.step_order} ({step_run.step_type}): {step_run.status}"
         if step_run.error:
@@ -370,7 +387,7 @@ def _handle_status_select(client, interaction, user, run_id):
     # user personally triggered, same scoping as Telegram's /status.
     run = WorkflowRun.query.get(run_id)
     if run is None or run.triggered_by != user.id:
-        _ack_update(client, interaction, "Run not found.")
+        _ack_update(client, interaction, "Couldn't find that run — it may not be yours to check.")
         return
 
     _ack_update(client, interaction, _format_run_status(run))
@@ -392,7 +409,7 @@ def _handle_review_select(client, interaction, user, step_run_id):
 
     step_run = _awaiting_review_step_run_for_user(step_run_id, user)
     if step_run is None:
-        _ack_update(client, interaction, "This review is no longer pending.")
+        _ack_update(client, interaction, "This one's already been taken care of — nothing left to review here.")
         return
 
     _ack_update(client, interaction, format_review_summary(step_run), components=review_components(step_run))
@@ -405,14 +422,14 @@ def _handle_approve_review(client, interaction, user, step_run_id):
 
     step_run = _awaiting_review_step_run_for_user(step_run_id, user)
     if step_run is None:
-        _ack_update(client, interaction, "This review is no longer pending.")
+        _ack_update(client, interaction, "This one's already been taken care of — nothing left to review here.")
         return
 
     # Discord has no form to collect a missing Version Bump/Change Type the
     # way the web review panel's dropdowns do — approve as-is only when the
     # AI/heuristic suggestion already has both, same rule as Telegram.
     if not step_run.suggested_bump_type or not step_run.suggested_change_type_id:
-        _ack_update(client, interaction, "Missing Version Bump/Change Type — approve from the web UI instead.")
+        _ack_update(client, interaction, "I'm missing a Version Bump or Change Type for this one — please approve it from the web UI instead.")
         return
 
     run = step_run.run
@@ -434,7 +451,7 @@ def _handle_approve_review(client, interaction, user, step_run_id):
         description=f"Approved AI-suggested build metadata for a step in workflow '{run.workflow.name}' via Discord by {user.username}",
         user=user,
     )
-    _ack_update(client, interaction, f'Approved and queued the build for "{run.workflow.name}".')
+    _ack_update(client, interaction, f'Approved! The build for **{run.workflow.name}** is queued.')
 
 
 def _handle_reject_review(client, interaction, user, step_run_id):
@@ -444,7 +461,7 @@ def _handle_reject_review(client, interaction, user, step_run_id):
 
     step_run = _awaiting_review_step_run_for_user(step_run_id, user)
     if step_run is None:
-        _ack_update(client, interaction, "This review is no longer pending.")
+        _ack_update(client, interaction, "This one's already been taken care of — nothing left to review here.")
         return
 
     run = step_run.run
@@ -454,7 +471,7 @@ def _handle_reject_review(client, interaction, user, step_run_id):
         description=f"Rejected AI-suggested build metadata for a step in workflow '{run.workflow.name}' via Discord by {user.username}",
         user=user,
     )
-    _ack_update(client, interaction, f'Rejected the build step for "{run.workflow.name}".')
+    _ack_update(client, interaction, f'Got it — rejected the build step for **{run.workflow.name}**.')
 
 
 def _handle_manifest_action_select(client, interaction, user, base_action, payload, is_group):
@@ -473,13 +490,13 @@ def _handle_manifest_action_select(client, interaction, user, base_action, paylo
     if is_group:
         manifests, group_name = _manifests_in_group(payload, active_only=not spec["teardown"])
         if not manifests:
-            _ack_update(client, interaction, "That group is no longer available.")
+            _ack_update(client, interaction, "That group isn't available anymore.")
             return
         manifests.sort(key=lambda m: (m.order, m.name), reverse=spec["teardown"])
     else:
         manifest = DeploymentManifest.query.get(payload)
         if manifest is None:
-            _ack_update(client, interaction, "That manifest is no longer available.")
+            _ack_update(client, interaction, "That manifest isn't available anymore.")
             return
         manifests = [manifest]
         group_name = None
@@ -487,7 +504,7 @@ def _handle_manifest_action_select(client, interaction, user, base_action, paylo
     if not spec["teardown"]:
         disabled = [m.name for m in manifests if not m.is_active]
         if disabled:
-            _ack_update(client, interaction, f"Cannot {spec['verb']}: disabled manifest(s) — {', '.join(disabled)}.")
+            _ack_update(client, interaction, f"Can't {spec['verb']} — disabled manifest(s): {', '.join(disabled)}.")
             return
 
     if any(not m.is_accessible_to(user) for m in manifests):
@@ -499,7 +516,7 @@ def _handle_manifest_action_select(client, interaction, user, base_action, paylo
         _ack_update(client, interaction, "You don't have access to one or more target servers.")
         return
     if not spec["teardown"] and not servers:
-        _ack_update(client, interaction, "No target servers configured for this selection.")
+        _ack_update(client, interaction, "No target servers are configured for this selection.")
         return
 
     run, execution_count = enqueue_deployment_run(
@@ -510,7 +527,7 @@ def _handle_manifest_action_select(client, interaction, user, base_action, paylo
     if spec["teardown"] and execution_count == 0:
         db.session.delete(run)
         db.session.commit()
-        _ack_update(client, interaction, "Nothing currently deployed for this selection.")
+        _ack_update(client, interaction, "Nothing's currently deployed for this selection — nothing to do.")
         return
 
     log_activity(
@@ -522,7 +539,10 @@ def _handle_manifest_action_select(client, interaction, user, base_action, paylo
         user=user,
     )
     label = group_name or manifests[0].name
-    _ack_update(client, interaction, f'{spec["verb"].capitalize()} queued for "{label}" ({execution_count} execution(s)).')
+    _ack_update(
+        client, interaction,
+        f'{spec["verb"].capitalize()} queued for **{label}** ({execution_count} execution(s)) — I\'ll let you know how it goes.',
+    )
 
 
 # ---- deferred build handlers (AI-backed prefill — see module docstring) ----
@@ -532,11 +552,12 @@ def _format_build_summary(builder, prefill):
     change_type = ChangeType.query.get(prefill["change_type_id"]) if prefill["change_type_id"] else None
     objects = [obj.name for obj in prefill["matched_objects"]] + list(prefill["new_object_names"])
     return (
-        f'Builder "{builder.name}" — {prefill["commit_count"]} new commit(s) since the last build.\n'
+        f'**{builder.name}** — {prefill["commit_count"]} new commit(s) since the last build. Here\'s what I found:\n'
         f"Bump Type: {prefill['bump_type']}\n"
         f"Object(s): {', '.join(objects) or '(none)'}\n"
         f"Change Type: {change_type.name if change_type else '(none)'}\n"
-        f"Description: {prefill['description'] or '(none)'}"
+        f"Description: {prefill['description'] or '(none)'}\n\n"
+        f"Look good?"
     )
 
 
@@ -545,11 +566,13 @@ def _format_group_build_summary(group_name, builders, prefill):
     objects = [obj.name for obj in prefill["matched_objects"]] + list(prefill["new_object_names"])
     builder_names = ", ".join(sorted(builder.name for builder in builders))
     return (
-        f'Group "{group_name}" ({builder_names}) — {prefill["commit_count"]} new commit(s) since the last build.\n'
+        f'Group **{group_name}** ({builder_names}) — {prefill["commit_count"]} new commit(s) since the last build. '
+        f"Here's what I found:\n"
         f"Bump Type: {prefill['bump_type']}\n"
         f"Object(s): {', '.join(objects) or '(none)'}\n"
         f"Change Type: {change_type.name if change_type else '(none)'}\n"
-        f"Description: {prefill['description'] or '(none)'}"
+        f"Description: {prefill['description'] or '(none)'}\n\n"
+        f"Look good?"
     )
 
 
@@ -564,7 +587,7 @@ def _handle_build_select(app, client, interaction, user, builder_id):
 
     builder = Builder.query.get(builder_id)
     if not _builder_still_buildable(builder, user):
-        _ack_update(client, interaction, "That builder is no longer available.")
+        _ack_update(client, interaction, "That builder isn't available anymore.")
         return
 
     _ack_deferred_update(client, interaction)
@@ -580,8 +603,8 @@ def _run_build_preview(app, client, interaction, builder_id):
             if not _build_is_ready(prefill):
                 _followup(
                     client, application_id, interaction,
-                    f'Builder "{builder.name}": couldn\'t confidently determine Bump Type/Object(s)/Change Type from the '
-                    f"{prefill['commit_count']} new commit(s) since the last build — finish this one from the web UI instead.",
+                    f'**{builder.name}**: I couldn\'t confidently work out the Bump Type/Object(s)/Change Type from the '
+                    f"{prefill['commit_count']} new commit(s) since the last build — could you finish this one from the web UI instead?",
                 )
                 return
             _followup(
@@ -601,7 +624,7 @@ def _handle_build_confirm_select(app, client, interaction, user, builder_id):
 
     builder = Builder.query.get(builder_id)
     if not _builder_still_buildable(builder, user):
-        _ack_update(client, interaction, "That builder is no longer available.")
+        _ack_update(client, interaction, "That builder isn't available anymore.")
         return
 
     _ack_deferred_update(client, interaction)
@@ -615,7 +638,7 @@ def _run_build_confirm(app, client, interaction, builder_id, user_id):
             user = User.query.get(user_id)
             builder = Builder.query.get(builder_id)
             if not _builder_still_buildable(builder, user):
-                _followup(client, application_id, interaction, "That builder is no longer available.")
+                _followup(client, application_id, interaction, "That builder isn't available anymore.")
                 return
 
             # Recomputed fresh rather than trusting the earlier preview's
@@ -625,7 +648,7 @@ def _run_build_confirm(app, client, interaction, builder_id, user_id):
             # confirm gap not to persist a stand-in row.
             prefill = _build_prefill_for(builder)
             if not _build_is_ready(prefill):
-                _followup(client, application_id, interaction, "No longer resolvable as-is — use the web UI instead.")
+                _followup(client, application_id, interaction, "That's no longer resolvable as-is — please use the web UI instead.")
                 return
 
             object_ids = [str(obj.id) for obj in prefill["matched_objects"]]
@@ -639,7 +662,7 @@ def _run_build_confirm(app, client, interaction, builder_id, user_id):
                 action="TRIGGER_BUILD_BATCH", target_type="build_batch", target_id=str(batch.id),
                 description=f"Triggered a build batch via Discord by {user.username} (builder '{builder.name}')", user=user,
             )
-            _followup(client, application_id, interaction, f'Build queued for "{builder.name}".')
+            _followup(client, application_id, interaction, f'Build queued for **{builder.name}** — I\'ll let you know when it\'s done.')
         except Exception as exc:
             log_error(source="discord.worker.run_build_confirm", exc=exc, description=f"Could not confirm a Discord build: {exc}")
         finally:
@@ -647,7 +670,7 @@ def _run_build_confirm(app, client, interaction, builder_id, user_id):
 
 
 def _handle_build_cancel_select(client, interaction, user, builder_id):
-    _ack_update(client, interaction, "Cancelled.")
+    _ack_update(client, interaction, "No worries, cancelled.")
 
 
 def _handle_group_build_select(app, client, interaction, user, group_hash):
@@ -673,8 +696,8 @@ def _run_group_build_preview(app, client, interaction, group_hash, user_id):
             if not _build_is_ready(prefill):
                 _followup(
                     client, application_id, interaction,
-                    f'Group "{group_name}": couldn\'t confidently determine Bump Type/Object(s)/Change Type from the '
-                    f"{prefill['commit_count']} new commit(s) since the last build — finish this one from the web UI instead.",
+                    f'Group **{group_name}**: I couldn\'t confidently work out the Bump Type/Object(s)/Change Type from the '
+                    f"{prefill['commit_count']} new commit(s) since the last build — could you finish this one from the web UI instead?",
                 )
                 return
             _followup(
@@ -708,7 +731,7 @@ def _run_group_build_confirm(app, client, interaction, group_hash, user_id):
 
             prefill = _group_build_prefill_for(builders)
             if not _build_is_ready(prefill):
-                _followup(client, application_id, interaction, "No longer resolvable as-is — use the web UI instead.")
+                _followup(client, application_id, interaction, "That's no longer resolvable as-is — please use the web UI instead.")
                 return
 
             object_ids = [str(obj.id) for obj in prefill["matched_objects"]]
@@ -728,7 +751,10 @@ def _run_group_build_confirm(app, client, interaction, group_hash, user_id):
                 ),
                 user=user,
             )
-            _followup(client, application_id, interaction, f'Build queued for group "{group_name}" ({len(builders)} builder(s)).')
+            _followup(
+                client, application_id, interaction,
+                f'Build queued for group **{group_name}** ({len(builders)} builder(s)) — I\'ll let you know when it\'s done.',
+            )
         except Exception as exc:
             log_error(source="discord.worker.run_group_build_confirm", exc=exc, description=f"Could not confirm a Discord group build: {exc}")
         finally:
@@ -736,7 +762,7 @@ def _run_group_build_confirm(app, client, interaction, group_hash, user_id):
 
 
 def _handle_group_build_cancel_select(client, interaction, user, group_hash):
-    _ack_update(client, interaction, "Cancelled.")
+    _ack_update(client, interaction, "No worries, cancelled.")
 
 
 # ---- top-level dispatch ----
@@ -770,7 +796,7 @@ def _dispatch_command(app, client, interaction, user):
     name = interaction["data"]["name"]
     handler = COMMAND_HANDLERS.get(name)
     if handler is None:
-        _ack_message(client, interaction, "Unrecognized command.")
+        _ack_message(client, interaction, "Unrecognized command — try /help to see what I can do.")
         return
     handler(client, interaction, user)
 
@@ -799,7 +825,7 @@ def _dispatch_component(app, client, interaction, user):
     try:
         target_id = uuid.UUID(payload)
     except ValueError:
-        _ack_update(client, interaction, "Invalid selection.")
+        _ack_update(client, interaction, "Invalid selection — please try again.")
         return
 
     if action == "run":
@@ -831,7 +857,10 @@ def _handle_interaction(app, client, interaction):
 
     if user is None:
         if interaction_type in (APPLICATION_COMMAND_TYPE, MESSAGE_COMPONENT_TYPE):
-            _ack_message(client, interaction, "Your Discord account isn't linked. Ask an admin to set your Discord User ID in Account Settings.")
+            _ack_message(
+                client, interaction,
+                "Looks like your Discord account isn't linked yet. Ask an admin to set your Discord User ID in Account Settings, then try again!",
+            )
         return
 
     if interaction_type == APPLICATION_COMMAND_TYPE:

@@ -54,6 +54,21 @@ MASIMPLE CICD{% endblock %} {% block content %}
       </div>
 
       <div class="form-control">
+        <label class="label" for="{{ form.app_base_url.id }}">
+          <span class="label-text">App URL</span>
+        </label>
+        {{ form.app_base_url(class="input input-bordered input-sm w-full", placeholder="https://cicd.example.com") }}
+        <p class="mt-1 text-xs text-base-content/60">
+          This app's own public address, no trailing slash. Optional — when set, Discord bot notifications
+          include a clickable button linking straight to the relevant page; when blank, notifications just
+          skip the button.
+        </p>
+        {% for error in form.app_base_url.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div class="form-control">
         <label class="label cursor-pointer justify-start gap-2" for="{{ form.hide_navbar_title_when_sidebar_open.id }}">
           {{ form.hide_navbar_title_when_sidebar_open(class="checkbox checkbox-sm") }}
           <span class="label-text">Hide duplicate app title</span>

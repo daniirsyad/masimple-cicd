@@ -42,7 +42,13 @@ MASIMPLE CICD is an internal Flask web app with four halves:
    either, both, or neither can be configured per-user (`User.discord_
    user_id` alongside `telegram_chat_id`) and per-installation (their own
    `SystemConfig` enable toggles/tokens). Forgot-password reset links remain
-   Telegram-only.
+   Telegram-only. Discord's replies favor real buttons over typed follow-up
+   commands (e.g. a "Check Status" Button on the `/run` confirmation and on
+   the run-finished push, both reusing `/status`'s own handler) and, where
+   there's somewhere useful to send someone (a deploy/build finished, or a
+   review that needs the web UI's editable dropdowns), a Link button built
+   from the optional `SystemConfig.app_base_url` — omitted gracefully if
+   that isn't set.
 2. A **Docker Image Builder module** built on top of it — register Git repos
    and container registries, define reusable "Builder" configs, trigger
    versioned builds (single or batched), push images, and auto-generate
@@ -291,7 +297,16 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   `telegram_last_update_id` (no equivalent needed — a Gateway WebSocket's
   Resume state is in-memory/per-connection, so a fresh reconnect on restart
   is a valid, cheap fallback). `security_notification_user_id` is shared
-  across both providers unchanged.
+  across both providers unchanged. `app_base_url` (String, nullable — no
+  provider prefix, though only Discord consumes it today) is this app's
+  own public address, used by `app/services/discord/helpers.py`'s
+  `_external_url()` to build clickable Link buttons in notifications from
+  inside a background worker thread (no active HTTP request to hang a
+  `url_for(_external=True)` call off of otherwise) via Flask's
+  `test_request_context(base_url=...)` rather than a global
+  `app.config["SERVER_NAME"]` — deliberately avoided, since that would make
+  Flask reject any real request whose Host header doesn't match it exactly.
+  `None` means "no links" everywhere it's consumed, never an error.
 
 **Deployment module:**
 - `DeploymentServer` — a registered target: `connection_type` (`kube` or
@@ -510,8 +525,11 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   message/date list — sourced from `ImageBuildCommit`, nothing is tracked
   for a build that predates commit tracking ("not tracked" shown instead).
 - **`/config`** — System Configuration (`system.manage`): timezone, session
-  timeout, build engine, duplicate-title toggle, deploy live-status poll
-  interval, commit log limit (see the data model section above), plus two
+  timeout, build engine, an optional App URL (this app's own public
+  address — used only to build clickable Link buttons in Discord
+  notifications; omitted from those messages when blank), duplicate-title
+  toggle, deploy live-status poll interval, commit log limit (see the data
+  model section above), plus two
   newer sections — **Security** (max failed login attempts before
   lockout), **Telegram Integration** (enable-notifications toggle, bot
   token — write-only, blank on submit keeps the current one — the Security
@@ -838,9 +856,9 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   *manually*-triggered (non-Workflow) build/deploy starts or finishes — the
   last two are skipped for a Workflow-driven build/deploy specifically, to
   avoid double-notifying on top of the Workflow-level one. A parallel
-  Discord integration for the same purpose has still not been started; the
-  `SystemConfig`/`User` fields already in place (bot token, per-user chat
-  ID) were built with that reuse in mind.
+  Discord integration covering the same ground was added in a later
+  session (see below) — reusing this exact plumbing, as anticipated when
+  it was first built.
 - **A later addition let the same Telegram bot trigger manual (non-Workflow)
   Builds and Deployment Manifest actions directly**, not just Workflows:
   `/build` (a linked user holding `builder.build`) picks an active,

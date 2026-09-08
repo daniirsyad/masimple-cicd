@@ -3,9 +3,18 @@ import requests
 from werkzeug.security import generate_password_hash
 
 from app.extensions import db
-from app.models import ChangeType, Role, User, Workflow, WorkflowRun, WorkflowStep, WorkflowStepRun
+from flask import url_for
+
+from app.models import BuildBatch, ChangeType, DeploymentRun, Role, User, Version, VersionType, Workflow, WorkflowRun, WorkflowStep, WorkflowStepRun
 from app.services.discord.client import DiscordClient
-from app.services.discord.helpers import notify_awaiting_review, notify_run_finished, notify_security_contact, notify_user
+from app.services.discord.helpers import (
+    notify_awaiting_review,
+    notify_build_finished,
+    notify_deploy_finished,
+    notify_run_finished,
+    notify_security_contact,
+    notify_user,
+)
 from app.utils.crypto import encrypt
 from app.utils.system_config import get_system_config
 
@@ -351,3 +360,217 @@ class TestNotifySecurityContact:
             db.session.commit()
 
             assert notify_security_contact("hi") is False
+
+
+class TestNotificationButtons:
+    """The three "View Details"/"View in app" Link buttons need
+    SystemConfig.app_base_url to build a real URL from inside a background
+    worker thread (no active HTTP request) — see
+    app/services/discord/helpers.py's _external_url(). notify_run_finished
+    instead reuses the interactive Check Status button (no URL needed at
+    all), covered by tests/test_discord_worker.py's own dedicated test.
+    """
+
+    def test_run_finished_includes_an_interactive_check_status_button(self, app, discord_user, monkeypatch):
+        sent = {}
+        monkeypatch.setattr(
+            DiscordClient,
+            "send_dm_message",
+            lambda self, discord_user_id, content, components=None: sent.update(components=components),
+        )
+
+        with app.app_context():
+            config = get_system_config()
+            config.discord_notifications_enabled = True
+            config.encrypted_discord_bot_token = encrypt("bot-token")
+            db.session.commit()
+
+            workflow = Workflow(name="Deploy Everything", is_active=True)
+            db.session.add(workflow)
+            db.session.flush()
+            run = WorkflowRun(workflow_id=workflow.id, status="success", triggered_by=discord_user)
+            db.session.add(run)
+            db.session.commit()
+
+            notify_run_finished(run)
+
+            button = sent["components"][0]["components"][0]
+            assert button["custom_id"] == f"status:{run.id}"
+            assert "url" not in button
+
+    def test_deploy_finished_includes_a_link_button_when_app_base_url_set(self, app, discord_user, monkeypatch):
+        sent = {}
+        monkeypatch.setattr(
+            DiscordClient,
+            "send_dm_message",
+            lambda self, discord_user_id, content, components=None: sent.update(components=components),
+        )
+
+        with app.app_context():
+            config = get_system_config()
+            config.discord_notifications_enabled = True
+            config.encrypted_discord_bot_token = encrypt("bot-token")
+            config.app_base_url = "https://cicd.example.com"
+            db.session.commit()
+
+            run = DeploymentRun(action="deploy", status="success", triggered_by=discord_user)
+            db.session.add(run)
+            db.session.commit()
+
+            notify_deploy_finished(run)
+
+            with app.test_request_context(base_url="https://cicd.example.com"):
+                expected_url = url_for("deployment_runs.detail", run_id=run.id, _external=True)
+
+            button = sent["components"][0]["components"][0]
+            assert button["style"] == 5  # Link style — opens client-side, no bot round-trip
+            assert button["url"] == expected_url
+
+    def test_deploy_finished_omits_the_button_when_app_base_url_unset(self, app, discord_user, monkeypatch):
+        sent = {"components": "unset"}
+        monkeypatch.setattr(
+            DiscordClient,
+            "send_dm_message",
+            lambda self, discord_user_id, content, components=None: sent.update(components=components),
+        )
+
+        with app.app_context():
+            config = get_system_config()
+            config.discord_notifications_enabled = True
+            config.encrypted_discord_bot_token = encrypt("bot-token")
+            config.app_base_url = None
+            db.session.commit()
+
+            run = DeploymentRun(action="deploy", status="success", triggered_by=discord_user)
+            db.session.add(run)
+            db.session.commit()
+
+            assert notify_deploy_finished(run) is True
+
+        assert sent["components"] is None
+
+    def test_build_finished_includes_a_link_button_to_images(self, app, discord_user, monkeypatch):
+        sent = {}
+        monkeypatch.setattr(
+            DiscordClient,
+            "send_dm_message",
+            lambda self, discord_user_id, content, components=None: sent.update(components=components),
+        )
+
+        with app.app_context():
+            config = get_system_config()
+            config.discord_notifications_enabled = True
+            config.encrypted_discord_bot_token = encrypt("bot-token")
+            config.app_base_url = "https://cicd.example.com"
+            db.session.commit()
+
+            version_type = VersionType(name="DEV")
+            db.session.add(version_type)
+            db.session.flush()
+            version = Version(name="svc", version_type_id=version_type.id)
+            db.session.add(version)
+            db.session.flush()
+            batch = BuildBatch(
+                version_id=version.id, bump_type="patch", status="success",
+                requested_by=discord_user, full_version_string="1.0.0",
+            )
+            db.session.add(batch)
+            db.session.commit()
+
+            notify_build_finished(batch)
+
+            with app.test_request_context(base_url="https://cicd.example.com"):
+                expected_url = url_for("images.list_images", _external=True)
+
+            button = sent["components"][0]["components"][0]
+            assert button["style"] == 5
+            assert button["url"] == expected_url
+
+    def test_awaiting_review_includes_a_view_in_app_button_alongside_approve_reject(self, app, discord_user, monkeypatch):
+        sent = {}
+        monkeypatch.setattr(
+            DiscordClient,
+            "send_dm_message",
+            lambda self, discord_user_id, content, components=None: sent.update(components=components),
+        )
+
+        with app.app_context():
+            config = get_system_config()
+            config.discord_notifications_enabled = True
+            config.encrypted_discord_bot_token = encrypt("bot-token")
+            config.app_base_url = "https://cicd.example.com"
+            db.session.commit()
+
+            workflow = Workflow(name="Deploy Everything", is_active=True)
+            db.session.add(workflow)
+            db.session.flush()
+            step = WorkflowStep(workflow_id=workflow.id, order=0, step_type="build", on_failure="stop")
+            db.session.add(step)
+            db.session.flush()
+            run = WorkflowRun(workflow_id=workflow.id, status="running", triggered_by=discord_user)
+            db.session.add(run)
+            db.session.flush()
+            change_type = ChangeType(name="Bug Fix")
+            db.session.add(change_type)
+            db.session.flush()
+            step_run = WorkflowStepRun(
+                workflow_run_id=run.id, workflow_step_id=step.id, step_order=0, step_type="build",
+                status="awaiting_review", suggested_bump_type="minor", suggested_change_type_id=change_type.id,
+            )
+            db.session.add(step_run)
+            db.session.commit()
+
+            notify_awaiting_review(step_run)
+
+            with app.test_request_context(base_url="https://cicd.example.com"):
+                expected_url = url_for("workflows.view_run", run_id=run.id, _external=True)
+
+            rows = sent["components"]
+            assert len(rows) == 2  # approve/reject row, then the new link row
+            approve_reject_row, link_row = rows
+            assert {b["custom_id"] for b in approve_reject_row["components"]} == {
+                f"approve_review:{step_run.id}",
+                f"reject_review:{step_run.id}",
+            }
+            link_button = link_row["components"][0]
+            assert link_button["style"] == 5
+            assert link_button["url"] == expected_url
+
+    def test_awaiting_review_omits_the_link_row_when_app_base_url_unset(self, app, discord_user, monkeypatch):
+        sent = {}
+        monkeypatch.setattr(
+            DiscordClient,
+            "send_dm_message",
+            lambda self, discord_user_id, content, components=None: sent.update(components=components),
+        )
+
+        with app.app_context():
+            config = get_system_config()
+            config.discord_notifications_enabled = True
+            config.encrypted_discord_bot_token = encrypt("bot-token")
+            config.app_base_url = None
+            db.session.commit()
+
+            workflow = Workflow(name="Deploy Everything", is_active=True)
+            db.session.add(workflow)
+            db.session.flush()
+            step = WorkflowStep(workflow_id=workflow.id, order=0, step_type="build", on_failure="stop")
+            db.session.add(step)
+            db.session.flush()
+            run = WorkflowRun(workflow_id=workflow.id, status="running", triggered_by=discord_user)
+            db.session.add(run)
+            db.session.flush()
+            change_type = ChangeType(name="Bug Fix")
+            db.session.add(change_type)
+            db.session.flush()
+            step_run = WorkflowStepRun(
+                workflow_run_id=run.id, workflow_step_id=step.id, step_order=0, step_type="build",
+                status="awaiting_review", suggested_bump_type="minor", suggested_change_type_id=change_type.id,
+            )
+            db.session.add(step_run)
+            db.session.commit()
+
+            notify_awaiting_review(step_run)
+
+            # Only the Approve/Reject row — no second row when there's no link to show.
+            assert len(sent["components"]) == 1

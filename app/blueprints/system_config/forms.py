@@ -2,7 +2,7 @@ import zoneinfo
 
 from flask_wtf import FlaskForm
 from wtforms import BooleanField, IntegerField, SelectField, StringField, SubmitField
-from wtforms.validators import DataRequired, Length, NumberRange, Optional
+from wtforms.validators import DataRequired, Length, NumberRange, Optional, URL
 
 TIMEZONE_CHOICES = [(tz, tz) for tz in sorted(zoneinfo.available_timezones())]
 
@@ -29,6 +29,13 @@ class SystemConfigForm(FlaskForm):
     )
     build_engine = SelectField(
         "Build Engine", choices=BUILD_ENGINE_CHOICES, validators=[DataRequired()]
+    )
+    # No trailing slash expected — normalized on save (routes.py). Not
+    # require_tld: this app is routinely reached by bare IP or localhost
+    # (bare-metal dev, a Podman trial by IP), neither of which has a TLD.
+    app_base_url = StringField(
+        "App URL (optional)",
+        validators=[Optional(), Length(max=255), URL(require_tld=False, message="Must be a valid URL, e.g. https://cicd.example.com")],
     )
     hide_navbar_title_when_sidebar_open = BooleanField("Hide duplicate app title")
     deployment_status_check_interval_seconds = IntegerField(

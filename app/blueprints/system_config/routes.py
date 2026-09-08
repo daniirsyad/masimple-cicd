@@ -39,6 +39,7 @@ def index():
         config.timezone = form.timezone.data
         config.session_timeout_minutes = form.session_timeout_minutes.data
         config.build_engine = form.build_engine.data
+        config.app_base_url = form.app_base_url.data.rstrip("/") if form.app_base_url.data else None
         config.hide_navbar_title_when_sidebar_open = form.hide_navbar_title_when_sidebar_open.data
         config.deployment_status_check_interval_seconds = form.deployment_status_check_interval_seconds.data
         config.commit_log_limit = form.commit_log_limit.data

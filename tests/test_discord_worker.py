@@ -313,6 +313,32 @@ class TestRunCommandAndSelect:
             entry = ActivityLog.query.filter_by(action="RUN_WORKFLOW").one()
             assert "via Discord" in entry.description
 
+    def test_confirmation_includes_a_check_status_button_not_typed_text(self, app, client, linked_user, monkeypatch):
+        """The old copy told the user to type /status manually — now a real
+        Button does it, reusing the exact status:<uuid> action token
+        /status's own select already dispatches through (no new handler).
+        """
+        with app.app_context():
+            workflow = Workflow(name="Deploy Everything", is_active=True)
+            db.session.add(workflow)
+            db.session.commit()
+            workflow_id = workflow.id
+
+        calls = _patch_client(monkeypatch)
+        _dispatch(app, client, _select_interaction("run_select", f"run:{workflow_id}", "555"))
+
+        with app.app_context():
+            run_id = WorkflowRun.query.filter_by(workflow_id=workflow_id).one().id
+
+        button = calls["responded"][0]["data"]["components"][0]["components"][0]
+        assert button["custom_id"] == f"status:{run_id}"
+        assert "Use /status" not in calls["responded"][0]["data"]["content"]
+
+        # Tapping it re-enters the same handler /status's own select does.
+        calls2 = _patch_client(monkeypatch)
+        _dispatch(app, client, _button_interaction(f"status:{run_id}", "555"))
+        assert "Deploy Everything" in calls2["responded"][0]["data"]["content"]
+
 
 class TestStatusCommandAndSelect:
     def test_status_select_shows_the_users_own_run(self, app, client, linked_user, monkeypatch):
@@ -349,7 +375,7 @@ class TestStatusCommandAndSelect:
         calls = _patch_client(monkeypatch)
         _dispatch(app, client, _select_interaction("status_select", f"status:{run_id}", "555"))
 
-        assert "not found" in calls["responded"][0]["data"]["content"]
+        assert "Couldn't find that run" in calls["responded"][0]["data"]["content"]
 
 
 class TestDeployCommandAndSelect:
@@ -473,7 +499,7 @@ class TestReviewCommandAndSelect:
         calls = _patch_client(monkeypatch)
         _dispatch(app, client, _button_interaction(f"reject_review:{step_run_id}", "555"))
 
-        assert "Rejected" in calls["responded"][0]["data"]["content"]
+        assert "rejected" in calls["responded"][0]["data"]["content"]
         with app.app_context():
             assert WorkflowStepRun.query.get(step_run_id).status == "failed"
 
@@ -579,7 +605,7 @@ class TestBuildDeferredFlow:
         calls = _patch_client(monkeypatch)
         _dispatch(app, client, _button_interaction(f"bcancel:{builder_id}", "650"))
 
-        assert calls["responded"][0]["data"]["content"] == "Cancelled."
+        assert "cancelled" in calls["responded"][0]["data"]["content"]
         assert calls["followups"] == []
 
     def test_group_build_confirm_enqueues_one_batch_covering_every_member(self, app, client, build_linked_user, base_entities, monkeypatch):

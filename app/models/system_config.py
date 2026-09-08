@@ -15,6 +15,19 @@ class SystemConfig(db.Model):
     timezone = db.Column(db.String, nullable=False, default="UTC")
     session_timeout_minutes = db.Column(db.Integer, nullable=False, default=60)
     build_engine = db.Column(db.String, nullable=False, default="docker")
+    # This app's own public URL (no trailing slash, e.g.
+    # "https://cicd.example.com"), admin-entered since nothing in this app
+    # can reliably infer it — a request's Host header varies across
+    # environments (bare-metal dev, a Podman trial reached by IP, a real
+    # cluster's domain) and isn't available at all from a background worker
+    # thread. Used to build clickable links in Discord bot notifications
+    # (app/services/discord/helpers.py's _external_url()) via Flask's
+    # test_request_context(base_url=...) rather than a global
+    # app.config["SERVER_NAME"] — the latter would make Flask start
+    # rejecting real requests whose Host header doesn't match it exactly.
+    # NULL means "no links" — every caller treats that as optional, never
+    # an error.
+    app_base_url = db.Column(db.String, nullable=True)
     # The navbar and sidebar both show the app title ("MASIMPLE CICD") — redundant
     # whenever the sidebar is visible (desktop) since it has its own. When
     # enabled, the navbar's copy is hidden client-side while the sidebar is
