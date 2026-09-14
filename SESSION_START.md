@@ -27,8 +27,89 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1086 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below) — a full Discord bot
+- **1102 tests passing** (as of the last full run).
+- **This session's work** (on top of everything below) — a real production
+  bug report plus a cluster of small, directly-requested Workflow UX
+  additions, each implemented and pushed as its own commit rather than
+  batched into one.
+  1. **Fixed `Exception in thread image-builder-worker` crashing the build
+     worker thread in production** — reported via a real traceback ending in
+     `ValueError: A string literal cannot contain NUL (0x00) characters.`
+     Root cause: `app/services/build/worker.py`'s `flush_log()` writes
+     `ImageBuild.build_log` straight from Docker/Kaniko subprocess output,
+     which can contain a literal NUL byte Postgres text columns reject
+     outright — and `_run_build()`'s `finally` block unconditionally calls
+     `flush_log()` again with the same tainted buffer, so the crash re-raised
+     there too, escaping the try/except meant to confine a bad build to that
+     one `ImageBuild` and killing the whole worker thread. Fixed by stripping
+     `\x00` in `flush_log()` itself — the one place all log content passes
+     through before hitting the DB. New regression test
+     `TestRunBuild::test_nul_byte_in_log_output_does_not_crash_commit`
+     (`tests/test_worker.py`), confirmed to fail without the fix.
+  2. **Investigated a "workflow status doesn't change to running" report** —
+     traced the whole orchestrator path
+     (`app/services/workflow/worker.py`'s `_tick`/`_start_step`/`_poll_loop`)
+     without finding a corroborated backend bug (already extensively tested,
+     all passing); did find and fix one real gap along the way, `_poll_loop`
+     was missing the `db.session.rollback()`/`db.session.remove()` calls the
+     build and deploy workers' own poll loops already have on a tick
+     exception, so brought it in line (new
+     `TestPollLoopHandlesATickException`, spy-based since
+     Flask-SQLAlchemy's own `teardown_appcontext` hook already returns a
+     context's connection to the pool even on an exception here — this
+     wasn't the actual leak I first suspected, verified experimentally
+     before writing the test). The real explanation turned out to be a UI
+     mix-up, not a bug: the index page's "Status" column was always
+     `Workflow.is_active` (enabled/disabled), never a run's own status — see
+     point 3.
+  3. **Workflows index page (`/workflows`) got a "Last Run" column, a
+     rename, and auto-refresh** — requested directly, then refined once the
+     actual mix-up in point 2 was identified. The old "Status" column
+     (`Workflow.is_active`) is now labeled "Enabled" to stop it reading as a
+     live run-status indicator; a new "Last Run" column shows each
+     workflow's most recent run's date **and** its own status badge
+     (queued/running/success/failed/..., linking to that run's detail page),
+     computed via `Workflow.runs.order_by(...).first()` per workflow in
+     `_render_index()`/new `_latest_runs_for()`
+     (`app/blueprints/workflows/routes.py`). A new `/workflows/statuses`
+     JSON endpoint is polled every 5s by `workflows.js`, which reloads the
+     page only once a workflow's latest-run status actually changes — same
+     "only reload on a real state change" pattern `images-status.js` already
+     uses, rather than a blind interval reload or a full client-side
+     re-render of the table's Jinja-templated badges/links/dashes.
+  4. **A dashboard notification for builds awaiting review, then a dedicated
+     `/workflows/review` page, then a sidebar notification dot** — three
+     directly-requested follow-ups in sequence, each building on the last.
+     New shared `awaiting_review_step_runs_for(user)`
+     (`app/services/workflow/worker.py`) — same shared-queue authorization
+     Telegram's `/review` and the web review panel already used
+     independently (any `workflow.run` holder who can see the workflow, not
+     just whoever triggered the run) — now backs all three: a warning banner
+     on `/` (`app/templates/main/index.html`) listing every awaiting-review
+     step with a link to its run; the new `/workflows/review` page listing
+     the same steps with their real approve/reject forms inline, not just
+     links out; and a small warning dot on the sidebar's Workflows entry
+     itself (`awaiting_review_count` injected globally by `inject_menus()`
+     in `app/__init__.py`, imported lazily inside the function to match this
+     app's existing pattern of deferring `app.services` imports out of
+     `create_app()`'s module top-level to avoid circular imports) — visible
+     from any page, not just `/workflows`. The review-panel markup itself
+     (previously inline, once, in `workflows/run.html`) was extracted into a
+     shared `workflow_review_card` Jinja macro
+     (`app/templates/partials/_macros.html`) so `run.html` and the new
+     `review.html` render from one definition instead of two copies that
+     could drift apart.
+  New/changed tests: `tests/test_workflows_routes.py` (`TestStatuses` for
+  `/workflows/statuses`; `TestIndexRendering` for the Last Run
+  date+status+"Enabled" rename; new tests on `TestApproveRejectStepRun` for
+  `/workflows/review` — rendering, permission gating, empty state — and the
+  sidebar dot, which needed a `Menu` row seeded manually since menus aren't
+  auto-seeded under `TestingConfig`), `tests/test_main.py`
+  (`TestAwaitingReviewNotification`), `tests/test_workflow_worker.py`
+  (`TestPollLoopHandlesATickException`). 1086 → 1102 tests; full suite
+  re-run clean after each of the four points above, not just at the end —
+  each was its own commit and push, per direct request.
+- **A prior session's work** (on top of everything below) — a full Discord bot
   integration, feature-parity with the existing Telegram integration (both
   directions: outbound notifications and inbound commands). Scoped up front
   via AskUserQuestion (Discord Gateway WebSocket transport, not an HTTP
@@ -246,7 +327,7 @@ Then ask me what to work on next rather than assuming.
        full suite re-run clean (an earlier run showed spurious failures in
        unrelated files purely from two `pytest` processes hitting the same
        Postgres test DB concurrently — a re-run by itself was clean).
-- **A prior session's work** (on top of everything below) — Deploy/Update/
+- **An earlier session's work** (on top of everything below) — Deploy/Update/
   Restart's rollout wait (see the prior session's work just below for how
   that wait itself was added) now stops immediately on an obviously-fatal
   pod state instead of blocking out the full configured timeout — requested
@@ -298,7 +379,7 @@ Then ask me what to work on next rather than assuming.
   alongside the existing timeout description. No migration needed — no
   model/schema change, this only changes `KubernetesProvider`'s own internal
   polling.
-- **An earlier session's work** (on top of everything below):
+- **A session before that's work** (on top of everything below):
   1. **Deploy/Update/Restart now waits for the rollout to actually become
      Ready before counting as a success, with a configurable timeout** —
      planned via plan-mode (AskUserQuestion locked the design up front, then
@@ -360,7 +441,7 @@ Then ask me what to work on next rather than assuming.
      SortableJS's drag-reorder still initializes fine against the collapsed
      table since daisyUI hides collapse content via a zero-height grid row,
      not `display:none`.
-- **A session before that's work** (on top of everything below) — pressing Build,
+- **Two sessions before that's work** (on top of everything below) — pressing Build,
   Deploy, Update, Stop, or Restart (single or "Whole group") on the
   Builders / Deployment Manifests index pages no longer navigates away to
   the Images / Deployment Runs list on success — it stays on the same
@@ -382,7 +463,7 @@ Then ask me what to work on next rather than assuming.
   `/deployment-manifests/` accordingly; no new tests added since this is a
   redirect-target/flash-content change to already-covered routes, not new
   behavior. No migration needed.
-- **Two sessions before that's work** (on top of everything below) — the Telegram bot
+- **Three sessions before that's work** (on top of everything below) — the Telegram bot
   integration (previously Workflow-only: `/run`/`/status`/`/review`) can now
   also trigger manual, non-Workflow Builds and Deployment Manifest
   actions — requested directly, not via plan-mode. No migration needed.
@@ -465,7 +546,7 @@ Then ask me what to work on next rather than assuming.
   disabled-manifest and "nothing currently deployed" edge cases for
   deploy/stop, the AI-prefill confident-vs-not-confident branches (plus
   Confirm/Cancel) for Build, and the mixed-Version group-build rejection.
-- **Three sessions before that's work** (on top of everything below) — two independent bug
+- **Four sessions before that's work** (on top of everything below) — two independent bug
   fixes in the Deployment/Workflow pipeline, found via direct user reports
   rather than the test suite. No migration needed for either. Two commits,
   `45464ac` and `95d3b93`.
@@ -524,7 +605,7 @@ Then ask me what to work on next rather than assuming.
      duplicate rows from before the fix; they're inert leftovers (no
      corruption, just wasted redundant builds), and that one run will keep
      showing 3x "Build" until this fix is actually deployed there.
-- **Four sessions before that's work** (on top of everything below) — the "kaniko" build
+- **Five sessions before that's work** (on top of everything below) — the "kaniko" build
   engine now actually works, for a self-hosted deploy onto a real
   Kubernetes + CRI-O cluster (<CLUSTER_NAME>) with no Docker-compatible socket
   to mount at all. No migration needed. Two commits, `928fa53` and
@@ -584,7 +665,7 @@ Then ask me what to work on next rather than assuming.
     through this app — including future builds of itself — should work
     end-to-end. The RBAC manifest also still needs an actual Deploy once
     <CLUSTER_NAME>'s cert is sorted.
-- **Five sessions before that's work** (on top of everything below) — commit messages
+- **Six sessions before that's work** (on top of everything below) — commit messages
   now drive Bump Type/Object(s)/Change Type more directly, plus a way to
   actually try that out and understand it from `/ai-settings`. No
   migration needed for any of it.
@@ -661,7 +742,7 @@ Then ask me what to work on next rather than assuming.
   (+6, explicit word recognition and its priority over conflicting
   markers), `tests/test_ai_settings.py` (+6, the tester route including a
   regression test for the `is_submitted()` bug above).
-- **Six sessions before that's work** (on top of everything below) — a Telegram bot
+- **Seven sessions before that's work** (on top of everything below) — a Telegram bot
   integration, built in three parts in sequence (the first two planned via
   plan-mode with the user before implementation; the third — build/deploy
   notifications — was a small enough follow-up request to just implement
@@ -776,7 +857,7 @@ Then ask me what to work on next rather than assuming.
   (start/finish hooks + the workflow-driven skip); plus additions to the
   existing `tests/test_telegram.py` (`notify_run_finished`,
   `notify_awaiting_review`).
-- **Seven sessions before that's work** (on top of everything below), already
+- **Eight sessions before that's work** (on top of everything below), already
   committed and pushed to `origin/main`:
   1. **Workflow build steps can auto-generate their Version Bump/Change
      Type/Object/Message at run time instead of requiring them typed in at
@@ -867,7 +948,7 @@ Then ask me what to work on next rather than assuming.
   the features themselves: the `menus` and `permissions` blueprints had **no
   test file at all** before this session (`tests/test_menus.py`,
   `tests/test_permissions.py` are new).
-- **Eight sessions before that's work** (on top of everything below), already
+- **Nine sessions before that's work** (on top of everything below), already
   pushed to `origin/main`:
   1. **The container image never had `kubectl` installed at all** — every
      `DeploymentServer` action (test-connection, apply/delete, pods/

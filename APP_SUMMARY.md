@@ -435,7 +435,13 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   shown if the viewer has that resource's view permission and each with its
   own small Feather-style icon; a build-engine and a deploy-engine busy/idle
   indicator; a recent-errors count; a recent-builds table; recent activity
-  log.
+  log. A `workflow.run` holder also sees a warning banner up top listing
+  every build step currently awaiting review across every Workflow they can
+  see (`awaiting_review_step_runs_for()`, `app/services/workflow/worker.py`
+  — the same shared-queue authorization as the web review panel and
+  Telegram's `/review`), each linking straight to its own run's review
+  panel, plus a "Review" button to the dedicated `/workflows/review` page
+  (see below).
 - **`/users`, `/roles`, `/permissions`** — standard RBAC CRUD. The Roles
   page's permission picker groups the ~48 permissions under friendly
   resource headings (Users, Builders, AI Providers, …) with human
@@ -656,7 +662,26 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   `allowed_roles` picker, and a "Run" button right on the index row (posts
   to the same `workflow.run` endpoint the detail page's own Run button
   does, disabled the same way — inactive or zero steps — so a workflow can
-  be triggered without opening it first). Detail page (`/workflows/<id>`)
+  be triggered without opening it first). Each row also shows a "Last Run"
+  column (date + a status badge — queued/running/success/failed/...,
+  linking to that run's detail page) computed from `Workflow.runs`, kept
+  distinct from the row's own "Enabled" badge (`Workflow.is_active`, always
+  "Active" regardless of any run in progress — this pairing used to be
+  mislabeled "Status" and read as a live run indicator). The index page
+  polls a small `/workflows/statuses` JSON endpoint every 5s and reloads
+  once a workflow's latest-run status actually changes (same "only reload
+  on a real state change" pattern as `images-status.js`), so the Last Run
+  column stays current without a manual refresh. A `workflow.run` holder
+  also sees a "Review" button (badge-counted) to the dedicated
+  `/workflows/review` page — every build step awaiting review across every
+  Workflow they can see, in one place, each with the same inline
+  approve/reject form as the run detail page's own review panel (both
+  render via a shared `workflow_review_card` Jinja macro,
+  `app/templates/partials/_macros.html`, so they can't drift apart). A
+  small warning dot appears on the sidebar's Workflows entry itself
+  whenever anything is awaiting review, computed globally via the
+  `inject_menus()` context processor (`app/__init__.py`) so it shows on
+  every page, not just `/workflows`. Detail page (`/workflows/<id>`)
   is the step builder: "+ Add Build Step"/"+ Add Deploy Step" open a modal
   combining a multi-select of existing `group_name`s with a multi-select of
   individual *ungrouped* Builders/Manifests (an item already in a group is
