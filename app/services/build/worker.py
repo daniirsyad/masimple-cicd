@@ -481,7 +481,12 @@ def _run_build(app, build_id):
         log_buffer = []
 
         def flush_log():
-            build.build_log = "".join(log_buffer)
+            # Postgres text columns reject NUL bytes outright; engine subprocess
+            # output (Docker/Kaniko) occasionally contains one, which would
+            # otherwise crash this commit — and the finally block's own
+            # flush_log() call would then crash again, escaping _run_build's
+            # try/except and killing the whole worker thread.
+            build.build_log = "".join(log_buffer).replace("\x00", "")
             db.session.commit()
 
         def on_log_line(line):

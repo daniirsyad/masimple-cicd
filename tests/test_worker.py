@@ -802,6 +802,39 @@ class TestRunBuild:
             assert build.image_size == 42
             assert build.finished_at is not None
             assert "building..." in build.build_log
+
+    def test_nul_byte_in_log_output_does_not_crash_commit(self, app, monkeypatch):
+        entities = _make_entities(app)
+        build_id = _make_queued_build(app, entities)
+        with app.app_context():
+            _claim(build_id)
+
+        fake_git = _FakeGitProvider()
+        fake_engine = _FakeBuildEngine(_FakeBuildResult(success=True))
+        fake_registry = _FakeRegistryProvider()
+
+        def build_image_with_nul(*args, on_log_line=None, **kwargs):
+            on_log_line("binary garbage \x00 in output\n")
+            return fake_engine._result
+
+        fake_engine.build_image = build_image_with_nul
+
+        monkeypatch.setattr(
+            "app.services.build.worker.provider_for_git_source", lambda source: fake_git
+        )
+        monkeypatch.setattr("app.services.build.worker.get_build_engine", lambda: fake_engine)
+        monkeypatch.setattr(
+            "app.services.build.worker.get_registry_provider",
+            lambda provider_type, username, password, registry_url=None: fake_registry,
+        )
+
+        _run_build(app, build_id)
+
+        with app.app_context():
+            build = ImageBuild.query.get(build_id)
+            assert build.status == "success"
+            assert "\x00" not in build.build_log
+            assert "binary garbage" in build.build_log
             full_version_string = build.batch.full_version_string
 
         assert fake_git.synced == ("/tmp/myapp", "main")
