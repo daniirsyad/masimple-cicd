@@ -232,6 +232,24 @@ class TestIndexRendering:
         assert "2031" in html
         assert "2020" not in html
 
+    def test_shows_the_most_recent_runs_status(self, workflow_client, app):
+        """Regression test: the "Enabled" column reflects Workflow.is_active,
+        never a run's own status — always shows "Active" as long as the
+        Workflow itself is enabled, run or no run, and was mistaken by a
+        user for a live run-status indicator. Last Run's own badge is the
+        actual per-run status.
+        """
+        with app.app_context():
+            workflow = _make_workflow("Currently Running")
+            run = WorkflowRun(workflow_id=workflow.id, status="running")
+            db.session.add(run)
+            db.session.commit()
+
+        response = workflow_client.get("/workflows/")
+        html = response.data.decode()
+        assert ">running<" in html
+        assert ">Active<" in html  # the Workflow's own Enabled badge, unrelated to the run
+
 
 def _form_html(html, action_substring):
     """The <form ...>...</form> block whose action contains `action_substring`

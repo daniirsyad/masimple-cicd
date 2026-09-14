@@ -133,18 +133,21 @@ def _render_index(create_form=None, open_modal=None):
         w for w in Workflow.query.filter_by(is_active=True).order_by(Workflow.name).all()
         if w.is_accessible_to(current_user)
     ]
-    last_run_at = dict(
-        db.session.query(WorkflowRun.workflow_id, db.func.max(WorkflowRun.created_at))
-        .group_by(WorkflowRun.workflow_id)
-        .all()
-    )
+    # workflow.is_active's own "Status" column reflects whether the
+    # Workflow is enabled, not whether a run is in progress — this is a
+    # separate, per-run lookup so the index page can also show the most
+    # recent run's own status (queued/running/success/failed/...) without
+    # the two being conflated.
+    latest_runs = {
+        workflow.id: workflow.runs.order_by(WorkflowRun.created_at.desc()).first() for workflow in workflows
+    }
 
     return render_template(
         "workflows/index.html",
         workflows=workflows,
         create_form=create_form,
         open_modal=open_modal,
-        last_run_at=last_run_at,
+        latest_runs=latest_runs,
     )
 
 

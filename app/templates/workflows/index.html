@@ -28,7 +28,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
           <tr>
             <th>Name</th>
             <th>Description</th>
-            <th>Status</th>
+            <th>Enabled</th>
             <th>Steps</th>
             <th>Access</th>
             <th>Last Run</th>
@@ -60,7 +60,17 @@ MASIMPLE CICD{% endblock %} {% block content %}
               {% endif %}
             </td>
             <td class="text-xs text-base-content/70">
-              {{ last_run_at.get(workflow.id)|localtime if last_run_at.get(workflow.id) else "—" }}
+              {% set last_run = latest_runs.get(workflow.id) %} {% if last_run %}
+              <div class="flex items-center gap-2">
+                <span
+                  class="badge badge-sm {{ 'badge-success' if last_run.status == 'success' else 'badge-error' if last_run.status in ('failed', 'completed_with_failures') else 'badge-info' }}"
+                  >{{ last_run.status }}</span
+                >
+                <a class="link" href="{{ url_for('workflows.view_run', run_id=last_run.id) }}"
+                  >{{ last_run.created_at|localtime }}</a
+                >
+              </div>
+              {% else %} — {% endif %}
             </td>
             <td>
               <div class="flex gap-2">
