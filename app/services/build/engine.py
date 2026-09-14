@@ -275,8 +275,10 @@ class KanikoBuildEngine(BuildEngine):
             return _fail(str(exc))
 
         try:
-            self._stream_job_logs(job_name, namespace, _emit)
+            stream_returncode = self._stream_job_logs(job_name, namespace, _emit)
             success = self._wait_for_job_completion(job_name, namespace)
+            if stream_returncode != 0:
+                self._fetch_final_logs(job_name, namespace, _emit)
         except RuntimeError as exc:
             self._cleanup(job_name, secret_name, namespace, log_lines)
             return _fail(str(exc))
@@ -391,7 +393,35 @@ class KanikoBuildEngine(BuildEngine):
         # kubectl logs' own exit code only reflects whether it could attach
         # and stream at all, not the built container's exit code — the
         # Job's actual outcome is checked separately, in
-        # _wait_for_job_completion, right after this returns.
+        # _wait_for_job_completion, right after this returns. A nonzero
+        # exit here (e.g. it gave up on --pod-running-timeout before the
+        # pod actually started) means the real build output was never
+        # captured — the caller backstops that with _fetch_final_logs.
+        return process.returncode
+
+    def _fetch_final_logs(self, job_name, namespace, emit):
+        """Backstops `_stream_job_logs` for the case that actually bit us in
+        production: the pod took long enough to start that `kubectl logs -f`
+        gave up on its own --pod-running-timeout before ever attaching, even
+        though the container went on to run (and fail, or push
+        successfully) shortly after. By the time this runs the Job already
+        has a terminal status (this is only called after
+        _wait_for_job_completion returns), so the pod is done and a plain
+        non-follow `logs` call can't hit that same race — it just dumps
+        whatever the container actually printed, which is the real error
+        (e.g. a Dockerfile RUN failure) that the live stream missed
+        entirely.
+        """
+        try:
+            process = subprocess.run(
+                [KUBECTL_PATH, "logs", f"job/{job_name}", "-n", namespace, "--tail=1000"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return
+        output = process.stdout or process.stderr
+        if output:
+            emit(output)
 
     def _wait_for_job_completion(self, job_name, namespace):
         deadline = time.monotonic() + KANIKO_JOB_STATUS_TIMEOUT_SECONDS

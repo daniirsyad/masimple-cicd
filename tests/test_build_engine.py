@@ -475,6 +475,55 @@ class TestKanikoBuildEngine:
 
         assert seen_lines == ["line1\n", "line2\n"]
 
+    def test_log_stream_giving_up_early_falls_back_to_a_final_log_fetch(self, monkeypatch):
+        """Reproduces the real production symptom: `kubectl logs -f` gives up
+        with its own --pod-running-timeout error (nonzero exit, no real
+        build output captured) before the pod actually starts, even though
+        the container goes on to run and fail. The real error must still
+        reach the emitted log via a final non-follow fetch.
+        """
+        calls, log_calls = self._prepare(monkeypatch, job_status="failed")
+
+        def fake_popen(argv, stdout=None, stderr=None, text=None):
+            log_calls.append(argv)
+            return FakeKanikoLogProcess(
+                ['Error from server (BadRequest): container "kaniko" is waiting to start: ContainerCreating\n'],
+                returncode=1,
+            )
+
+        monkeypatch.setattr("app.services.build.engine.subprocess.Popen", fake_popen)
+
+        # Replace _prepare's fake_run with one that also answers a plain
+        # `kubectl logs job/... --tail=...` (no `-f`) also returns something,
+        # distinguishing this call from the streaming Popen call above.
+        def fake_run(argv, input=None, capture_output=True, text=True, timeout=None):
+            calls.append({"argv": argv, "input": input})
+            if argv[1] == "apply":
+                return FakeCompletedProcess(returncode=0)
+            if argv[1] == "get" and argv[2] == "job":
+                return FakeCompletedProcess(returncode=0, stdout=json.dumps({"status": {"failed": 1}}))
+            if argv[1] == "logs":
+                return FakeCompletedProcess(returncode=0, stdout="error: No pyproject.toml found\n")
+            if argv[1] == "delete":
+                return FakeCompletedProcess(returncode=0)
+            raise AssertionError(f"unexpected kubectl call: {argv}")
+
+        monkeypatch.setattr("app.services.build.engine.subprocess.run", fake_run)
+
+        engine = KanikoBuildEngine()
+        seen_lines = []
+        result = engine.build_image(
+            "/ctx",
+            "Dockerfile",
+            ["x:1"],
+            on_log_line=seen_lines.append,
+            registry_provider=_FakeRegistryProvider(),
+            push_repository="repo/x",
+        )
+
+        assert result.success is False
+        assert any("No pyproject.toml" in line for line in seen_lines)
+
     def test_job_reporting_failed_returns_failure_and_still_cleans_up(self, monkeypatch):
         calls, _ = self._prepare(monkeypatch, job_status="failed")
 
