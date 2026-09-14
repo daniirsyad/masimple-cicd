@@ -952,7 +952,7 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   (`kubectl apply --dry-run` wasn't even usable to sanity-check them here —
   the only configured cluster context had an unrelated TLS cert mismatch).
   That said, this app **is** actually self-hosted on a real cluster
-  (TEBET-APP-3, via a `DeploymentManifest` row named "MASIMPLE-CICD" whose
+  (<CLUSTER_NAME>, via a `DeploymentManifest` row named "MASIMPLE-CICD" whose
   content derives from this file with real values filled in — see
   SESSION_START.md) — so the *content* is real-world exercised, just not
   this literal file.

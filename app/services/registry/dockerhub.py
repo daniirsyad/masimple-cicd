@@ -31,7 +31,7 @@ class DockerHubProvider(RegistryProvider):
     def docker_config_auth_key(self):
         # Docker Hub is special-cased in the Docker/OCI credential-resolution
         # convention: an unqualified reference (no host prefix, e.g.
-        # "hamiltondev/hamilton-ai" — see full_repository_name below) resolves
+        # "<your-namespace>/<your-image>" — see full_repository_name below) resolves
         # to the default registry "index.docker.io", not registry_host above
         # (that's the real pull/push API host, registry-1.docker.io). Both
         # Docker CLI's own `docker login` and go-containerregistry (what

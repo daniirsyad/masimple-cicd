@@ -4,7 +4,7 @@ Paste the block below into a new chat to pick up this project with full context.
 
 ---
 
-I'm continuing work on this Flask app (MASIMPLE CICD) at /home/daniirsyad/work/code/masimple-cicd.
+I'm continuing work on this Flask app (MASIMPLE CICD) at /home/<user>/work/code/masimple-cicd.
 
 First, read these files in full before doing anything else:
 
@@ -526,7 +526,7 @@ Then ask me what to work on next rather than assuming.
      showing 3x "Build" until this fix is actually deployed there.
 - **Four sessions before that's work** (on top of everything below) — the "kaniko" build
   engine now actually works, for a self-hosted deploy onto a real
-  Kubernetes + CRI-O cluster (TEBET-APP-3) with no Docker-compatible socket
+  Kubernetes + CRI-O cluster (<CLUSTER_NAME>) with no Docker-compatible socket
   to mount at all. No migration needed. Two commits, `928fa53` and
   `ec85143`.
   1. **`KanikoBuildEngine` rewritten to launch kaniko-executor as its own
@@ -564,13 +564,13 @@ Then ask me what to work on next rather than assuming.
   3. **Two DeploymentManifest DB rows edited/created directly (not via
      git)**, since this app deploys itself and the changes above needed a
      live manifest to actually take effect: the existing `MASIMPLE-CICD`
-     manifest (deploys to TEBET-APP-3) gained `serviceAccountName:
+     manifest (deploys to <CLUSTER_NAME>) gained `serviceAccountName:
      masimple-cicd-builder`, the `NODE_NAME` env var, and
-     `KANIKO_WORKSPACE_HOST_PATH` (set to `/home/hamilton/masimple_cicd/data`,
+     `KANIKO_WORKSPACE_HOST_PATH` (set to `/home/<user>/masimple_cicd/data`,
      matching its existing hostPath). A new `MASIMPLE-CICD-RBAC` manifest
-     was created (also targeting TEBET-APP-3) holding the ServiceAccount/
+     was created (also targeting <CLUSTER_NAME>) holding the ServiceAccount/
      Role/RoleBinding from `k8s/deployment.yaml` — **created but not yet
-     deployed** (TEBET-APP-3's client cert was already known-expired since
+     deployed** (<CLUSTER_NAME>'s client cert was already known-expired since
      2026-08-09, so deploying it was deliberately not attempted this
      session).
   - **Still open**: this app builds/deploys *itself*, so the fixes in (2)
@@ -583,7 +583,7 @@ Then ask me what to work on next rather than assuming.
     available) is needed to break the cycle; after that, kaniko builds
     through this app — including future builds of itself — should work
     end-to-end. The RBAC manifest also still needs an actual Deploy once
-    TEBET-APP-3's cert is sorted.
+    <CLUSTER_NAME>'s cert is sorted.
 - **Five sessions before that's work** (on top of everything below) — commit messages
   now drive Bump Type/Object(s)/Change Type more directly, plus a way to
   actually try that out and understand it from `/ai-settings`. No
@@ -1148,7 +1148,7 @@ Then ask me what to work on next rather than assuming.
   FLASK_ENV=testing python -m pytest tests/ -q
   ```
   (`.env`'s `DATABASE_URL`/`TEST_DATABASE_URL` already point at the WSL2
-  gateway IP `172.29.16.1` directly, not the `db` Docker Compose hostname —
+  gateway IP `<DOCKER_BRIDGE_GATEWAY_IP>` directly, not the `db` Docker Compose hostname —
   no `sed` swap needed from inside the sandbox.)
 - CSS changes need a rebuild to actually show up: `npm run build:css`.
 - **gunicorn runs `--worker-class gthread --threads 4 --timeout 120`**
@@ -1160,7 +1160,7 @@ Then ask me what to work on next rather than assuming.
   one of these worker processes even with `FLASK_ENV=development` — see
   commit 4 above; this was silently broken before this session, with no
   error anywhere to indicate it.
-- **TEBET-APP-3's client certificate expired 2026-08-09** — a real, live
+- **<CLUSTER_NAME>'s client certificate expired 2026-08-09** — a real, live
   dev-DB `DeploymentServer` row. "Test Connection"/deploys/pod browsing
   against it will fail with "the server has asked for the client to provide
   credentials" (TLS handshake succeeds, cert is just past its

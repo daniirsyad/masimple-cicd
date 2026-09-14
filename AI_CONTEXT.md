@@ -803,7 +803,7 @@ to take (e.g. environment variables, database migration commands).
 
 **Task:** Migrating this repo's Docker Image Builder module from an older spec to a revised one (`image-builder-prompt.md`) built around a `BuildBatch` concept — one build-trigger action can cover several `Builder`s sharing one `Version`, bumping that Version's number once and producing one shared version string across all images in the batch.
 
-Full gap analysis and 14-step plan are written to `/home/daniirsyad/.claude/plans/read-image-builder-prompt-md-in-this-immutable-valiant.md` — **read that file first** when resuming. It has the complete context: migration decisions, permission naming scheme, critical files, verification approach, etc.
+Full gap analysis and 14-step plan are written to `/home/<user>/.claude/plans/read-image-builder-prompt-md-in-this-immutable-valiant.md` — **read that file first** when resuming. It has the complete context: migration decisions, permission naming scheme, critical files, verification approach, etc.
 
 **Working style:** one numbered step at a time, testing after each, stopping for go-ahead between steps (though steps have recently been batched multiple-per-turn — most recently "6 to 8" then "9 to 12").
 
@@ -837,7 +837,7 @@ Tests: `tests/test_version_documentation.py` fully rewritten against `BuildBatch
 
 ### Migration complete
 
-All 14 steps of the plan at `/home/daniirsyad/.claude/plans/read-image-builder-prompt-md-in-this-immutable-valiant.md` are done. Nothing outstanding from the plan itself. Possible follow-ups if picked up later (not required by the spec):
+All 14 steps of the plan at `/home/<user>/.claude/plans/read-image-builder-prompt-md-in-this-immutable-valiant.md` are done. Nothing outstanding from the plan itself. Possible follow-ups if picked up later (not required by the spec):
 - Claude/Gemini/Custom API `AIProvider` implementations are still stubs (`aiprovider.manage` UI lists them as "not yet implemented") — spec explicitly allows leaving these unconfigured.
 - GHCR/Harbor/ECR `RegistryProvider` implementations are similarly unimplemented stubs, per spec.
 - An already-seeded dev DB's `PromptTemplate` row still has the pre-Step-12 `{{branch_name}}`/`{{type}}` placeholder text, since seeding is idempotent (create-if-missing) — only fresh databases get the new default text automatically; edit the existing row by hand via `/ai-settings` if picking up this environment.
@@ -875,7 +875,7 @@ Six follow-up items, done in order, each tested and passing before moving to the
 
 ### How to resume
 
-Read this whole file first — there's no separate plan file to consult anymore (the original plan at `/home/daniirsyad/.claude/plans/read-image-builder-prompt-md-in-this-immutable-valiant.md` only covers Sections 1–14 above, not the six follow-up items). For new work, start fresh from the current code/tests. Useful jumping-off points if picking this back up:
+Read this whole file first — there's no separate plan file to consult anymore (the original plan at `/home/<user>/.claude/plans/read-image-builder-prompt-md-in-this-immutable-valiant.md` only covers Sections 1–14 above, not the six follow-up items). For new work, start fresh from the current code/tests. Useful jumping-off points if picking this back up:
 - `app/utils/error_logger.py` + the `got_request_exception` wiring in `app/__init__.py` if extending error logging further (e.g. logging validation-flash failures too, not just exceptions — deliberately out of scope so far, see the "Log Error Utility" reasoning above).
 - `app/services/git/github.py`'s `sync_repo`/`_repo_exists` if extending self-healing to the passive pickers noted in item 3.
 - `config.py`'s `REPO_CLONE_ROOT` + `docker-compose.yml` if/when real persistent storage gets mounted — nothing else needs to change, the app already reads the path from config rather than hardcoding it anywhere.
@@ -884,8 +884,8 @@ Read this whole file first — there's no separate plan file to consult anymore 
 
 The sandbox can't reach the DB via raw TCP to `db:5432` (the Docker Compose hostname) — connect via the WSL2 gateway instead:
 ```bash
-export DATABASE_URL=$(echo $DATABASE_URL | sed 's/@db:/@172.29.16.1:/')
-export TEST_DATABASE_URL=$(echo $TEST_DATABASE_URL | sed 's/@db:/@172.29.16.1:/')
+export DATABASE_URL=$(echo $DATABASE_URL | sed 's/@db:/@<DOCKER_BRIDGE_GATEWAY_IP>:/')
+export TEST_DATABASE_URL=$(echo $TEST_DATABASE_URL | sed 's/@db:/@<DOCKER_BRIDGE_GATEWAY_IP>:/')
 ```
 Run tests with `FLASK_ENV=testing python -m pytest tests/ -q` (after `source .venv/bin/activate` and `set -a && source .env && set +a`).
 
@@ -905,8 +905,8 @@ BuildKit rewrite of `DockerBuildEngine`. It used to live directly in
 - **255 tests passing**, run via:
   ```
   source .venv/bin/activate && set -a && source .env && set +a
-  export DATABASE_URL=$(echo $DATABASE_URL | sed 's/@db:/@172.29.16.1:/')
-  export TEST_DATABASE_URL=$(echo $TEST_DATABASE_URL | sed 's/@db:/@172.29.16.1:/')
+  export DATABASE_URL=$(echo $DATABASE_URL | sed 's/@db:/@<DOCKER_BRIDGE_GATEWAY_IP>:/')
+  export TEST_DATABASE_URL=$(echo $TEST_DATABASE_URL | sed 's/@db:/@<DOCKER_BRIDGE_GATEWAY_IP>:/')
   FLASK_ENV=testing python -m pytest tests/ -q
   ```
   (the sandbox can't reach the `db` Docker Compose hostname directly — that sed
@@ -933,7 +933,7 @@ BuildKit rewrite of `DockerBuildEngine`. It used to live directly in
   (kept only as an unused fallback for a containerized "docker" engine, per
   explicit choice not to remove it).
 - A live smoke test during this session **actually pushed a real image** to the
-  configured Docker Hub registry: `hamiltondev/hamilton-ai:DEV.2.0.1.070826025821`.
+  configured Docker Hub registry: `<your-namespace>/<your-image>:DEV.2.0.1.070826025821`.
   The DB rows created for that test were cleaned up and the Version number was
   restored, but the pushed registry tag itself was not — delete it from Docker
   Hub if you don't want it there.
@@ -1149,8 +1149,8 @@ In order:
 The sandbox can't reach the DB via raw TCP to `db:5432` (the Docker Compose
 hostname) — connect via the WSL2 gateway instead:
 ```bash
-export DATABASE_URL=$(echo $DATABASE_URL | sed 's/@db:/@172.29.16.1:/')
-export TEST_DATABASE_URL=$(echo $TEST_DATABASE_URL | sed 's/@db:/@172.29.16.1:/')
+export DATABASE_URL=$(echo $DATABASE_URL | sed 's/@db:/@<DOCKER_BRIDGE_GATEWAY_IP>:/')
+export TEST_DATABASE_URL=$(echo $TEST_DATABASE_URL | sed 's/@db:/@<DOCKER_BRIDGE_GATEWAY_IP>:/')
 ```
 Run tests with `FLASK_ENV=testing python -m pytest tests/ -q` (after
 `source .venv/bin/activate` and `set -a && source .env && set +a`).
