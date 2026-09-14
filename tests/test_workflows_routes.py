@@ -210,6 +210,28 @@ class TestIndexRendering:
         form = _form_html(html, f'action="/workflows/{workflow_id}/run"')
         assert "disabled" in form
 
+    def test_shows_dash_for_a_workflow_never_run(self, workflow_client, app):
+        with app.app_context():
+            _make_workflow("Never Run")
+
+        response = workflow_client.get("/workflows/")
+        assert b"\xe2\x80\x94" in response.data  # em dash placeholder
+
+    def test_shows_the_most_recent_runs_date(self, workflow_client, app):
+        import datetime
+
+        with app.app_context():
+            workflow = _make_workflow("Ran Before")
+            older = WorkflowRun(workflow_id=workflow.id, created_at=datetime.datetime(2020, 1, 1))
+            newer = WorkflowRun(workflow_id=workflow.id, created_at=datetime.datetime(2031, 6, 15))
+            db.session.add_all([older, newer])
+            db.session.commit()
+
+        response = workflow_client.get("/workflows/")
+        html = response.data.decode()
+        assert "2031" in html
+        assert "2020" not in html
+
 
 def _form_html(html, action_substring):
     """The <form ...>...</form> block whose action contains `action_substring`

@@ -133,12 +133,18 @@ def _render_index(create_form=None, open_modal=None):
         w for w in Workflow.query.filter_by(is_active=True).order_by(Workflow.name).all()
         if w.is_accessible_to(current_user)
     ]
+    last_run_at = dict(
+        db.session.query(WorkflowRun.workflow_id, db.func.max(WorkflowRun.created_at))
+        .group_by(WorkflowRun.workflow_id)
+        .all()
+    )
 
     return render_template(
         "workflows/index.html",
         workflows=workflows,
         create_form=create_form,
         open_modal=open_modal,
+        last_run_at=last_run_at,
     )
 
 

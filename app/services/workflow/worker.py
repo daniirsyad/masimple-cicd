@@ -337,7 +337,17 @@ def _poll_loop(app):
         try:
             _tick(app)
         except Exception as exc:
+            # Same reasoning as app/services/build/worker.py's _poll_loop: an
+            # exception raised mid-tick leaves the scoped session's
+            # underlying transaction aborted; without rollback+remove here,
+            # every subsequent tick's queries keep failing against that same
+            # poisoned session, silently and permanently stopping this
+            # orchestrator from ever advancing a WorkflowRun again (visible
+            # as a run stuck on "queued", never reaching "running") until the
+            # process restarts.
             with app.app_context():
+                db.session.rollback()
+                db.session.remove()
                 log_error(
                     source="workflow.worker.poll_loop",
                     exc=exc,

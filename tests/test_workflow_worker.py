@@ -446,3 +446,57 @@ class TestTickSkipsLockedRuns:
             step_runs = WorkflowStepRun.query.filter_by(workflow_run_id=run_id).all()
             assert len(step_runs) == 1
             assert BuildBatch.query.count() == 1
+
+
+class TestPollLoopHandlesATickException:
+    """_poll_loop's except handler now rolls back and removes the session
+    before logging (mirroring the identical pattern already in
+    app/services/build/worker.py's and app/services/deployment/worker.py's
+    own _poll_loop), instead of only logging the error as it did before.
+    Flask-SQLAlchemy's own teardown_appcontext hook already returns a
+    context's connection to the pool when that context is popped — even on
+    an exception — so this isn't plugging a connection leak; it's keeping
+    the workflow orchestrator's exception handling consistent with its two
+    sibling workers' already-established defensive pattern, and guarding
+    against a session left in a state that would need an explicit rollback
+    on some other Flask-SQLAlchemy configuration. Verifies the handler
+    actually calls them rather than asserting any downstream effect.
+    """
+
+    def test_rollback_and_remove_are_called_when_a_tick_raises(self, app, monkeypatch):
+        from app.services.workflow import worker as workflow_worker
+
+        def failing_tick(_app):
+            raise RuntimeError("boom")
+
+        class _StopLoop(Exception):
+            pass
+
+        calls = []
+        real_rollback = db.session.rollback
+        real_remove = db.session.remove
+
+        def spy_rollback():
+            calls.append("rollback")
+            return real_rollback()
+
+        def spy_remove():
+            calls.append("remove")
+            return real_remove()
+
+        def sleep_once(_seconds):
+            raise _StopLoop()
+
+        monkeypatch.setattr(workflow_worker, "_tick", failing_tick)
+        monkeypatch.setattr(workflow_worker.time, "sleep", sleep_once)
+        monkeypatch.setattr(db.session, "rollback", spy_rollback)
+        monkeypatch.setattr(db.session, "remove", spy_remove)
+
+        with pytest.raises(_StopLoop):
+            workflow_worker._poll_loop(app)
+
+        # Flask's own teardown_appcontext hook removes the session again
+        # when the except handler's `with app.app_context()` exits, on top
+        # of the explicit call below it — assert the explicit call happened
+        # (rollback, then remove) rather than an exact call count.
+        assert calls[:2] == ["rollback", "remove"]

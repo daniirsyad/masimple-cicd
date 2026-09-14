@@ -31,6 +31,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
             <th>Status</th>
             <th>Steps</th>
             <th>Access</th>
+            <th>Last Run</th>
             <th></th>
           </tr>
         </thead>
@@ -57,6 +58,9 @@ MASIMPLE CICD{% endblock %} {% block content %}
               {% endfor %} {% else %}
               <span class="text-xs text-base-content/60">workflow.manage users only</span>
               {% endif %}
+            </td>
+            <td class="text-xs text-base-content/70">
+              {{ last_run_at.get(workflow.id)|localtime if last_run_at.get(workflow.id) else "—" }}
             </td>
             <td>
               <div class="flex gap-2">
