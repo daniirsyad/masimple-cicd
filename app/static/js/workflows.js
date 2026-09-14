@@ -124,6 +124,34 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // --- Workflows index page (workflows/index.html) — polls statuses() and
+  // reloads once a workflow's latest-run status actually changes, same
+  // "only reload on a real state change" pattern as images-status.js
+  // (rather than re-rendering the whole table client-side, which would
+  // duplicate index.html's Jinja markup — badge classes, links, dashes —
+  // in JS too). ---
+  const workflowsIndexPage = document.getElementById("workflows-index-page");
+  if (workflowsIndexPage) {
+    const indexStatusUrl = workflowsIndexPage.dataset.statusUrl;
+    let lastIndexSnapshot = null;
+
+    function pollIndexStatuses() {
+      fetch(indexStatusUrl)
+        .then((response) => response.json())
+        .then((data) => {
+          const snapshot = JSON.stringify(data);
+          if (lastIndexSnapshot !== null && snapshot !== lastIndexSnapshot) {
+            window.location.reload();
+            return;
+          }
+          lastIndexSnapshot = snapshot;
+        })
+        .catch(() => {});
+    }
+    pollIndexStatuses();
+    setInterval(pollIndexStatuses, 5000);
+  }
+
   // --- Run detail page (workflows/run.html) — polls run_status() and
   // re-renders the whole step table each tick, since steps' WorkflowStepRun
   // rows only start existing once the orchestrator actually reaches them

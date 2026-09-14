@@ -251,6 +251,38 @@ class TestIndexRendering:
         assert ">Active<" in html  # the Workflow's own Enabled badge, unrelated to the run
 
 
+class TestStatuses:
+    """/workflows/statuses is polled by workflows.js to auto-refresh the
+    index page's Last Run column without a manual reload.
+    """
+
+    def test_requires_workflow_view(self, client):
+        response = client.get("/workflows/statuses")
+        assert response.status_code in (302, 401)
+
+    def test_returns_each_visible_workflows_latest_run(self, workflow_client, app):
+        with app.app_context():
+            workflow = _make_workflow("Polled")
+            workflow_id = workflow.id
+            run = WorkflowRun(workflow_id=workflow.id, status="running")
+            db.session.add(run)
+            db.session.commit()
+            run_id = run.id
+
+        response = workflow_client.get("/workflows/statuses")
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data[str(workflow_id)] == {"id": str(run_id), "status": "running"}
+
+    def test_null_for_a_workflow_never_run(self, workflow_client, app):
+        with app.app_context():
+            workflow = _make_workflow("Never Run")
+            workflow_id = workflow.id
+
+        response = workflow_client.get("/workflows/statuses")
+        assert response.get_json()[str(workflow_id)] is None
+
+
 def _form_html(html, action_substring):
     """The <form ...>...</form> block whose action contains `action_substring`
     — used to check a specific form's own fields, not just "csrf_token

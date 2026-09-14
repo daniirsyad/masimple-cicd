@@ -124,23 +124,29 @@ def _step_target_summary(step):
     return [manifest.name for manifest in resolve_step_manifests(step)]
 
 
-def _render_index(create_form=None, open_modal=None):
-    if create_form is None:
-        create_form = WorkflowForm(prefix=CREATE_PREFIX)
-    create_form.allowed_role_ids.choices = _role_choices()
-
-    workflows = [
+def _visible_active_workflows():
+    return [
         w for w in Workflow.query.filter_by(is_active=True).order_by(Workflow.name).all()
         if w.is_accessible_to(current_user)
     ]
+
+
+def _latest_runs_for(workflows):
     # workflow.is_active's own "Status" column reflects whether the
     # Workflow is enabled, not whether a run is in progress — this is a
     # separate, per-run lookup so the index page can also show the most
     # recent run's own status (queued/running/success/failed/...) without
     # the two being conflated.
-    latest_runs = {
-        workflow.id: workflow.runs.order_by(WorkflowRun.created_at.desc()).first() for workflow in workflows
-    }
+    return {workflow.id: workflow.runs.order_by(WorkflowRun.created_at.desc()).first() for workflow in workflows}
+
+
+def _render_index(create_form=None, open_modal=None):
+    if create_form is None:
+        create_form = WorkflowForm(prefix=CREATE_PREFIX)
+    create_form.allowed_role_ids.choices = _role_choices()
+
+    workflows = _visible_active_workflows()
+    latest_runs = _latest_runs_for(workflows)
 
     return render_template(
         "workflows/index.html",
@@ -163,6 +169,26 @@ def _render_archived():
 @permission_required("workflow.view")
 def index():
     return _render_index()
+
+
+@workflows_bp.route("/statuses")
+@permission_required("workflow.view")
+def statuses():
+    """Polled by the index page (see workflows.js) to auto-refresh the Last
+    Run column without a manual reload — deliberately just {workflow_id:
+    latest run status/id}, not a full HTML re-render, so an unrelated field
+    a poll can't see changing (e.g. an edit made from another tab) never
+    forces the page to reload; a change here always means an actual run
+    advanced.
+    """
+    workflows = _visible_active_workflows()
+    latest_runs = _latest_runs_for(workflows)
+    return jsonify(
+        {
+            str(workflow_id): {"id": str(run.id), "status": run.status} if run else None
+            for workflow_id, run in latest_runs.items()
+        }
+    )
 
 
 @workflows_bp.route("/archived")

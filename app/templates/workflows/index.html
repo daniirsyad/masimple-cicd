@@ -1,6 +1,8 @@
 {% extends "base.html" %} {% block title %}Workflows -
 MASIMPLE CICD{% endblock %} {% block content %}
 
+<div id="workflows-index-page" data-status-url="{{ url_for('workflows.statuses') }}"></div>
+
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Workflows</h1>
   <div class="flex gap-2">
@@ -136,4 +138,5 @@ MASIMPLE CICD{% endblock %} {% block content %}
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
 
+<script src="{{ url_for('static', filename='js/workflows.js') }}"></script>
 {% endblock %}

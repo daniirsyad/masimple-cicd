@@ -14,6 +14,10 @@ from app.models import (
     User,
     Version,
     VersionType,
+    Workflow,
+    WorkflowRun,
+    WorkflowStep,
+    WorkflowStepRun,
 )
 
 DASHBOARD_PASSWORD = "DashboardPass123!"
@@ -56,6 +60,32 @@ def dashboard_user(app):
 def dashboard_client(client, dashboard_user):
     client.post(
         "/login", data={"username": "dashboard_test", "password": DASHBOARD_PASSWORD}, follow_redirects=True
+    )
+    return client
+
+
+@pytest.fixture
+def workflow_review_client(client, app):
+    with app.app_context():
+        # workflow.manage too, not just workflow.run — Workflow.is_accessible_to
+        # only allows a workflow.manage holder or an explicitly allowed_roles
+        # member, and these tests' workflows are created with no allowed_roles.
+        permissions = [Permission(code=code, description=code) for code in ("workflow.run", "workflow.manage")]
+        db.session.add_all(permissions)
+        role = Role(name="WorkflowReviewer", description="Test workflow reviewer role")
+        role.permissions = permissions
+        db.session.add(role)
+        db.session.flush()
+        user = User(
+            username="workflow_reviewer",
+            password_hash=generate_password_hash(DASHBOARD_PASSWORD),
+            is_active=True,
+            role_id=role.id,
+        )
+        db.session.add(user)
+        db.session.commit()
+    client.post(
+        "/login", data={"username": "workflow_reviewer", "password": DASHBOARD_PASSWORD}, follow_redirects=True
     )
     return client
 
@@ -172,3 +202,76 @@ class TestDashboard:
         assert 'Documentation Pending' in body
         # One undocumented successful batch staged above.
         assert '<div class="stat-value">1</div>' in body
+
+
+class TestAwaitingReviewNotification:
+    def test_hidden_without_workflow_run_permission(self, dashboard_client, app):
+        with app.app_context():
+            workflow = Workflow(name="wf")
+            db.session.add(workflow)
+            db.session.flush()
+            step = WorkflowStep(workflow_id=workflow.id, order=0, step_type="build")
+            db.session.add(step)
+            db.session.flush()
+            run = WorkflowRun(workflow_id=workflow.id, status="running")
+            db.session.add(run)
+            db.session.flush()
+            step_run = WorkflowStepRun(
+                workflow_run_id=run.id,
+                workflow_step_id=step.id,
+                step_order=0,
+                step_type="build",
+                status="awaiting_review",
+            )
+            db.session.add(step_run)
+            db.session.commit()
+
+        response = dashboard_client.get("/")
+        assert b"awaiting review" not in response.data
+
+    def test_shown_with_workflow_run_permission(self, workflow_review_client, app):
+        with app.app_context():
+            workflow = Workflow(name="Needs Review Workflow")
+            db.session.add(workflow)
+            db.session.flush()
+            step = WorkflowStep(workflow_id=workflow.id, order=0, step_type="build")
+            db.session.add(step)
+            db.session.flush()
+            run = WorkflowRun(workflow_id=workflow.id, status="running")
+            db.session.add(run)
+            db.session.flush()
+            step_run = WorkflowStepRun(
+                workflow_run_id=run.id,
+                workflow_step_id=step.id,
+                step_order=0,
+                step_type="build",
+                status="awaiting_review",
+            )
+            db.session.add(step_run)
+            db.session.commit()
+
+        response = workflow_review_client.get("/")
+        body = response.data.decode()
+        assert "awaiting review" in body
+        assert "Needs Review Workflow" in body
+        assert "Build Step 1" in body
+
+    def test_not_shown_once_approved(self, workflow_review_client, app):
+        with app.app_context():
+            workflow = Workflow(name="Already Approved Workflow")
+            db.session.add(workflow)
+            db.session.flush()
+            step = WorkflowStep(workflow_id=workflow.id, order=0, step_type="build")
+            db.session.add(step)
+            db.session.flush()
+            run = WorkflowRun(workflow_id=workflow.id, status="running")
+            db.session.add(run)
+            db.session.flush()
+            step_run = WorkflowStepRun(
+                workflow_run_id=run.id, workflow_step_id=step.id, step_order=0, step_type="build", status="running"
+            )
+            db.session.add(step_run)
+            db.session.commit()
+
+        response = workflow_review_client.get("/")
+        assert b"awaiting review" not in response.data

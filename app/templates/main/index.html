@@ -4,6 +4,27 @@ block content %}
   Welcome, {{ current_user.full_name or current_user.username }}
 </h1>
 
+{% if awaiting_review_step_runs %}
+<div class="mt-4 card border border-warning bg-warning/10 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">
+      {{ awaiting_review_step_runs|length }} build{{ '' if awaiting_review_step_runs|length == 1 else 's' }}
+      awaiting review
+    </h2>
+    <ul class="mt-1 flex flex-col gap-1 text-sm">
+      {% for step_run in awaiting_review_step_runs %}
+      <li>
+        <a class="link link-primary" href="{{ url_for('workflows.view_run', run_id=step_run.workflow_run_id) }}"
+          >{{ step_run.run.workflow.name }} — Build Step {{ step_run.step_order + 1 }}</a
+        >
+        <span class="text-xs text-base-content/60">({{ step_run.created_at|localtime }})</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+{% endif %}
+
 <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
   <div class="stat rounded-box bg-base-100 shadow">
     <div class="stat-figure text-primary [&>svg]:h-8 [&>svg]:w-8">{{ active_users_icon | safe }}</div>
