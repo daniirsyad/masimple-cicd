@@ -55,9 +55,16 @@ def create_app(config_name=None):
         # every context processor on every render regardless, so this still
         # needs to short-circuit rather than let the query raise.
         if not app.testing and not is_setup_complete():
-            return {"sidebar_menu": [], "navbar_menu": [], "system_config": None}
+            return {"sidebar_menu": [], "navbar_menu": [], "system_config": None, "awaiting_review_count": 0}
         context = menu_builder(current_user)
         context["system_config"] = get_system_config()
+        # Imported here, not at module top, to match this app's existing
+        # pattern of deferring app.services imports into create_app() (see
+        # e.g. start_workflow_worker below) rather than risking a circular
+        # import at module load time.
+        from app.services.workflow.worker import awaiting_review_step_runs_for
+
+        context["awaiting_review_count"] = len(awaiting_review_step_runs_for(current_user))
         return context
 
     app.jinja_env.filters["localtime"] = format_local

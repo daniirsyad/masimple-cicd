@@ -1,3 +1,53 @@
 {% macro disabled_attrs(reason) -%}
 {%- if reason %}disabled title="{{ reason }}"{% endif -%}
 {%- endmacro %}
+
+{% macro workflow_review_card(step_run, form, show_workflow_name=False) %}
+<div class="card border border-warning bg-warning/10 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">
+      {% if show_workflow_name %}
+      <a class="link" href="{{ url_for('workflows.view_run', run_id=step_run.workflow_run_id) }}"
+        >{{ step_run.run.workflow.name }}</a
+      >
+      — {% endif %}Awaiting Review — Build Step {{ step_run.step_order + 1 }}
+    </h2>
+    <p class="text-sm text-base-content/70">
+      AI-suggested build metadata from git commit history since the last build. Review, edit if needed, then
+      approve or reject.
+    </p>
+    <form
+      method="POST"
+      action="{{ url_for('workflows.approve_step_run', step_run_id=step_run.id) }}"
+      class="mt-2 grid grid-cols-1 gap-3 md:grid-cols-2"
+    >
+      {{ form.hidden_tag() }}
+      <div>
+        {{ form.bump_type.label(class="label text-sm") }} {{ form.bump_type(class="select select-bordered
+        select-sm w-full") }}
+      </div>
+      <div>
+        {{ form.change_type_id.label(class="label text-sm") }} {{ form.change_type_id(class="select
+        select-bordered select-sm w-full") }}
+      </div>
+      <div class="md:col-span-2">
+        {{ form.object.label(class="label text-sm") }} {{ form.object(class="input input-bordered input-sm
+        w-full") }}
+      </div>
+      <div class="md:col-span-2">
+        {{ form.description.label(class="label text-sm") }} {{ form.description(class="textarea
+        textarea-bordered textarea-sm w-full", rows=2) }}
+      </div>
+      <div class="md:col-span-2">{{ form.submit(class="btn btn-primary btn-sm") }}</div>
+    </form>
+    <form
+      method="POST"
+      action="{{ url_for('workflows.reject_step_run', step_run_id=step_run.id) }}"
+      class="mt-2"
+    >
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+      <button type="submit" class="btn btn-sm btn-error btn-outline">Reject</button>
+    </form>
+  </div>
+</div>
+{% endmacro %}

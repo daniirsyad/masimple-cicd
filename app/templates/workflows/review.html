@@ -1,0 +1,22 @@
+{% extends "base.html" %} {% import "partials/_macros.html" as macros %} {% block title %}Review - MASIMPLE
+CICD{% endblock %} {% block content %}
+
+<div class="flex flex-wrap items-center justify-between gap-2">
+  <h1 class="text-2xl font-bold">Review</h1>
+  <a class="btn btn-sm" href="{{ url_for('workflows.index') }}">Back to Workflows</a>
+</div>
+<p class="mt-1 text-sm text-base-content/60">
+  Every build step across every workflow you can see that's paused for AI-suggested build metadata review.
+</p>
+
+<div class="mt-4 flex flex-col gap-4">
+  {% for step_run in step_runs %} {{ macros.workflow_review_card(step_run, review_forms[step_run.id],
+  show_workflow_name=True) }} {% else %}
+  <div class="card bg-base-100 shadow-sm">
+    <div class="card-body p-4">
+      <p class="text-sm text-base-content/60">Nothing awaiting review.</p>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

@@ -7,6 +7,7 @@ from app.models import (
     ChangeType,
     DeploymentManifest,
     GitSource,
+    Menu,
     Permission,
     RegistryTarget,
     Repository,
@@ -564,6 +565,50 @@ class TestApproveRejectStepRun:
         assert f'action="/workflows/step-runs/{step_run_id}/reject"' in html
         assert 'value="api"' in html  # pre-filled from suggested_object_names
         assert "awaiting_review" in html  # step status badge in the polled table
+
+    def test_review_queue_page_lists_the_step_with_its_workflow_name(
+        self, workflow_client, app, base_entities, monkeypatch
+    ):
+        run_id, step_run_id, change_type_id = self._start_awaiting_review_run(app, base_entities, monkeypatch)
+        with app.app_context():
+            workflow_name = WorkflowRun.query.get(run_id).workflow.name
+
+        response = workflow_client.get("/workflows/review")
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert workflow_name in html
+        assert f'action="/workflows/step-runs/{step_run_id}/approve"' in html
+        assert f'action="/workflows/step-runs/{step_run_id}/reject"' in html
+
+    def test_review_queue_page_requires_workflow_run_permission(self, view_only_client):
+        response = view_only_client.get("/workflows/review")
+        assert response.status_code == 403
+
+    def test_review_queue_page_empty_state(self, workflow_client):
+        response = workflow_client.get("/workflows/review")
+        assert response.status_code == 200
+        assert b"Nothing awaiting review" in response.data
+
+    def test_sidebar_shows_a_dot_only_while_something_awaits_review(
+        self, workflow_client, app, base_entities, monkeypatch
+    ):
+        with app.app_context():
+            db.session.add(Menu(label="Workflows", url="/workflows", permission_code="workflow.view"))
+            db.session.commit()
+
+        response = workflow_client.get("/workflows/")
+        assert "bg-warning" not in _sidebar_html(response.data.decode())
+
+        self._start_awaiting_review_run(app, base_entities, monkeypatch)
+
+        response = workflow_client.get("/workflows/")
+        assert "bg-warning" in _sidebar_html(response.data.decode())
+
+
+def _sidebar_html(html):
+    start = html.index('id="app-drawer-wrapper"')
+    end = html.index("</aside>", start)
+    return html[start:end]
 
 
 class _FakePreviewGitProvider:

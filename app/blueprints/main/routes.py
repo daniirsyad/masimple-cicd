@@ -17,10 +17,10 @@ from app.models import (
     User,
     Version,
     VersionDocumentation,
-    WorkflowStepRun,
 )
 from app.services.build.worker import get_engine_status
 from app.services.deployment.worker import get_engine_status as get_deployment_engine_status
+from app.services.workflow.worker import awaiting_review_step_runs_for
 
 RECENT_BATCHES_LIMIT = 5
 RECENT_ERRORS_DAYS = 7
@@ -147,19 +147,7 @@ def index():
             ErrorLog.created_at >= datetime.utcnow() - timedelta(days=RECENT_ERRORS_DAYS)
         ).count()
 
-    # Same shared-queue authorization as the web review panel
-    # (workflows.routes._awaiting_review_step_run_or_404) and Telegram's
-    # /review command: any workflow.run holder who can see the workflow, not
-    # just whoever triggered the run.
-    awaiting_review_step_runs = []
-    if current_user.has_permission("workflow.run"):
-        awaiting_review_step_runs = [
-            step_run
-            for step_run in WorkflowStepRun.query.filter_by(status="awaiting_review")
-            .order_by(WorkflowStepRun.created_at.desc())
-            .all()
-            if step_run.run.workflow.is_accessible_to(current_user)
-        ]
+    awaiting_review_step_runs = awaiting_review_step_runs_for(current_user)
 
     return render_template(
         "main/index.html",

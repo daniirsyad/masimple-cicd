@@ -1,5 +1,5 @@
-{% extends "base.html" %} {% block title %}Run - {{ run.workflow.name }} -
-MASIMPLE CICD{% endblock %} {% block content %}
+{% extends "base.html" %} {% import "partials/_macros.html" as macros %} {% block title %}Run - {{ run.workflow.name
+}} - MASIMPLE CICD{% endblock %} {% block content %}
 
 <div class="flex flex-wrap items-center justify-between gap-2">
   <div>
@@ -23,48 +23,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 
 {% set review_step_run = step_runs|selectattr('status', 'equalto', 'awaiting_review')|first %}
 {% if review_step_run and current_user.has_permission("workflow.run") %}
-<div class="card mt-4 border border-warning bg-warning/10 shadow-sm">
-  <div class="card-body p-4">
-    <h2 class="card-title text-base">Awaiting Review — Build Step {{ review_step_run.step_order + 1 }}</h2>
-    <p class="text-sm text-base-content/70">
-      AI-suggested build metadata from git commit history since the last build. Review, edit if needed, then
-      approve or reject.
-    </p>
-    {% set form = review_forms[review_step_run.id] %}
-    <form
-      method="POST"
-      action="{{ url_for('workflows.approve_step_run', step_run_id=review_step_run.id) }}"
-      class="mt-2 grid grid-cols-1 gap-3 md:grid-cols-2"
-    >
-      {{ form.hidden_tag() }}
-      <div>
-        {{ form.bump_type.label(class="label text-sm") }} {{ form.bump_type(class="select select-bordered
-        select-sm w-full") }}
-      </div>
-      <div>
-        {{ form.change_type_id.label(class="label text-sm") }} {{ form.change_type_id(class="select
-        select-bordered select-sm w-full") }}
-      </div>
-      <div class="md:col-span-2">
-        {{ form.object.label(class="label text-sm") }} {{ form.object(class="input input-bordered input-sm
-        w-full") }}
-      </div>
-      <div class="md:col-span-2">
-        {{ form.description.label(class="label text-sm") }} {{ form.description(class="textarea
-        textarea-bordered textarea-sm w-full", rows=2) }}
-      </div>
-      <div class="md:col-span-2">{{ form.submit(class="btn btn-primary btn-sm") }}</div>
-    </form>
-    <form
-      method="POST"
-      action="{{ url_for('workflows.reject_step_run', step_run_id=review_step_run.id) }}"
-      class="mt-2"
-    >
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-      <button type="submit" class="btn btn-sm btn-error btn-outline">Reject</button>
-    </form>
-  </div>
-</div>
+<div class="mt-4">{{ macros.workflow_review_card(review_step_run, review_forms[review_step_run.id]) }}</div>
 {% endif %}
 
 <div

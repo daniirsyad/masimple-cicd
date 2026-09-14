@@ -43,6 +43,12 @@
             >
               {% if item.icon %}<span class="sidebar-icon shrink-0 [&>svg]:h-4 [&>svg]:w-4">{{ item.icon | safe }}</span>{% endif %}
               {{ item.label }}
+              {% if item.url == '/workflows' and awaiting_review_count %}
+              <span
+                class="inline-block h-2 w-2 shrink-0 rounded-full bg-warning"
+                title="{{ awaiting_review_count }} build{{ '' if awaiting_review_count == 1 else 's' }} awaiting review"
+              ></span>
+              {% endif %}
             </a>
           </li>
         {% endif %}

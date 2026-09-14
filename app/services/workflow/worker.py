@@ -33,6 +33,25 @@ _worker_started = False
 _worker_lock = threading.Lock()
 
 
+def awaiting_review_step_runs_for(user):
+    """Every awaiting_review WorkflowStepRun the given user can act on — the
+    shared review queue behind the dashboard notification, the dedicated
+    /workflows/review page, and (mirrored, not routed through this) Telegram's
+    /review command: any workflow.run holder who can see the workflow, not
+    just whoever triggered the run (same rule as
+    workflows.routes._awaiting_review_step_run_or_404).
+    """
+    if not user or not user.is_authenticated or not user.has_permission("workflow.run"):
+        return []
+    return [
+        step_run
+        for step_run in WorkflowStepRun.query.filter_by(status="awaiting_review")
+        .order_by(WorkflowStepRun.created_at.desc())
+        .all()
+        if step_run.run.workflow.is_accessible_to(user)
+    ]
+
+
 def enqueue_workflow_run(workflow, triggered_by):
     """Creates one WorkflowRun, queued for the orchestrator to pick up on its
     next tick — mirrors enqueue_build_batch/enqueue_deployment_run's "just

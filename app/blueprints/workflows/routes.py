@@ -26,7 +26,12 @@ from app.services.workflow.resolver import (
     resolve_step_builders,
     resolve_step_manifests,
 )
-from app.services.workflow.worker import approve_awaiting_step, enqueue_workflow_run, reject_awaiting_step
+from app.services.workflow.worker import (
+    approve_awaiting_step,
+    awaiting_review_step_runs_for,
+    enqueue_workflow_run,
+    reject_awaiting_step,
+)
 from app.utils.decorators import permission_required
 from app.utils.logger import log_activity
 
@@ -655,6 +660,20 @@ def _review_form_for(step_run):
         form.object.data = step_run.suggested_object_names
         form.description.data = step_run.suggested_description
     return form
+
+
+@workflows_bp.route("/review")
+@permission_required("workflow.run")
+def review_queue():
+    """Every build step awaiting review this user can act on, in one place —
+    same shared queue as the dashboard's notification banner and Telegram's
+    /review, but with the real approve/reject forms inline instead of just
+    linking out to each run one at a time.
+    """
+    step_runs = awaiting_review_step_runs_for(current_user)
+    review_forms = {step_run.id: _review_form_for(step_run) for step_run in step_runs}
+
+    return render_template("workflows/review.html", step_runs=step_runs, review_forms=review_forms)
 
 
 @workflows_bp.route("/runs/<uuid:run_id>")

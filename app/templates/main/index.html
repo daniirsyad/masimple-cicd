@@ -7,10 +7,13 @@ block content %}
 {% if awaiting_review_step_runs %}
 <div class="mt-4 card border border-warning bg-warning/10 shadow-sm">
   <div class="card-body p-4">
-    <h2 class="card-title text-base">
-      {{ awaiting_review_step_runs|length }} build{{ '' if awaiting_review_step_runs|length == 1 else 's' }}
-      awaiting review
-    </h2>
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h2 class="card-title text-base">
+        {{ awaiting_review_step_runs|length }} build{{ '' if awaiting_review_step_runs|length == 1 else 's' }}
+        awaiting review
+      </h2>
+      <a class="btn btn-warning btn-sm" href="{{ url_for('workflows.review_queue') }}">Review</a>
+    </div>
     <ul class="mt-1 flex flex-col gap-1 text-sm">
       {% for step_run in awaiting_review_step_runs %}
       <li>
