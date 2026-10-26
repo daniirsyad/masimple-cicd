@@ -23,6 +23,12 @@ class DeploymentExecution(db.Model):
             unique=True,
             postgresql_where=db.text("status = 'running'"),
         ),
+        # Backs get_current_deployment()'s "latest successful execution for
+        # this (manifest, server)" lookup, which /deployment-manifests runs
+        # several times per manifest x server pair on every page load —
+        # without it each lookup was a full table scan over all deploy
+        # history, so the page got slower with every deploy ever made.
+        db.Index("ix_deployment_executions_lookup", "manifest_id", "server_id", "status", "created_at"),
     )
 
     id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

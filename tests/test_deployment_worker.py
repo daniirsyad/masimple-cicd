@@ -1,6 +1,8 @@
 import threading
 from datetime import datetime, timedelta
 
+from sqlalchemy import event
+
 from app.extensions import db
 from app.models import (
     Builder,
@@ -499,6 +501,37 @@ class TestCurrentDeployment:
             db.session.commit()
 
             assert is_currently_deployed(manifest_id, server_id) is False
+
+    def test_lookup_is_served_by_an_index_not_a_full_table_scan(self, app):
+        """/deployment-manifests runs this lookup several times per manifest x
+        server pair per page load — as a seq scan over all deploy history it
+        made the page slower with every deploy ever made. EXPLAINs the exact
+        SQL get_current_deployment() emits, with seq scans discouraged so the
+        planner picks the index even on this tiny test table if one exists.
+        """
+        entities = _make_entities(app)
+        with app.app_context():
+            manifest_id, server_id = entities["manifest_id"], entities["server_ids"][0]
+            captured = []
+
+            def _capture(conn, cursor, statement, params, context, executemany):
+                if "FROM deployment_executions" in statement:
+                    captured.append((statement, params))
+
+            event.listen(db.engine, "before_cursor_execute", _capture)
+            try:
+                get_current_deployment(manifest_id, server_id)
+            finally:
+                event.remove(db.engine, "before_cursor_execute", _capture)
+
+            statement, params = captured[0]
+            connection = db.session.connection()
+            connection.exec_driver_sql("SET LOCAL enable_seqscan = off")
+            plan = "\n".join(row[0] for row in connection.exec_driver_sql("EXPLAIN " + statement, params))
+            db.session.rollback()
+
+            assert "ix_deployment_executions_lookup" in plan, plan
+            assert "Seq Scan on deployment_executions" not in plan, plan
 
 
 class TestEnqueueStopRun:

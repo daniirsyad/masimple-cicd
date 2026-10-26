@@ -104,7 +104,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
 | AWS SDK | `boto3` — ECR `RegistryProvider` only (SigV4-signed calls, doesn't fit the generic Docker Registry v2 bearer-token flow the other registry providers share) |
 | YAML generation | `PyYAML` — YAML Generator page only; everywhere else in this app deliberately avoids it in favor of dict→`json.dumps()` (JSON is valid YAML) since that output only ever feeds `kubectl apply -f -`, never a human — see `app/services/yaml_generator/render.py` |
-| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 943 tests |
+| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 1103 tests |
 | Telegram integration | `requests` against the Bot API (`app/services/telegram/`) — both directions now: outbound `sendMessage` (security notifications, forgot-password links, workflow/build/deploy start-finish pushes) **and** inbound, via a long-polling `getUpdates` background thread (no webhook/public HTTPS needed) handling `/run`, `/status`, `/review`, `/build`, `/deploy`, `/update`, `/stop`, `/restart` bot commands and their inline-keyboard callbacks |
 | Discord integration | `requests` (REST) + `websocket-client` (Gateway) against the Discord API (`app/services/discord/`) — same notifications/commands as Telegram above (`/help` instead of `/start`), reached via a persistent Gateway WebSocket + native slash commands/Button/Select Menu components instead of long-polling + inline keyboards; group-resolution/action-table logic shared with Telegram via `app/services/bot_shared.py` |
 
@@ -339,6 +339,9 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   than re-resolving). `manifest_id` is **nullable**: deleting a manifest
   nulls it out on historical executions rather than blocking the delete or
   cascading, so `/deployment-runs` history survives.
+  Indexed on `(manifest_id, server_id, status, created_at)`
+  (`ix_deployment_executions_lookup`) for the "current deployment of this
+  pair" lookup `/deployment-manifests` runs per manifest x server.
 
 **Workflow module:**
 - `Workflow` — name, description, `is_active`, `allowed_roles` (same
