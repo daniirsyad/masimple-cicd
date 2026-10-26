@@ -52,6 +52,15 @@ Then ask me what to work on next rather than assuming.
      `get_current_deployment()` emits and `EXPLAIN`s it with
      `enable_seqscan = off`; confirmed red (`Seq Scan on
      deployment_executions`) without the index, green with it.
+  4. **`entrypoint.sh`'s DB wait now prints why it gave up** — prompted by
+     a container log of only "Database not reachable after 30 attempts,
+     giving up." with no cause (the loop swallowed every exception). The
+     exit message now includes host:port/db (never the password) plus the
+     driver's last error. The underlying unreachable-DB report itself was
+     not resolved this session (environment unknown — no masimple
+     container on this machine); likeliest suspect is
+     `docker-compose.podman.yml` connecting straight to `.env`'s WSL2
+     gateway IP, which often isn't reachable from inside a container.
   **Not done** (deliberately, measure first): the page still issues ~1,371
   queries for 40x3 pairs (N+1 — each pair re-queried 3x, plus a lazy
   `.run` load each). Cheap locally (~0.3ms/query) but each costs a network

@@ -9,15 +9,22 @@ import time
 
 import sqlalchemy
 
-url = os.environ["DATABASE_URL"]
+url = sqlalchemy.engine.make_url(os.environ["DATABASE_URL"])
 for attempt in range(30):
     try:
         sqlalchemy.create_engine(url).connect().close()
         break
-    except Exception:
+    except Exception as exc:
+        last_error = exc
         time.sleep(1)
 else:
-    sys.exit("Database not reachable after 30 attempts, giving up.")
+    # host/port/db (never the password) plus the driver's own reason, so a
+    # bad host vs. wrong credentials vs. missing database is visible here
+    # instead of only "giving up".
+    sys.exit(
+        f"Database {url.host}:{url.port}/{url.database} not reachable after 30 attempts, giving up.\n"
+        f"Last error: {getattr(last_error, 'orig', last_error)}"
+    )
 PY
 
 
