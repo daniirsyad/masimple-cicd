@@ -56,11 +56,22 @@ Then ask me what to work on next rather than assuming.
      a container log of only "Database not reachable after 30 attempts,
      giving up." with no cause (the loop swallowed every exception). The
      exit message now includes host:port/db (never the password) plus the
-     driver's last error. The underlying unreachable-DB report itself was
-     not resolved this session (environment unknown — no masimple
-     container on this machine); likeliest suspect is
-     `docker-compose.podman.yml` connecting straight to `.env`'s WSL2
-     gateway IP, which often isn't reachable from inside a container.
+     driver's last error — which then surfaced the real cause, point 5.
+  5. **Pinned `SQLAlchemy>=2.0,<2.1` in `requirements.txt`** — the
+     self-hosted pod (cluster `tebetapps3`, ns `masimple-cicd`, image
+     `DEV.1.0.29.261026233316`) crash-looped with `No module named
+     'psycopg'` even after the Secret's `DATABASE_URL` was a plain
+     `postgresql://` (checked read-only: `envFrom` that one Secret only, no
+     `env:` override). Cause: `requirements.txt` was fully unpinned, the
+     2026-10-26 image build pulled SQLAlchemy 2.1, and 2.1 made psycopg
+     (v3) the default driver for `postgresql://` — the image only ships
+     `psycopg2-binary`. Confirmed with a fresh `pip install SQLAlchemy`
+     (2.1.6 → driver `psycopg`) vs. the pinned requirements (2.0.55 →
+     `psycopg2`); the private image itself couldn't be pulled to check
+     directly. Needs an image rebuild to take effect; until then,
+     `postgresql+psycopg2://` in the Secret works around it. Every other
+     dependency is still unpinned — a lock/constraints file would prevent
+     the next one of these.
   **Not done** (deliberately, measure first): the page still issues ~1,371
   queries for 40x3 pairs (N+1 — each pair re-queried 3x, plus a lazy
   `.run` load each). Cheap locally (~0.3ms/query) but each costs a network
