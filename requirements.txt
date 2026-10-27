@@ -1,5 +1,9 @@
 Flask
 Flask-SQLAlchemy
+# 2.1 made psycopg (v3) the default driver for postgresql:// URLs; this
+# image only ships psycopg2-binary, so an unpinned 2.1 install fails every
+# DB connect with "No module named 'psycopg'".
+SQLAlchemy>=2.0,<2.1
 Flask-Migrate
 Flask-Login
 Flask-WTF
