@@ -37,3 +37,14 @@ class TestGetBuildEngine:
 
             with pytest.raises(ValueError):
                 get_build_engine()
+
+    def test_docker_engine_uses_configured_docker_host(self, app):
+        with app.app_context():
+            from app.extensions import db
+
+            config = get_system_config()
+            config.docker_host = "tcp://build-host:2376"
+            db.session.commit()
+
+            engine = get_build_engine()
+            assert engine.env["DOCKER_HOST"] == "tcp://build-host:2376"

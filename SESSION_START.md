@@ -27,8 +27,31 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1103 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below) — diagnosed a
+- **1108 tests passing** (as of the last full run).
+- **This session's work** (on top of everything below) — answered "can the
+  Docker build engine use a Docker host while this app runs in a pod?" (yes:
+  hostPath-mount the node's socket if the node runs dockerd, or point
+  `DOCKER_HOST` at a remote daemon), then made that configurable in the UI.
+  1. **New `SystemConfig.docker_host`** (nullable, migration `a372a37b7529`),
+     edited on `/config` under Build Engine. Validated to start with
+     `unix://`, `tcp://` or `ssh://`. Blank = old behavior (the
+     `DOCKER_HOST` env var / local socket).
+  2. **`DockerBuildEngine(docker_host=...)`** (`app/services/build/engine.py`)
+     builds one env dict (`docker_env()`) and hands it to both
+     `docker.from_env(environment=...)` and the `docker buildx` subprocess, so
+     the build, the image inspect, the push and the cleanup all hit the same
+     daemon. `get_build_engine()` passes the configured value. TLS for a
+     `tcp://` host still comes from the pod's `DOCKER_TLS_VERIFY`/
+     `DOCKER_CERT_PATH` env vars (certs mounted from a Secret). Storing certs
+     in the DB was not done.
+  3. **"Test Connection" button** next to the field: `POST
+     /config/test-docker` (`system.manage`) runs `check_docker_connection()`
+     (ping + version, 10s timeout) against the *typed* (unsaved) value and
+     shows the result inline. Checked by hand against a local daemon
+     (connected), a closed TCP port, and a missing socket. Not tried in a
+     real browser.
+  4. 5 new tests (`tests/test_system_config.py`, `tests/test_build_factory.py`).
+- **A prior session's work** (on top of everything below) — diagnosed a
   "`/deployment-manifests` is very slow" report (started from a pasted,
   truncated `SELECT deployment_executions.* ...` query).
   1. **Root cause: `deployment_executions` had no index on `(manifest_id,
@@ -79,7 +102,7 @@ Then ask me what to work on next rather than assuming.
   query per request is the next step if the page is still slow in prod
   after this migration. Production's own `EXPLAIN` was not checked from
   this session.
-- **A prior session's work** (on top of everything below) — a real production
+- **An earlier session's work** (on top of everything below) — a real production
   bug report plus a cluster of small, directly-requested Workflow UX
   additions, each implemented and pushed as its own commit rather than
   batched into one.
@@ -160,7 +183,7 @@ Then ask me what to work on next rather than assuming.
   (`TestPollLoopHandlesATickException`). 1086 → 1102 tests; full suite
   re-run clean after each of the four points above, not just at the end —
   each was its own commit and push, per direct request.
-- **An earlier session's work** (on top of everything below) — a full Discord bot
+- **A session before that's work** (on top of everything below) — a full Discord bot
   integration, feature-parity with the existing Telegram integration (both
   directions: outbound notifications and inbound commands). Scoped up front
   via AskUserQuestion (Discord Gateway WebSocket transport, not an HTTP
@@ -378,7 +401,7 @@ Then ask me what to work on next rather than assuming.
        full suite re-run clean (an earlier run showed spurious failures in
        unrelated files purely from two `pytest` processes hitting the same
        Postgres test DB concurrently — a re-run by itself was clean).
-- **A session before that's work** (on top of everything below) — Deploy/Update/
+- **Two sessions before that's work** (on top of everything below) — Deploy/Update/
   Restart's rollout wait (see the prior session's work just below for how
   that wait itself was added) now stops immediately on an obviously-fatal
   pod state instead of blocking out the full configured timeout — requested
@@ -430,7 +453,7 @@ Then ask me what to work on next rather than assuming.
   alongside the existing timeout description. No migration needed — no
   model/schema change, this only changes `KubernetesProvider`'s own internal
   polling.
-- **Two sessions before that's work** (on top of everything below):
+- **Three sessions before that's work** (on top of everything below):
   1. **Deploy/Update/Restart now waits for the rollout to actually become
      Ready before counting as a success, with a configurable timeout** —
      planned via plan-mode (AskUserQuestion locked the design up front, then
@@ -492,7 +515,7 @@ Then ask me what to work on next rather than assuming.
      SortableJS's drag-reorder still initializes fine against the collapsed
      table since daisyUI hides collapse content via a zero-height grid row,
      not `display:none`.
-- **Three sessions before that's work** (on top of everything below) — pressing Build,
+- **Four sessions before that's work** (on top of everything below) — pressing Build,
   Deploy, Update, Stop, or Restart (single or "Whole group") on the
   Builders / Deployment Manifests index pages no longer navigates away to
   the Images / Deployment Runs list on success — it stays on the same
@@ -514,7 +537,7 @@ Then ask me what to work on next rather than assuming.
   `/deployment-manifests/` accordingly; no new tests added since this is a
   redirect-target/flash-content change to already-covered routes, not new
   behavior. No migration needed.
-- **Four sessions before that's work** (on top of everything below) — the Telegram bot
+- **Five sessions before that's work** (on top of everything below) — the Telegram bot
   integration (previously Workflow-only: `/run`/`/status`/`/review`) can now
   also trigger manual, non-Workflow Builds and Deployment Manifest
   actions — requested directly, not via plan-mode. No migration needed.
@@ -597,7 +620,7 @@ Then ask me what to work on next rather than assuming.
   disabled-manifest and "nothing currently deployed" edge cases for
   deploy/stop, the AI-prefill confident-vs-not-confident branches (plus
   Confirm/Cancel) for Build, and the mixed-Version group-build rejection.
-- **Five sessions before that's work** (on top of everything below) — two independent bug
+- **Six sessions before that's work** (on top of everything below) — two independent bug
   fixes in the Deployment/Workflow pipeline, found via direct user reports
   rather than the test suite. No migration needed for either. Two commits,
   `45464ac` and `95d3b93`.
@@ -656,7 +679,7 @@ Then ask me what to work on next rather than assuming.
      duplicate rows from before the fix; they're inert leftovers (no
      corruption, just wasted redundant builds), and that one run will keep
      showing 3x "Build" until this fix is actually deployed there.
-- **Six sessions before that's work** (on top of everything below) — the "kaniko" build
+- **Seven sessions before that's work** (on top of everything below) — the "kaniko" build
   engine now actually works, for a self-hosted deploy onto a real
   Kubernetes + CRI-O cluster (<CLUSTER_NAME>) with no Docker-compatible socket
   to mount at all. No migration needed. Two commits, `928fa53` and
@@ -716,7 +739,7 @@ Then ask me what to work on next rather than assuming.
     through this app — including future builds of itself — should work
     end-to-end. The RBAC manifest also still needs an actual Deploy once
     <CLUSTER_NAME>'s cert is sorted.
-- **Seven sessions before that's work** (on top of everything below) — commit messages
+- **Eight sessions before that's work** (on top of everything below) — commit messages
   now drive Bump Type/Object(s)/Change Type more directly, plus a way to
   actually try that out and understand it from `/ai-settings`. No
   migration needed for any of it.
@@ -793,7 +816,7 @@ Then ask me what to work on next rather than assuming.
   (+6, explicit word recognition and its priority over conflicting
   markers), `tests/test_ai_settings.py` (+6, the tester route including a
   regression test for the `is_submitted()` bug above).
-- **Eight sessions before that's work** (on top of everything below) — a Telegram bot
+- **Nine sessions before that's work** (on top of everything below) — a Telegram bot
   integration, built in three parts in sequence (the first two planned via
   plan-mode with the user before implementation; the third — build/deploy
   notifications — was a small enough follow-up request to just implement
@@ -908,7 +931,7 @@ Then ask me what to work on next rather than assuming.
   (start/finish hooks + the workflow-driven skip); plus additions to the
   existing `tests/test_telegram.py` (`notify_run_finished`,
   `notify_awaiting_review`).
-- **Nine sessions before that's work** (on top of everything below), already
+- **Ten sessions before that's work** (on top of everything below), already
   committed and pushed to `origin/main`:
   1. **Workflow build steps can auto-generate their Version Bump/Change
      Type/Object/Message at run time instead of requiring them typed in at
@@ -999,7 +1022,7 @@ Then ask me what to work on next rather than assuming.
   the features themselves: the `menus` and `permissions` blueprints had **no
   test file at all** before this session (`tests/test_menus.py`,
   `tests/test_permissions.py` are new).
-- **Ten sessions before that's work** (on top of everything below), already
+- **Eleven sessions before that's work** (on top of everything below), already
   pushed to `origin/main`:
   1. **The container image never had `kubectl` installed at all** — every
      `DeploymentServer` action (test-connection, apply/delete, pods/

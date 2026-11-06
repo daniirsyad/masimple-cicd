@@ -15,6 +15,10 @@ class SystemConfig(db.Model):
     timezone = db.Column(db.String, nullable=False, default="UTC")
     session_timeout_minutes = db.Column(db.Integer, nullable=False, default=60)
     build_engine = db.Column(db.String, nullable=False, default="docker")
+    # Docker daemon the "docker" build engine talks to, e.g.
+    # "tcp://build-host:2376", "ssh://user@host", "unix:///var/run/docker.sock".
+    # NULL = fall back to the DOCKER_HOST env var / default local socket.
+    docker_host = db.Column(db.String, nullable=True)
     # This app's own public URL (no trailing slash, e.g.
     # "https://cicd.example.com"), admin-entered since nothing in this app
     # can reliably infer it — a request's Host header varies across

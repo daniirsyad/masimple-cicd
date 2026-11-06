@@ -42,13 +42,34 @@ MASIMPLE CICD{% endblock %} {% block content %}
         {{ form.build_engine(class="select select-bordered select-sm") }}
         <p class="mt-1 text-xs text-base-content/60">
           Used by the Image Builder to build and push triggered batches. Docker
-          needs the host's Docker socket mounted into this container.
+          needs a reachable Docker daemon (see Docker Host below).
           Kaniko is temporarily unavailable — it corrupted a running app
           container's own filesystem mid-build, since it currently runs as a
           subprocess sharing this app's filesystem rather than in its own
           isolated container.
         </p>
         {% for error in form.build_engine.errors %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endfor %}
+      </div>
+
+      <div class="form-control">
+        <label class="label" for="{{ form.docker_host.id }}">
+          <span class="label-text">Docker Host</span>
+        </label>
+        <div class="flex gap-2">
+          {{ form.docker_host(class="input input-bordered input-sm w-full", placeholder="tcp://build-host:2376") }}
+          <button type="button" id="test-docker-btn" class="btn btn-sm btn-outline"
+                  data-url="{{ url_for('system_config.test_docker') }}">Test Connection</button>
+        </div>
+        <p class="mt-1 text-xs text-base-content/60">
+          Docker daemon used by the Docker build engine: <code>tcp://host:2376</code>,
+          <code>ssh://user@host</code> or <code>unix:///var/run/docker.sock</code>. Blank uses the
+          container's <code>DOCKER_HOST</code> env var / local socket. TLS certs for a <code>tcp://</code>
+          host come from the <code>DOCKER_TLS_VERIFY</code>/<code>DOCKER_CERT_PATH</code> env vars.
+        </p>
+        <p id="test-docker-result" class="mt-1 text-sm"></p>
+        {% for error in form.docker_host.errors %}
         <p class="text-error text-sm">{{ error }}</p>
         {% endfor %}
       </div>
@@ -278,4 +299,30 @@ MASIMPLE CICD{% endblock %} {% block content %}
 
   <div>{{ form.submit(class="btn btn-primary btn-sm") }}</div>
 </form>
+<script>
+  document.getElementById("test-docker-btn").addEventListener("click", async (event) => {
+    const btn = event.currentTarget;
+    const result = document.getElementById("test-docker-result");
+    const body = new FormData();
+    body.append("docker_host", document.getElementById("{{ form.docker_host.id }}").value);
+    btn.disabled = true;
+    result.className = "mt-1 text-sm";
+    result.textContent = "Testing…";
+    try {
+      const resp = await fetch(btn.dataset.url, {
+        method: "POST",
+        headers: { "X-CSRFToken": document.getElementById("csrf_token").value },
+        body,
+      });
+      const data = await resp.json();
+      result.className = "mt-1 text-sm " + (data.ok ? "text-success" : "text-error");
+      result.textContent = data.message;
+    } catch (err) {
+      result.className = "mt-1 text-sm text-error";
+      result.textContent = "Request failed: " + err;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+</script>
 {% endblock %}

@@ -2,7 +2,7 @@ import zoneinfo
 
 from flask_wtf import FlaskForm
 from wtforms import BooleanField, IntegerField, SelectField, StringField, SubmitField
-from wtforms.validators import DataRequired, Length, NumberRange, Optional, URL
+from wtforms.validators import DataRequired, Length, NumberRange, Optional, Regexp, URL
 
 TIMEZONE_CHOICES = [(tz, tz) for tz in sorted(zoneinfo.available_timezones())]
 
@@ -29,6 +29,14 @@ class SystemConfigForm(FlaskForm):
     )
     build_engine = SelectField(
         "Build Engine", choices=BUILD_ENGINE_CHOICES, validators=[DataRequired()]
+    )
+    docker_host = StringField(
+        "Docker Host (optional)",
+        validators=[
+            Optional(),
+            Length(max=255),
+            Regexp(r"^(unix|tcp|ssh)://\S+$", message="Must start with unix://, tcp:// or ssh://"),
+        ],
     )
     # No trailing slash expected — normalized on save (routes.py). Not
     # require_tld: this app is routinely reached by bare IP or localhost

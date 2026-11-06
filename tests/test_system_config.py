@@ -115,6 +115,35 @@ class TestIndexPage:
         with app.app_context():
             assert get_system_config().build_engine == "docker"
 
+    def test_post_saves_docker_host(self, config_client, app):
+        base = {"timezone": "UTC", "session_timeout_minutes": "60", "build_engine": "docker",
+                "deployment_status_check_interval_seconds": "60", "commit_log_limit": "20",
+                "max_login_attempts": "5"}
+        config_client.post("/config/", data={**base, "docker_host": "tcp://build-host:2376"})
+        with app.app_context():
+            assert get_system_config().docker_host == "tcp://build-host:2376"
+
+        config_client.post("/config/", data={**base, "docker_host": ""})
+        with app.app_context():
+            assert get_system_config().docker_host is None
+
+    def test_post_rejects_docker_host_without_scheme(self, config_client, app):
+        response = config_client.post("/config/", data={
+            "timezone": "UTC", "session_timeout_minutes": "60", "build_engine": "docker",
+            "deployment_status_check_interval_seconds": "60", "commit_log_limit": "20",
+            "max_login_attempts": "5", "docker_host": "build-host:2376"})
+        assert b"Must start with unix://, tcp:// or ssh://" in response.data
+        with app.app_context():
+            assert get_system_config().docker_host is None
+
+    def test_test_docker_reports_unreachable_daemon(self, config_client):
+        response = config_client.post("/config/test-docker", data={"docker_host": "tcp://127.0.0.1:1"})
+        assert response.json["ok"] is False
+        assert "Cannot reach Docker daemon" in response.json["message"]
+
+    def test_test_docker_requires_permission(self, noperm_client):
+        assert noperm_client.post("/config/test-docker", data={}).status_code == 403
+
     def test_post_accepts_kaniko_as_a_valid_choice(self, config_client, app):
         """"kaniko" runs as its own Kubernetes Job (see KanikoBuildEngine,
         app/services/build/engine.py) rather than a bare subprocess of this

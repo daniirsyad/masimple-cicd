@@ -9,7 +9,8 @@ _ENGINES = {
 
 def get_build_engine():
     """Build a BuildEngine for the configured `SystemConfig.build_engine`."""
-    engine_type = get_system_config().build_engine
+    config = get_system_config()
+    engine_type = config.build_engine
     try:
         engine_cls = _ENGINES[engine_type]
     except KeyError:
@@ -17,4 +18,6 @@ def get_build_engine():
             f"Build engine '{engine_type}' is not implemented. "
             f"Supported engines: {', '.join(_ENGINES)}."
         ) from None
+    if engine_cls is DockerBuildEngine:
+        return DockerBuildEngine(docker_host=config.docker_host)
     return engine_cls()

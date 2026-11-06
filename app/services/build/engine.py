@@ -66,6 +66,29 @@ class BuildEngine(ABC):
         """
 
 
+def docker_env(docker_host=None):
+    """os.environ with DOCKER_HOST overridden when docker_host is set."""
+    env = dict(os.environ)
+    if docker_host:
+        env["DOCKER_HOST"] = docker_host
+    return env
+
+
+def check_docker_connection(docker_host=None):
+    """Ping the daemon at docker_host (or DOCKER_HOST/default socket).
+    Returns (ok, message) — used by the /config page's Test Connection button."""
+    try:
+        client = docker.from_env(environment=docker_env(docker_host), timeout=10)
+        try:
+            client.ping()
+            info = client.version()
+        finally:
+            client.close()
+    except Exception as exc:
+        return False, f"Cannot reach Docker daemon: {exc}"
+    return True, f"Connected: Docker {info.get('Version', '?')} ({info.get('Os', '?')}/{info.get('Arch', '?')})"
+
+
 class DockerBuildEngine(BuildEngine):
     """Shells out to `docker buildx build` (BuildKit) rather than docker-py's
     low-level build API. docker-py's `client.api.build()` only ever talks to
@@ -89,13 +112,18 @@ class DockerBuildEngine(BuildEngine):
     # there's no way to know that up front.
     CLIENT_TIMEOUT_SECONDS = 600
 
-    def __init__(self, client=None):
+    def __init__(self, client=None, docker_host=None):
         self._client = client
+        # SystemConfig.docker_host overrides the DOCKER_HOST env var for both
+        # docker-py and the `docker buildx` subprocess; DOCKER_TLS_VERIFY/
+        # DOCKER_CERT_PATH still come from the pod's env, so a TLS remote
+        # daemon works by mounting its certs there.
+        self.env = docker_env(docker_host)
 
     @property
     def client(self):
         if self._client is None:
-            self._client = docker.from_env(timeout=self.CLIENT_TIMEOUT_SECONDS)
+            self._client = docker.from_env(environment=self.env, timeout=self.CLIENT_TIMEOUT_SECONDS)
         return self._client
 
     def build_image(
@@ -133,7 +161,7 @@ class DockerBuildEngine(BuildEngine):
         argv.append(context_dir)
 
         try:
-            process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=self.env)
         except OSError as exc:
             error = f"Failed to start docker buildx: {exc}"
             _emit(f"ERROR: {error}\n")

@@ -1,11 +1,12 @@
 import uuid
 
-from flask import flash, redirect, render_template, url_for
+from flask import flash, jsonify, redirect, render_template, request, url_for
 
 from app.blueprints.system_config import system_config_bp
 from app.blueprints.system_config.forms import SystemConfigForm
 from app.extensions import db
 from app.models import User
+from app.services.build.engine import check_docker_connection
 from app.utils.crypto import encrypt
 from app.utils.decorators import permission_required
 from app.utils.logger import log_activity
@@ -39,6 +40,7 @@ def index():
         config.timezone = form.timezone.data
         config.session_timeout_minutes = form.session_timeout_minutes.data
         config.build_engine = form.build_engine.data
+        config.docker_host = form.docker_host.data.strip() if form.docker_host.data else None
         config.app_base_url = form.app_base_url.data.rstrip("/") if form.app_base_url.data else None
         config.hide_navbar_title_when_sidebar_open = form.hide_navbar_title_when_sidebar_open.data
         config.deployment_status_check_interval_seconds = form.deployment_status_check_interval_seconds.data
@@ -66,6 +68,7 @@ def index():
                 f"Updated system configuration (timezone={config.timezone}, "
                 f"session_timeout_minutes={config.session_timeout_minutes}, "
                 f"build_engine={config.build_engine}, "
+                f"docker_host={config.docker_host}, "
                 f"hide_navbar_title_when_sidebar_open={config.hide_navbar_title_when_sidebar_open}, "
                 f"deployment_status_check_interval_seconds={config.deployment_status_check_interval_seconds}, "
                 f"commit_log_limit={config.commit_log_limit}, "
@@ -83,3 +86,12 @@ def index():
         return redirect(url_for("system_config.index"))
 
     return render_template("system_config/index.html", form=form)
+
+
+@system_config_bp.route("/test-docker", methods=["POST"])
+@permission_required("system.manage")
+def test_docker():
+    # Tests the value currently typed in the form (not necessarily saved yet);
+    # blank = whatever DOCKER_HOST/default socket the app would fall back to.
+    ok, message = check_docker_connection((request.form.get("docker_host") or "").strip() or None)
+    return jsonify(ok=ok, message=message)
