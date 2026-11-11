@@ -53,7 +53,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
         {% endfor %}
       </div>
 
-      <div class="form-control">
+      <div class="form-control {{ '' if form.build_engine.data == 'docker' else 'hidden' }}" data-docker-only>
         <label class="label" for="{{ form.docker_host.id }}">
           <span class="label-text">Docker Host</span>
         </label>
@@ -68,6 +68,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
           container's <code>DOCKER_HOST</code> env var / local socket. TLS certs for a <code>tcp://</code>
           host come from the <code>DOCKER_TLS_VERIFY</code>/<code>DOCKER_CERT_PATH</code> env vars.
         </p>
+        <a href="#docker-guide" id="docker-guide-link" class="link link-primary mt-1 text-xs">Setup guide for a remote Docker host (TLS) ↓</a>
         <p id="test-docker-result" class="mt-1 text-sm"></p>
         {% for error in form.docker_host.errors %}
         <p class="text-error text-sm">{{ error }}</p>
@@ -299,6 +300,122 @@ MASIMPLE CICD{% endblock %} {% block content %}
 
   <div>{{ form.submit(class="btn btn-primary btn-sm") }}</div>
 </form>
+        {#- Commands below are templates: __HOST__/__SAN__/__NS__ are filled in
+            client-side from the inputs (textContent only, never innerHTML).
+            Certs are generated on the Docker host itself so the CA key never
+            touches this app. -#}
+        {% macro guide_step(id, title) %}
+        <div class="mt-3">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-semibold">{{ title }}</span>
+            <button type="button" class="copy-to-clipboard-btn btn btn-xs btn-square"
+                    data-copy-target="{{ id }}" title="Copy" aria-label="Copy">
+              <svg xmlns="http://www.w3.org/2000/svg" class="copy-icon h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+              <svg xmlns="http://www.w3.org/2000/svg" class="check-icon hidden h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </button>
+          </div>
+          <pre id="{{ id }}" class="docker-guide-tpl mt-1 overflow-x-auto rounded bg-base-300 p-2 text-xs">{{ caller() }}</pre>
+        </div>
+        {% endmacro %}
+
+        <details id="docker-guide" class="collapse collapse-arrow mt-4 grid-cols-1 bg-base-200 {{ '' if form.build_engine.data == 'docker' else 'hidden' }}" data-docker-only>
+          <summary class="collapse-title text-sm font-medium">How to set up a remote Docker host (TLS)</summary>
+          <div class="collapse-content text-xs">
+            <p class="text-base-content/60">
+              Generates the commands to make a Linux (systemd) Docker host accept TLS connections on port
+              2376 and hand this app a client certificate. Run steps 1–3 as root on the Docker host.
+            </p>
+            <div class="mt-2 grid grid-cols-2 gap-2">
+              <label class="form-control">
+                <span class="label-text text-xs">Docker host IP / hostname</span>
+                <input id="docker-guide-host" type="text" class="input input-bordered input-xs" placeholder="192.168.18.16">
+              </label>
+              <label class="form-control">
+                <span class="label-text text-xs">This app's Kubernetes namespace</span>
+                <input id="docker-guide-ns" type="text" class="input input-bordered input-xs" value="default">
+              </label>
+            </div>
+
+{% call guide_step("docker-guide-1", "1. Create certificates (on the Docker host)") %}mkdir -p /etc/docker/certs && cd /etc/docker/certs
+
+# Certificate authority — keep ca-key.pem private: it can mint root access to this host
+openssl genrsa -out ca-key.pem 4096
+openssl req -new -x509 -days 3650 -key ca-key.pem -sha256 -subj "/CN=docker-ca" -out ca.pem
+
+# Server certificate for __HOST__
+openssl genrsa -out server-key.pem 4096
+openssl req -new -key server-key.pem -subj "/CN=__HOST__" -out server.csr
+printf 'subjectAltName = __SAN__,IP:127.0.0.1\nextendedKeyUsage = serverAuth\n' > server.ext
+openssl x509 -req -days 3650 -sha256 -in server.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out server-cert.pem -extfile server.ext
+
+# Client certificate for this app
+openssl genrsa -out key.pem 4096
+openssl req -new -key key.pem -subj "/CN=masimple-cicd" -out client.csr
+printf 'extendedKeyUsage = clientAuth\n' > client.ext
+openssl x509 -req -days 3650 -sha256 -in client.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out cert.pem -extfile client.ext
+
+chmod 600 ca-key.pem server-key.pem key.pem{% endcall %}
+
+{% call guide_step("docker-guide-2", "2. Make dockerd listen on TCP with TLS") %}# Merge by hand instead if /etc/docker/daemon.json already exists
+cat > /etc/docker/daemon.json <<'EOF'
+{
+  "hosts": ["unix:///var/run/docker.sock", "tcp://0.0.0.0:2376"],
+  "tls": true,
+  "tlsverify": true,
+  "tlscacert": "/etc/docker/certs/ca.pem",
+  "tlscert": "/etc/docker/certs/server-cert.pem",
+  "tlskey": "/etc/docker/certs/server-key.pem"
+}
+EOF
+
+# systemd's default "-H fd://" conflicts with "hosts" above
+mkdir -p /etc/systemd/system/docker.service.d
+printf '[Service]\nExecStart=\nExecStart=/usr/bin/dockerd\n' > /etc/systemd/system/docker.service.d/override.conf
+systemctl daemon-reload && systemctl restart docker
+ss -ltnp | grep 2376{% endcall %}
+
+{% call guide_step("docker-guide-3", "3. Open the firewall") %}# Ubuntu/Debian
+ufw allow 2376/tcp
+# RHEL/Rocky/Alma
+firewall-cmd --permanent --add-port=2376/tcp && firewall-cmd --reload{% endcall %}
+
+{% call guide_step("docker-guide-4", "4. Test from another machine") %}# Copy the client files over first; the paths below are relative to this folder
+mkdir -p ~/docker-tls && cd ~/docker-tls
+scp root@__HOST__:/etc/docker/certs/{ca,cert,key}.pem .
+docker --tlsverify --tlscacert=ca.pem --tlscert=cert.pem --tlskey=key.pem -H tcp://__HOST__:2376 version{% endcall %}
+
+{% call guide_step("docker-guide-5", "5. Give the certificates to this app's pod") %}kubectl -n __NS__ create secret generic docker-tls \
+  --from-file=ca.pem --from-file=cert.pem --from-file=key.pem
+
+# Then add to this app's Deployment (container "web"):
+#   env:
+#     - name: DOCKER_TLS_VERIFY
+#       value: "1"
+#     - name: DOCKER_CERT_PATH
+#       value: /certs
+#   volumeMounts:
+#     - name: docker-tls
+#       mountPath: /certs
+#       readOnly: true
+# and under the pod spec:
+#   volumes:
+#     - name: docker-tls
+#       secret:
+#         secretName: docker-tls
+
+# Check the pod can reach the host before saving:
+kubectl -n __NS__ exec deploy/&lt;app-deployment&gt; -- curl -sv --max-time 5 telnet://__HOST__:2376{% endcall %}
+
+            <p class="mt-3">
+              <span class="font-semibold">6.</span> Set Docker Host above to
+              <code id="docker-guide-6">tcp://__HOST__:2376</code>, click Test Connection, then Save.
+            </p>
+          </div>
+        </details>
 <script>
   document.getElementById("test-docker-btn").addEventListener("click", async (event) => {
     const btn = event.currentTarget;
@@ -324,5 +441,50 @@ MASIMPLE CICD{% endblock %} {% block content %}
       btn.disabled = false;
     }
   });
+
+  (() => {
+    const dockerHostInput = document.getElementById("{{ form.docker_host.id }}");
+    const hostInput = document.getElementById("docker-guide-host");
+    const nsInput = document.getElementById("docker-guide-ns");
+    const tpls = [...document.querySelectorAll(".docker-guide-tpl"), document.getElementById("docker-guide-6")];
+    tpls.forEach((el) => (el.dataset.tpl = el.textContent));
+
+    // "tcp://user@192.168.18.16:2376/x" -> "192.168.18.16"; unix:// has no host.
+    const hostFrom = (value) => {
+      const m = value.trim().match(/^(?:tcp|ssh):\/\/(?:[^@\/]*@)?(\[[^\]]+\]|[^:\/]+)/);
+      return m ? m[1].replace(/^\[|\]$/g, "") : "";
+    };
+
+    const render = () => {
+      const host = hostInput.value.trim() || "<docker-host>";
+      const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(":");
+      const ns = nsInput.value.trim() || "default";
+      tpls.forEach((el) => {
+        el.textContent = el.dataset.tpl
+          .replaceAll("__SAN__", (isIp ? "IP:" : "DNS:") + host)
+          .replaceAll("__HOST__", host)
+          .replaceAll("__NS__", ns);
+      });
+    };
+
+    hostInput.value = hostFrom(dockerHostInput.value);
+    dockerHostInput.addEventListener("input", () => {
+      hostInput.value = hostFrom(dockerHostInput.value);
+      render();
+    });
+    hostInput.addEventListener("input", render);
+    // Docker Host field + setup guide only apply to the Docker build engine.
+    const engineSelect = document.getElementById("{{ form.build_engine.id }}");
+    engineSelect.addEventListener("change", () => {
+      document.querySelectorAll("[data-docker-only]").forEach((el) =>
+        el.classList.toggle("hidden", engineSelect.value !== "docker"));
+    });
+    document.getElementById("docker-guide-link").addEventListener("click", () => {
+      document.getElementById("docker-guide").open = true;
+    });
+    nsInput.addEventListener("input", render);
+    render();
+  })();
 </script>
+<script src="{{ url_for('static', filename='js/copy-to-clipboard.js') }}"></script>
 {% endblock %}

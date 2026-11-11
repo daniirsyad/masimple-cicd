@@ -53,6 +53,8 @@ Menus (sidebar/navbar) are DB-driven (`Menu` model), rendered dynamically per us
 - Users support both a soft-delete toggle (`is_active=False`, via `toggle_active`) and a hard delete (`delete_user`). Hard delete blocks self-deletion and nulls out `activity_logs.user_id` / other users' `created_by` referencing the deleted user first, so activity log history and attribution survive the row's removal instead of failing on the FK or cascading
 - Templates extend `base.html`; use daisyUI component classes (`alert alert-error`, `badge-success`, etc.) and Tailwind utilities
 - **Jinja gotcha**: never write `{% if %}...{% endif %}` inline inside an HTML tag's attribute list — the workspace's HTML formatter corrupts it. Use a single expression instead: `{{ 'selected' if cond else '' }}`
+- **Jinja gotcha**: the body of a `{% call %}` block (and other literal template text) is raw HTML, not autoescaped — a placeholder like `<app-deployment>` inside a `<pre>` is parsed as a tag and vanishes. Write `&lt;...&gt;`
+- **daisyUI gotcha**: `.collapse` is `display: grid; overflow: hidden`, so wide content (a long `<pre>`) grows the column and gets clipped instead of scrolling. Add `grid-cols-1` (`minmax(0, 1fr)`) to the collapse element
 - Flash categories map directly to daisyUI alert classes (`success`, `error`, `info`)
 
 ## Business Rules / Domain Logic

@@ -141,6 +141,29 @@ class TestIndexPage:
         assert response.json["ok"] is False
         assert "Cannot reach Docker daemon" in response.json["message"]
 
+    def test_index_renders_docker_tls_setup_guide(self, config_client):
+        html = config_client.get("/config/").get_data(as_text=True)
+        assert 'id="docker-guide"' in html
+        # Placeholders are filled client-side; the copy buttons need their script.
+        assert "subjectAltName = __SAN__" in html
+        assert "kubectl -n __NS__ create secret generic docker-tls" in html
+        assert "js/copy-to-clipboard.js" in html
+
+    def test_docker_host_and_guide_only_shown_for_docker_engine(self, config_client, app):
+        import re
+
+        def docker_only_classes():
+            html = config_client.get("/config/").get_data(as_text=True)
+            return re.findall(r'class="([^"]*)" data-docker-only', html)
+
+        shown = docker_only_classes()
+        assert len(shown) == 2 and not any("hidden" in c.split() for c in shown)
+
+        with app.app_context():
+            get_system_config().build_engine = "kaniko"
+            db.session.commit()
+        assert all("hidden" in c.split() for c in docker_only_classes())
+
     def test_test_docker_requires_permission(self, noperm_client):
         assert noperm_client.post("/config/test-docker", data={}).status_code == 403
 
