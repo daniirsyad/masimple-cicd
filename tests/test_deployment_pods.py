@@ -465,6 +465,21 @@ class TestNamespaceList:
         assert response.status_code == 200
         assert b"prod" in response.data
         assert b"Active" in response.data
+        # pod_client only has deployment_pod.view: no create/edit/delete actions.
+        for marker in (b"create-namespace-modal", b"edit-namespace-modal-prod", b"delete-namespace-modal-prod"):
+            assert marker not in response.data
+
+    def test_manager_sees_namespace_actions(self, manage_client, manage_kube_server, monkeypatch):
+        monkeypatch.setattr(
+            KubernetesProvider,
+            "list_resources",
+            lambda self, kubectl_kind, namespace=None, all_namespaces=False: [
+                {"metadata": {"name": "prod", "creationTimestamp": "2026-08-01T00:00:00Z"}, "status": {"phase": "Active"}}
+            ],
+        )
+        response = manage_client.get(f"/deployment-pods/{manage_kube_server}/namespaces")
+        for marker in (b"create-namespace-modal", b"edit-namespace-modal-prod", b"delete-namespace-modal-prod"):
+            assert marker in response.data
 
     def test_requires_permission(self, noperm_client, app):
         with app.app_context():
@@ -1364,14 +1379,14 @@ class TestIngressList:
         assert response.status_code == 200
         assert b"Could not list ingresses" in response.data
 
-    def test_multi_host_ingress_hides_form_mode(self, pod_client, kube_server, monkeypatch):
+    def test_multi_host_ingress_hides_form_mode(self, manage_client, manage_kube_server, monkeypatch):
         # form_supported must be False for a multi-rule Ingress, otherwise
         # saving it via the simple single-host Form editor would silently
         # drop every rule/host beyond the first on save.
         monkeypatch.setattr(
             KubernetesProvider, "list_ingresses", lambda self, namespace=None: [_multi_host_ingress()]
         )
-        response = pod_client.get(f"/deployment-pods/{kube_server}/ingresses")
+        response = manage_client.get(f"/deployment-pods/{manage_kube_server}/ingresses")
         assert response.status_code == 200
         assert b"edit it as raw YAML" in response.data
 
@@ -1653,13 +1668,13 @@ class TestNetworkPolicyList:
         assert response.status_code == 200
         assert b"Could not list network policies" in response.data
 
-    def test_multi_rule_policy_hides_form_mode(self, pod_client, kube_server, monkeypatch):
+    def test_multi_rule_policy_hides_form_mode(self, manage_client, manage_kube_server, monkeypatch):
         monkeypatch.setattr(
             KubernetesProvider,
             "list_network_policies",
             lambda self, namespace=None: [_multi_rule_network_policy()],
         )
-        response = pod_client.get(f"/deployment-pods/{kube_server}/network-policies")
+        response = manage_client.get(f"/deployment-pods/{manage_kube_server}/network-policies")
         assert response.status_code == 200
         assert b"edit it as raw YAML" in response.data
 

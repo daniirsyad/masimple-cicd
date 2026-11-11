@@ -390,14 +390,16 @@ def _record_commit_history(git_provider, repository, build):
         commit_log_limit = get_system_config().commit_log_limit
         build.commit_sha = git_provider.get_latest_commit(repository.local_path, build.branch_used)
         since_ref = get_last_built_commit(build.builder_id, build.branch_used)
-        for commit in git_provider.get_commits(
+        commits = git_provider.get_commits(
             repository.local_path,
             since_ref=since_ref,
             until_ref=build.branch_used,
             limit=commit_log_limit,
-        ):
+        )
+        for commit in commits:
             db.session.add(ImageBuildCommit(image_build_id=build.id, **commit))
         db.session.commit()
+        return since_ref, commits
     except Exception as exc:
         db.session.rollback()
         log_error(
@@ -405,6 +407,41 @@ def _record_commit_history(git_provider, repository, build):
             exc=exc,
             description=f"Failed to record commit history for build {build.id}: {exc}",
         )
+        return None
+
+
+MAX_LOGGED_CHANGED_FILES = 50
+
+
+def _format_changes(git_provider, repository, build, recorded):
+    """The "what's in this build" block written to the build log right after
+    the sync: the commits `_record_commit_history` just recorded, plus the
+    files changed since the last successful build. Best-effort like the
+    recording itself — a failed file listing just leaves that part out.
+    """
+    if recorded is None:
+        return "Changes: unavailable (couldn't read git history).\n"
+    since_ref, commits = recorded
+    to_sha = (build.commit_sha or "")[:7]
+    if since_ref:
+        header = f"Changes since last build ({since_ref[:7]} -> {to_sha}): {len(commits)} commit(s)"
+    else:
+        header = f"First build on {build.branch_used} — showing the last {len(commits)} commit(s)"
+    lines = [header + "\n"]
+    for commit in reversed(commits):  # newest first, like `git log`
+        subject = (commit.get("message") or "").partition("\n")[0]
+        lines.append(f"  {commit['sha'][:7]}  {commit.get('author_name') or '-'}  {subject}\n")
+
+    try:
+        files = git_provider.get_changed_files(repository.local_path, since_ref, build.branch_used)
+    except Exception:
+        files = None
+    if files:
+        lines.append(f"Files changed: {len(files)}\n")
+        lines.extend(f"  {status}  {path}\n" for status, path in files[:MAX_LOGGED_CHANGED_FILES])
+        if len(files) > MAX_LOGGED_CHANGED_FILES:
+            lines.append(f"  ... and {len(files) - MAX_LOGGED_CHANGED_FILES} more\n")
+    return "".join(lines)
 
 
 def _cleanup_local_image(engine, tag, log_buffer):
@@ -508,9 +545,11 @@ def _run_build(app, build_id):
             repository.last_synced_at = datetime.utcnow()
             db.session.commit()
 
-            _record_commit_history(git_provider, repository, build)
+            recorded = _record_commit_history(git_provider, repository, build)
 
-            log_buffer.append("Sync complete. Starting build...\n")
+            log_buffer.append("Sync complete.\n")
+            log_buffer.append(_format_changes(git_provider, repository, build, recorded))
+            log_buffer.append("Starting build...\n")
             flush_log()
 
             image_name = builder.image_name or _derive_image_name(repository.full_name)

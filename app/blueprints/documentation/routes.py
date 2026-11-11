@@ -20,6 +20,7 @@ from app.models import (
 from app.services.ai.context import gather_batch_ai_context
 from app.services.ai.factory import default_provider_type, get_ai_provider
 from app.services.ai.prompt import render_default_prompt
+from app.services.build.history import commit_range_for_image
 from app.utils.decorators import permission_required
 from app.utils.error_logger import log_error
 from app.utils.logger import log_activity
@@ -76,40 +77,6 @@ def _branches_used(batch):
         if image_build.branch_used not in seen:
             seen.append(image_build.branch_used)
     return ", ".join(seen)
-
-
-def _commit_range_for_image(image_build):
-    """(from_sha, to_sha, commits) for one ImageBuild's row in "Images in
-    this Batch": `to_sha` is this build's own recorded commit
-    (ImageBuild.commit_sha), `from_sha` is the previous successful build's
-    commit for the same (builder, branch) pair as of when *this* build ran
-    (None if this was the first build on that pair), and `commits` is the
-    full ImageBuildCommit list captured at build time (see
-    worker._record_commit_history). All fields are None/empty for a build
-    that predates commit tracking — the template shows "not tracked", not
-    an error, for those.
-
-    Deliberately looks up the build that was previous *as of this one*
-    (created_at < image_build.created_at) rather than the pair's current
-    most-recent build (get_last_built_commit) — viewing documentation for
-    an older batch must show the range that was true then, not one that's
-    since moved on because of newer builds.
-    """
-    previous = (
-        ImageBuild.query.filter(
-            ImageBuild.builder_id == image_build.builder_id,
-            ImageBuild.branch_used == image_build.branch_used,
-            ImageBuild.status == "success",
-            ImageBuild.created_at < image_build.created_at,
-        )
-        .order_by(ImageBuild.created_at.desc())
-        .first()
-    )
-    return {
-        "from_sha": previous.commit_sha if previous else None,
-        "to_sha": image_build.commit_sha,
-        "commits": list(image_build.commits),
-    }
 
 
 def _rendered_prompt(batch, objects):
@@ -213,7 +180,7 @@ def _render_view(batch, doc, form=None):
         rendered_prompt=_rendered_prompt(batch, doc.objects),
         provider_choices=_ai_provider_choices(),
         default_provider_type=default_provider_type(),
-        commit_ranges={str(image.id): _commit_range_for_image(image) for image in batch.image_builds},
+        commit_ranges={str(image.id): commit_range_for_image(image) for image in batch.image_builds},
     )
 
 

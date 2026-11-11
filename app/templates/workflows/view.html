@@ -11,6 +11,7 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
     {% endif %}
   </div>
   <div class="flex flex-wrap gap-2">
+    {% if current_user.has_permission("workflow.run") %}
     <form method="POST" action="{{ url_for('workflows.run_workflow', workflow_id=workflow.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
       <button
@@ -21,6 +22,8 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
         Run
       </button>
     </form>
+    {% endif %}
+    {% if current_user.has_permission("workflow.manage") %}
     <button type="button" class="btn btn-sm" onclick="document.getElementById('edit-workflow-modal').showModal()">
       Edit
     </button>
@@ -38,6 +41,7 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
       <button type="submit" class="btn btn-sm btn-warning">Disable</button>
     </form>
     {% endif %}
+    {% endif %}
   </div>
 </div>
 
@@ -45,6 +49,7 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
   <div class="card-body p-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <h2 class="card-title text-base">Steps</h2>
+      {% if current_user.has_permission("workflow.manage") %}
       <div class="flex flex-wrap gap-2">
         <button
           type="button"
@@ -61,10 +66,13 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
           + Add Deploy Step
         </button>
       </div>
+      {% endif %}
     </div>
+    {% if current_user.has_permission("workflow.manage") %}
     <p class="mt-1 text-xs text-base-content/60">
       Drag <span class="drag-handle">⠿</span> to reorder — a run walks these top-to-bottom, one at a time.
     </p>
+    {% endif %}
 
     {% if steps %}
     <div class="mt-2 overflow-x-auto">
@@ -82,7 +90,7 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
         <tbody id="workflow-steps-body" data-reorder-url="{{ url_for('workflows.reorder_steps', workflow_id=workflow.id) }}">
           {% for step in steps %}
           <tr class="workflow-step-row" data-step-id="{{ step.id }}">
-            <td class="w-6"><span class="drag-handle cursor-move text-base-content/40" title="Drag to reorder">⠿</span></td>
+            <td class="w-6">{% if current_user.has_permission("workflow.manage") %}<span class="drag-handle cursor-move text-base-content/40" title="Drag to reorder">⠿</span>{% endif %}</td>
             <td>{{ loop.index }}</td>
             <td>
               {% if step.step_type == "build" %}
@@ -112,6 +120,7 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
               <span class="badge badge-ghost badge-sm">{{ "Stop run" if step.on_failure == "stop" else "Continue" }}</span>
             </td>
             <td>
+              {% if current_user.has_permission("workflow.manage") %}
               <button
                 type="button"
                 class="btn btn-sm btn-error"
@@ -120,6 +129,7 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
               >
                 Delete
               </button>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}
@@ -171,6 +181,7 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
   </div>
 </div>
 
+{% if current_user.has_permission("workflow.manage") %}
 <dialog id="edit-workflow-modal" class="modal">
   <div class="modal-box">
     <h3 class="text-lg font-bold">Edit Workflow</h3>
@@ -380,6 +391,7 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
+{% endif %}
 
 <script src="{{ url_for('static', filename='vendor/sortablejs/Sortable.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/workflows.js') }}"></script>

@@ -30,6 +30,7 @@ def role_admin_user(app, some_permissions):
             Permission(code="role.view", description="View roles"),
             Permission(code="role.create", description="Create roles"),
             Permission(code="role.edit", description="Edit roles"),
+            Permission(code="role.delete", description="Delete roles"),
         ]
         db.session.add_all(role_perms)
         role = Role(name="RoleAdmin", description="Test role admin role")

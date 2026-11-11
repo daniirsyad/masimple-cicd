@@ -51,6 +51,7 @@
             <td class="text-xs text-base-content/60">{{ row.images }}</td>
             <td class="text-xs text-base-content/60">{{ row.created_at or "—" }}</td>
             <td>
+              {% if current_user.has_permission("deployment_workload.restart") %}
               <button
                 type="button"
                 class="btn btn-xs"
@@ -58,6 +59,7 @@
               >
                 Restart
               </button>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}
@@ -68,6 +70,7 @@
   </div>
 </div>
 
+{% if current_user.has_permission("deployment_workload.restart") %}
 {% for row in rows %}
 <dialog id="restart-workload-modal-{{ row.namespace }}-{{ row.name }}" class="modal">
   <div class="modal-box w-11/12 max-w-sm">
@@ -91,6 +94,7 @@
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
 {% endfor %}
+{% endif %}
 
 <script src="{{ url_for('static', filename='js/deployment_pods.js') }}"></script>
 {% endblock %}

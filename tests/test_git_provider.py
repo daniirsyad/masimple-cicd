@@ -163,6 +163,27 @@ class TestGetCommits:
         ]
 
 
+class TestGetChangedFiles:
+    def test_lists_files_changed_since_ref(self, local_repo, tmp_path):
+        local_path, commits = local_repo
+        repo = git.Repo(local_path)
+        (tmp_path / "repo" / "new.txt").write_text("hi")
+        repo.index.add([str(tmp_path / "repo" / "new.txt")])
+        repo.index.commit("add new.txt")
+
+        result = GitHubProvider().get_changed_files(local_path, commits[3].hexsha, "HEAD")
+
+        assert result == [("M", "file.txt"), ("A", "new.txt")]
+
+    def test_returns_none_without_a_since_ref(self, local_repo):
+        local_path, _ = local_repo
+        assert GitHubProvider().get_changed_files(local_path, None, "HEAD") is None
+
+    def test_returns_none_for_an_unreachable_since_ref(self, local_repo):
+        local_path, _ = local_repo
+        assert GitHubProvider().get_changed_files(local_path, "0" * 40, "HEAD") is None
+
+
 class TestListBranches:
     def test_lists_remote_branches_sorted(self, cloned_repo):
         local_path, default_branch, commits, other_commit = cloned_repo

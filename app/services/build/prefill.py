@@ -35,11 +35,13 @@ def compute_build_prefill(builder_branches, additional_description=None):
 
     Returns {"bump_type", "matched_objects" (list of already-existing Object
     rows), "new_object_names" (list of str), "change_type_id" (uuid or
-    None), "description", "commit_count"}.
+    None), "description", "commit_count", "commits" (newest first per builder:
+    {"builder", "sha" (short), "author", "subject"})}.
     """
     commit_log_limit = get_system_config().commit_log_limit
 
     all_messages = []
+    commit_list = []
     for builder, branch in builder_branches:
         if not branch:
             continue
@@ -64,6 +66,15 @@ def compute_build_prefill(builder_branches, additional_description=None):
             )
             commits = []
         all_messages.extend(commit["message"] for commit in commits)
+        commit_list.extend(
+            {
+                "builder": builder.name,
+                "sha": commit["sha"][:7],
+                "author": commit.get("author_name") or "",
+                "subject": commit["message"].partition("\n")[0],
+            }
+            for commit in reversed(commits)  # newest first
+        )
 
     bump_type = suggest_bump_type(all_messages)
     metadata = suggest_metadata(all_messages, additional_description=additional_description)
@@ -86,4 +97,5 @@ def compute_build_prefill(builder_branches, additional_description=None):
         "change_type_id": change_type_id,
         "description": metadata["description"],
         "commit_count": len(all_messages),
+        "commits": commit_list,
     }

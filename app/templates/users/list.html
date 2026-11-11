@@ -2,6 +2,7 @@
 block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Users</h1>
+  {% if current_user.has_permission("user.create") %}
   <button
     type="button"
     class="btn btn-primary btn-sm"
@@ -9,6 +10,7 @@ block content %}
   >
     New User
   </button>
+  {% endif %}
 </div>
 
 {% set has_filters = search or selected_role_id or selected_status %}
@@ -84,6 +86,7 @@ block content %}
           else "Never" }}
         </td>
         <td class="flex gap-2">
+          {% if current_user.has_permission("user.edit") %}
           <button
             type="button"
             class="btn btn-sm"
@@ -91,6 +94,8 @@ block content %}
           >
             Edit
           </button>
+          {% endif %}
+          {% if current_user.has_permission("user.delete") %}
           <form
             method="post"
             action="{{ url_for('users.toggle_active', user_id=user.id) }}"
@@ -100,6 +105,7 @@ block content %}
               {{ 'Deactivate' if user.is_active else 'Activate' }}
             </button>
           </form>
+          {% endif %}
           {% if user.failed_login_attempts >= max_login_attempts and current_user.has_permission("user.unlock") %}
           <form
             method="post"
@@ -109,7 +115,7 @@ block content %}
             <button type="submit" class="btn btn-sm btn-info">Unlock</button>
           </form>
           {% endif %}
-          {% if user.id != current_user.id %}
+          {% if user.id != current_user.id and current_user.has_permission("user.delete") %}
           <button
             type="button"
             class="btn btn-sm btn-error"
@@ -129,6 +135,7 @@ block content %}
   </table>
 </div>
 
+{% if current_user.has_permission("user.create") %}
 <dialog id="create-modal" class="modal">
   <div class="modal-box w-11/12 max-w-md">
     <h3 class="text-lg font-bold">New User</h3>
@@ -210,8 +217,10 @@ block content %}
     <button>close</button>
   </form>
 </dialog>
+{% endif %}
 
 {% for user in users %}
+{% if current_user.has_permission("user.edit") %}
 <dialog id="edit-modal-{{ user.id }}" class="modal">
   <div class="modal-box w-11/12 max-w-md">
     <h3 class="text-lg font-bold">Edit User: {{ user.username }}</h3>
@@ -284,8 +293,9 @@ block content %}
     <button>close</button>
   </form>
 </dialog>
+{% endif %}
 
-{% if user.id != current_user.id %}
+{% if user.id != current_user.id and current_user.has_permission("user.delete") %}
 <dialog id="delete-modal-{{ user.id }}" class="modal">
   <div class="modal-box w-11/12 max-w-sm">
     <h3 class="text-lg font-bold">Delete User</h3>

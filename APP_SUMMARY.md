@@ -104,7 +104,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
 | AWS SDK | `boto3` — ECR `RegistryProvider` only (SigV4-signed calls, doesn't fit the generic Docker Registry v2 bearer-token flow the other registry providers share) |
 | YAML generation | `PyYAML` — YAML Generator page only; everywhere else in this app deliberately avoids it in favor of dict→`json.dumps()` (JSON is valid YAML) since that output only ever feeds `kubectl apply -f -`, never a human — see `app/services/yaml_generator/render.py` |
-| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 1110 tests |
+| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 1139 tests |
 | Telegram integration | `requests` against the Bot API (`app/services/telegram/`) — both directions now: outbound `sendMessage` (security notifications, forgot-password links, workflow/build/deploy start-finish pushes) **and** inbound, via a long-polling `getUpdates` background thread (no webhook/public HTTPS needed) handling `/run`, `/status`, `/review`, `/build`, `/deploy`, `/update`, `/stop`, `/restart` bot commands and their inline-keyboard callbacks |
 | Discord integration | `requests` (REST) + `websocket-client` (Gateway) against the Discord API (`app/services/discord/`) — same notifications/commands as Telegram above (`/help` instead of `/start`), reached via a persistent Gateway WebSocket + native slash commands/Button/Select Menu components instead of long-polling + inline keyboards; group-resolution/action-table logic shared with Telegram via `app/services/bot_shared.py` |
 
@@ -131,7 +131,10 @@ different roles) — not a SaaS product with per-customer isolation.
 - Routes are protected by **permission code**, not role name, via
   `@permission_required("resource.action")` (`app/utils/decorators.py`) —
   unauthenticated requests redirect to login, authenticated-but-lacking-permission
-  gets a 403.
+  gets a 403, shown as a readable reason inside the app layout (or JSON for
+  `fetch()` calls) by an app-wide handler, never Flask's bare page. Templates
+  hide each action button and its modal from users without that action's
+  permission (Deployment Manifests shows a read-only View instead of Edit).
 - `log_activity(action=..., target_type=..., target_id=..., description=...)`
   (`app/utils/logger.py`) is called after every create/update/delete/login/logout.
 - Sidebar/navbar menus are fully **database-driven** (`Menu` model,
@@ -241,8 +244,10 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   error/traceback instead of making someone search Error Logs for it) →
   `ImageBuildCommit` (one row per commit since this `(builder, branch)`
   pair's previous successful build — sha, author, message, committed-at —
-  captured at build time, powers both the "since last build" AI context
-  and the Documentation page's commit-range display).
+  captured at build time, powers the "since last build" AI context, the
+  commit-range modal on both Documentation and `/images`, and the
+  "Changes since last build" block (commits + files changed) written into
+  the build log right after the repo sync).
 - `ChangeType` (lookup: New Program/Update/Bug Fix/…, extensible).
 - `Object` (lookup: what a build/documentation entry is about, e.g.
   "checkout-flow", extensible — same get-or-create-on-unseen-name shape as

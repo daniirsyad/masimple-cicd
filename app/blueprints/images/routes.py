@@ -2,6 +2,7 @@ from flask import jsonify, render_template, request
 
 from app.blueprints.images import images_bp
 from app.models import BuildBatch, ImageBuild
+from app.services.build.history import commit_range_for_image
 from app.services.build.worker import get_batch_progress, get_engine_status
 from app.utils.decorators import permission_required
 
@@ -50,10 +51,12 @@ def list_images():
 
     human_sizes = {}
     registry_links = {}
+    commit_ranges = {}
     for batch in pagination.items:
         for image in batch.image_builds:
             human_sizes[image.id] = _human_size(image.image_size)
             registry_links[image.id] = _registry_link(image)
+            commit_ranges[image.id] = commit_range_for_image(image)
 
     return render_template(
         "images/list.html",
@@ -63,6 +66,7 @@ def list_images():
         status_choices=BATCH_STATUS_CHOICES,
         human_sizes=human_sizes,
         registry_links=registry_links,
+        commit_ranges=commit_ranges,
     )
 
 

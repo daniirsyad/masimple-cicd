@@ -8,6 +8,7 @@ from app.models import (
     ErrorLog,
     GitSource,
     ImageBuild,
+    ImageBuildCommit,
     Permission,
     RegistryTarget,
     Repository,
@@ -166,6 +167,22 @@ class TestListImages:
         assert response.status_code == 200
         assert b"DEV.0.0.1.010101010101" in response.data
         assert b"b1" in response.data
+
+    def test_shows_the_commits_each_build_contains(self, image_client, app, base_entities):
+        with app.app_context():
+            batch = _make_batch(base_entities)
+            image_build = _make_image_build(batch, base_entities)
+            image_build.commit_sha = "abcdef1234567"
+            db.session.add(
+                ImageBuildCommit(image_build_id=image_build.id, sha="abcdef1234567", message="feat: shiny thing")
+            )
+            db.session.commit()
+            image_id = image_build.id
+
+        html = image_client.get("/images/").get_data(as_text=True)
+        assert f"commits-modal-{image_id}" in html
+        assert "start &rarr; abcdef1" in html
+        assert "feat: shiny thing" in html
 
     def test_shows_documentation_pending_when_change_type_unset(self, image_client, app, base_entities):
         with app.app_context():

@@ -103,6 +103,54 @@ class TestPermissionGating:
         assert noperm_client.post("/deployment-manifests/deploy", data={}).status_code == 403
 
 
+class TestViewOnlyUser:
+    """A user with deployment_manifest.view but not .manage/deployment.*:
+    no action buttons, a read-only View modal, and a readable 403 (inside
+    the app layout, not Flask's bare page) if they POST anyway."""
+
+    @pytest.fixture
+    def manifest_id(self, app, base_entities):
+        with app.app_context():
+            manifest = DeploymentManifest(name="m1", yaml_content="image: nginx")
+            manifest.target_servers = [DeploymentServer.query.get(base_entities["server_id"])]
+            db.session.add(manifest)
+            db.session.commit()
+            return manifest.id
+
+    def test_index_hides_actions_and_shows_read_only_view(self, perm_client, manifest_id):
+        html = perm_client("deployment_manifest.view").get("/deployment-manifests/").get_data(as_text=True)
+        for marker in ("New Manifest", "create-manifest-modal", f"delete-manifest-modal-{manifest_id}",
+                       'class="deploy-one-btn', "Archived"):
+            assert marker not in html, marker
+        assert "View Manifest: m1" in html
+        assert "disabled>" in html  # the read-only fieldset
+        assert 'value="Save' not in html
+
+    def test_manager_sees_actions(self, perm_client, manifest_id):
+        client = perm_client("deployment_manifest.view", "deployment_manifest.manage", "deployment.deploy")
+        html = client.get("/deployment-manifests/").get_data(as_text=True)
+        assert "New Manifest" in html and "Edit Manifest: m1" in html and 'class="deploy-one-btn' in html
+
+    def test_edit_post_shows_readable_403_in_app_layout(self, perm_client, app, manifest_id):
+        with app.app_context():
+            perm = Permission(code="deployment_manifest.manage", description="Create and edit deployment manifests")
+            db.session.add(perm)
+            db.session.commit()
+        response = perm_client("deployment_manifest.view").post(f"/deployment-manifests/{manifest_id}/edit", data={})
+        html = response.get_data(as_text=True)
+        assert response.status_code == 403
+        assert "You don&#39;t have permission to create and edit deployment manifests." in html
+        assert "MASIMPLE CICD" in html and "Go back" in html
+
+    def test_fetch_request_gets_json_403(self, perm_client):
+        response = perm_client("deployment_manifest.view").post(
+            "/deployment-manifests/reorder", json={}, headers={"Sec-Fetch-Mode": "cors"}
+        )
+        assert response.status_code == 403
+        assert response.json["ok"] is False
+        assert "deployment_manifest.manage" in response.json["error"]
+
+
 class TestDeployStopButtonVisibility:
     """Deploy hides once a manifest is live on every one of its target
     servers; Stop shows as soon as it's live on at least one — both can be

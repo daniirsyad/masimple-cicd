@@ -650,6 +650,7 @@ def build_preview():
             "change_type_id": str(prefill["change_type_id"]) if prefill["change_type_id"] else None,
             "description": prefill["description"],
             "commit_count": prefill["commit_count"],
+            "commits": prefill["commits"],
         }
     )
 

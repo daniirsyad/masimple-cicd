@@ -28,10 +28,12 @@ MASIMPLE CICD{% endblock %} {% block content %}
             <td>{{ builder.version.name }}</td>
             <td>{{ builder.repository.full_name }}</td>
             <td>
+              {% if current_user.has_permission("builder.manage") %}
               <form method="POST" action="{{ url_for('builders.enable_builder', builder_id=builder.id) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
                 <button type="submit" class="btn btn-sm btn-primary">Restore</button>
               </form>
+              {% endif %}
             </td>
           </tr>
           {% else %}

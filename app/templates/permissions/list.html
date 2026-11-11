@@ -2,6 +2,7 @@
 {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Permissions</h1>
+  {% if current_user.has_permission("permission.create") %}
   <button
     type="button"
     class="btn btn-primary btn-sm"
@@ -9,6 +10,7 @@
   >
     New Permission
   </button>
+  {% endif %}
 </div>
 
 <div class="mt-4 overflow-x-auto">
@@ -28,6 +30,7 @@
         <td>{{ permission.description }}</td>
         <td>{{ permission.roles | length }}</td>
         <td class="flex gap-2">
+          {% if current_user.has_permission("permission.edit") %}
           <button
             type="button"
             class="btn btn-sm"
@@ -35,6 +38,8 @@
           >
             Edit
           </button>
+          {% endif %}
+          {% if current_user.has_permission("permission.delete") %}
           <button
             type="button"
             class="btn btn-sm btn-error"
@@ -43,6 +48,7 @@
           >
             Delete
           </button>
+          {% endif %}
         </td>
       </tr>
       {% else %}
@@ -54,6 +60,7 @@
   </table>
 </div>
 
+{% if current_user.has_permission("permission.create") %}
 <dialog id="create-modal" class="modal">
   <div class="modal-box w-11/12 max-w-lg">
     <h3 class="text-lg font-bold">New Permission</h3>
@@ -97,8 +104,10 @@
     <button>close</button>
   </form>
 </dialog>
+{% endif %}
 
 {% for permission in permissions %}
+{% if current_user.has_permission("permission.edit") %}
 <dialog id="edit-modal-{{ permission.id }}" class="modal">
   <div class="modal-box w-11/12 max-w-lg">
     <h3 class="text-lg font-bold">Edit Permission: {{ permission.code }}</h3>
@@ -141,7 +150,9 @@
     <button>close</button>
   </form>
 </dialog>
+{% endif %}
 
+{% if current_user.has_permission("permission.delete") %}
 <dialog id="delete-modal-{{ permission.id }}" class="modal">
   <div class="modal-box w-11/12 max-w-sm">
     <h3 class="text-lg font-bold">Delete Permission</h3>
@@ -170,4 +181,5 @@
     <button>close</button>
   </form>
 </dialog>
+{% endif %}
 {% endfor %} {% endblock %}

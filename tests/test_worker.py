@@ -703,8 +703,9 @@ class TestHeartbeatTick:
 
 
 class _FakeGitProvider:
-    def __init__(self, latest_commit="deadbeef", commits=None):
+    def __init__(self, latest_commit="deadbeef", commits=None, changed_files=None):
         self.synced = None
+        self.changed_files = changed_files
         self.synced_repo_name = None
         self.latest_commit = latest_commit
         self.commits = commits if commits is not None else []
@@ -720,6 +721,9 @@ class _FakeGitProvider:
     def get_commits(self, local_path, since_ref=None, until_ref=None, limit=None):
         self.get_commits_calls.append((local_path, since_ref, until_ref))
         return self.commits
+
+    def get_changed_files(self, local_path, since_ref, until_ref):
+        return self.changed_files
 
 
 class _FakeBuildResult:
@@ -1087,6 +1091,51 @@ class TestRecordCommitHistory:
 
         assert fake_git.get_commits_calls == [("/tmp/myapp", "sha-1", "main")]
 
+    def test_build_log_lists_the_commits_and_files_since_the_last_build(self, app, monkeypatch):
+        entities = _make_entities(app)
+        first_id = _make_queued_build(app, entities)
+        with app.app_context():
+            _claim(first_id)
+        self._run_with_fake_git(app, first_id, monkeypatch, _FakeGitProvider(latest_commit="aaaaaaa1", commits=[]))
+
+        second_id = _make_queued_build(app, entities)
+        with app.app_context():
+            _claim(second_id)
+        fake_git = _FakeGitProvider(
+            latest_commit="bbbbbbb2",
+            commits=[
+                {
+                    "sha": "bbbbbbb2",
+                    "author_name": "Ann",
+                    "author_email": "ann@example.com",
+                    "message": "fix: nginx path\n\nlonger body",
+                    "committed_at": datetime.utcnow(),
+                }
+            ],
+            changed_files=[("M", "docker/nginx.conf"), ("A", "app/health.py")],
+        )
+        self._run_with_fake_git(app, second_id, monkeypatch, fake_git)
+
+        with app.app_context():
+            log = ImageBuild.query.get(second_id).build_log
+        assert "Changes since last build (aaaaaaa -> bbbbbbb): 1 commit(s)" in log
+        assert "bbbbbbb  Ann  fix: nginx path\n" in log
+        assert "longer body" not in log
+        assert "Files changed: 2" in log
+        assert "M  docker/nginx.conf" in log
+
+    def test_first_build_log_says_it_has_no_previous_build(self, app, monkeypatch):
+        entities = _make_entities(app)
+        build_id = _make_queued_build(app, entities)
+        with app.app_context():
+            _claim(build_id)
+        self._run_with_fake_git(app, build_id, monkeypatch, _FakeGitProvider(commits=[]))
+
+        with app.app_context():
+            log = ImageBuild.query.get(build_id).build_log
+        assert "First build on main" in log
+        assert "Files changed" not in log
+
     def test_a_failed_git_read_does_not_fail_the_build(self, app, monkeypatch):
         entities = _make_entities(app)
         build_id = _make_queued_build(app, entities)
@@ -1107,6 +1156,7 @@ class TestRecordCommitHistory:
             assert build.commit_sha is None
             error_log = ErrorLog.query.filter_by(source="worker.record_commit_history").first()
             assert error_log is not None
+            assert "Changes: unavailable" in build.build_log
 
 
 class TestManagedDockerfile:

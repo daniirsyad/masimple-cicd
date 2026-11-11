@@ -64,6 +64,14 @@ class GitProvider(ABC):
         `SystemConfig.commit_log_limit`, see app.utils.system_config).
         """
 
+    @abstractmethod
+    def get_changed_files(self, local_path, since_ref, until_ref):
+        """Return the files changed between `since_ref` and `until_ref` as a
+        list of (status, path) tuples, `status` being git's one-letter
+        --name-status code (A/M/D/R...). None when there's no usable range
+        (`since_ref` is None or no longer reachable).
+        """
+
     def get_commit_messages(self, local_path, since_ref=None, until_ref=None, limit=None):
         """Same range/fallback semantics as `get_commits`, but just the message
         text — identical for every provider, so it's implemented once here

@@ -21,7 +21,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // (used here, by deployment_servers.js, and by yaml_generator.js). ---
   const yamlEditors = {}; // textarea id -> CodeMirror instance
   document.querySelectorAll(".yaml-content-input").forEach((textarea) => {
-    const cm = window.YamlEditor.initYamlEditor(textarea);
+    // A disabled <fieldset> = the read-only View modal for users without deployment_manifest.manage.
+    const cm = window.YamlEditor.initYamlEditor(textarea, { readOnly: !!textarea.closest("fieldset[disabled]") });
     if (cm) yamlEditors[textarea.id] = cm;
   });
 
@@ -412,8 +413,12 @@ document.addEventListener("DOMContentLoaded", () => {
               headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
               body: JSON.stringify({ group_name: groupName, manifest_ids: manifestIds }),
             });
-            if (!response.ok) throw new Error("Failed to save the new order.");
+            if (!response.ok) {
+              const data = await response.json().catch(() => ({}));
+              throw new Error(data.error || "Failed to save the new order.");
+            }
           } catch (err) {
+            alert(err.message);
             // Reload so the table falls back to the last-saved order rather
             // than silently drifting from what the server actually has.
             location.reload();

@@ -27,8 +27,63 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1110 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below) — after a real
+- **1139 tests passing** (as of the last full run).
+- **This session's work** (on top of everything below): a user with only
+  `deployment_manifest.view` could open Edit, change the YAML, and on Save got
+  Flask's bare unstyled "403 Forbidden" page. Fixed app-wide.
+  1. **App-wide 403 handler** (`app/__init__.py`, new
+     `templates/errors/403.html`): the reason in an alert inside the normal
+     layout with a Back button (status stays 403, so the 77 existing
+     `== 403` assertions are unchanged), or `{"ok": false, "error",
+     "message"}` JSON for fetch calls (`/api/` path, JSON body, or
+     `Sec-Fetch-Mode` != `navigate`). `permission_required` now passes
+     "You don't have permission to <Permission.description lowercased>."
+     (falls back to the code if the row is missing); a plain `abort(403)`
+     (per-item `is_accessible_to` checks) reads "You don't have access to
+     this item." `role_required` names the role.
+  2. **Action buttons and their modals gated by permission** on every page
+     with a view/action split: Deployment Manifests (manage + each
+     `deployment.*` trigger), Deployment Servers (manage; Kubernetes link
+     needs `deployment_pod.view`), the 6 cluster pages (Namespaces, Secrets,
+     ConfigMaps, Ingress, Network Policies: each `.manage`; Workloads:
+     `deployment_workload.restart`), Builders (+ archived; Build needs
+     `builder.build`), Versions (+ archived), Workflows (index/view/archived;
+     Run needs `workflow.run`), Users (create/edit/delete each), Roles,
+     Permissions, Menus (`menu.edit`, incl. drag handles and the Sortable
+     script). Drag handles and the reorder hint are hidden without manage too.
+  3. **Deployment Manifests keeps a read-only "View"** for `.view`-only
+     users: same modal, `<fieldset disabled>`, no Save, and
+     `deployment_manifests.js` makes the CodeMirror editor read-only when
+     its textarea is inside a disabled fieldset.
+  4. **JS**: manifest and workflow step reorder now show the server's error
+     message (`alert`) on a failed save instead of a fixed string or silence.
+  5. **Tests**: new `perm_client(*codes)` fixture (`tests/conftest.py`);
+     `tests/test_view_only_pages.py` (9 pages x hidden-for-viewer /
+     shown-for-manager), `TestViewOnlyUser` in `test_deployment_manifests.py`
+     (index, readable 403 in layout, JSON 403), a namespaces pair in
+     `test_deployment_pods.py`. Fixture fixes, not behavior changes:
+     `test_roles.py`'s admin gained `role.delete` (its tests check the
+     Delete button), and two pod edit-modal tests moved to `manage_client`.
+     1133 passing at that point. Checked by screenshot: the View modal and the 403 page.
+     Not clicked through in a real browser.
+  6. **Builds now show what code changed** (asked: "when building the image,
+     show what changed, from git"). The commits were already recorded per
+     build (`ImageBuildCommit`) but only shown on the Documentation page.
+     Now: (a) the build log gets a block right after "Sync complete." —
+     `Changes since last build (<from> -> <to>): N commit(s)`, one line per
+     commit (short sha, author, subject, newest first), then `Files changed:
+     N` with git `--name-status` letters (capped at 50), or "First build on
+     <branch>" when there's no previous build (`worker._format_changes`,
+     new `GitProvider.get_changed_files`; `_record_commit_history` now
+     returns what it read so there's no second log read). (b) the Build
+     modal's "Preview from Git" lists the commits under the button
+     (`build_preview` JSON gained `commits`). (c) `/images` has a Changes
+     column opening the same commits modal as Documentation — moved to
+     `partials/commits_modal.html`, and `_commit_range_for_image` moved to
+     `app/services/build/history.py` as `commit_range_for_image`. No
+     migration. Not done on purpose: a full line diff (too big for logs;
+     the git host shows it).
+- **A prior session's work** (on top of everything below) — after a real
   "Cannot reach Docker daemon … 10.5.0.38:2376 … Connection refused" from
   Test Connection (diagnosed as dockerd not listening on TCP at all, not an
   app bug), added a TLS setup guide for a remote Docker host to `/config`.
@@ -71,7 +126,7 @@ Then ask me what to work on next rather than assuming.
      root@<host>:/etc/docker/certs/{ca,cert,key}.pem .`). The user ran the
      test command where the files weren't, and docker failed with "open
      ca.pem: no such file or directory".
-- **A prior session's work** (on top of everything below) — answered "can the
+- **An earlier session's work** (on top of everything below) — answered "can the
   Docker build engine use a Docker host while this app runs in a pod?" (yes:
   hostPath-mount the node's socket if the node runs dockerd, or point
   `DOCKER_HOST` at a remote daemon), then made that configurable in the UI.
@@ -94,7 +149,7 @@ Then ask me what to work on next rather than assuming.
      (connected), a closed TCP port, and a missing socket. Not tried in a
      real browser.
   4. 5 new tests (`tests/test_system_config.py`, `tests/test_build_factory.py`).
-- **An earlier session's work** (on top of everything below) — diagnosed a
+- **A session before that's work** (on top of everything below) — diagnosed a
   "`/deployment-manifests` is very slow" report (started from a pasted,
   truncated `SELECT deployment_executions.* ...` query).
   1. **Root cause: `deployment_executions` had no index on `(manifest_id,
@@ -145,7 +200,7 @@ Then ask me what to work on next rather than assuming.
   query per request is the next step if the page is still slow in prod
   after this migration. Production's own `EXPLAIN` was not checked from
   this session.
-- **A session before that's work** (on top of everything below) — a real production
+- **Two sessions before that's work** (on top of everything below) — a real production
   bug report plus a cluster of small, directly-requested Workflow UX
   additions, each implemented and pushed as its own commit rather than
   batched into one.
@@ -226,7 +281,7 @@ Then ask me what to work on next rather than assuming.
   (`TestPollLoopHandlesATickException`). 1086 → 1102 tests; full suite
   re-run clean after each of the four points above, not just at the end —
   each was its own commit and push, per direct request.
-- **Two sessions before that's work** (on top of everything below) — a full Discord bot
+- **Three sessions before that's work** (on top of everything below) — a full Discord bot
   integration, feature-parity with the existing Telegram integration (both
   directions: outbound notifications and inbound commands). Scoped up front
   via AskUserQuestion (Discord Gateway WebSocket transport, not an HTTP
@@ -444,7 +499,7 @@ Then ask me what to work on next rather than assuming.
        full suite re-run clean (an earlier run showed spurious failures in
        unrelated files purely from two `pytest` processes hitting the same
        Postgres test DB concurrently — a re-run by itself was clean).
-- **Three sessions before that's work** (on top of everything below) — Deploy/Update/
+- **Four sessions before that's work** (on top of everything below) — Deploy/Update/
   Restart's rollout wait (see the prior session's work just below for how
   that wait itself was added) now stops immediately on an obviously-fatal
   pod state instead of blocking out the full configured timeout — requested
@@ -496,7 +551,7 @@ Then ask me what to work on next rather than assuming.
   alongside the existing timeout description. No migration needed — no
   model/schema change, this only changes `KubernetesProvider`'s own internal
   polling.
-- **Four sessions before that's work** (on top of everything below):
+- **Five sessions before that's work** (on top of everything below):
   1. **Deploy/Update/Restart now waits for the rollout to actually become
      Ready before counting as a success, with a configurable timeout** —
      planned via plan-mode (AskUserQuestion locked the design up front, then
@@ -558,7 +613,7 @@ Then ask me what to work on next rather than assuming.
      SortableJS's drag-reorder still initializes fine against the collapsed
      table since daisyUI hides collapse content via a zero-height grid row,
      not `display:none`.
-- **Five sessions before that's work** (on top of everything below) — pressing Build,
+- **Six sessions before that's work** (on top of everything below) — pressing Build,
   Deploy, Update, Stop, or Restart (single or "Whole group") on the
   Builders / Deployment Manifests index pages no longer navigates away to
   the Images / Deployment Runs list on success — it stays on the same
@@ -580,7 +635,7 @@ Then ask me what to work on next rather than assuming.
   `/deployment-manifests/` accordingly; no new tests added since this is a
   redirect-target/flash-content change to already-covered routes, not new
   behavior. No migration needed.
-- **Six sessions before that's work** (on top of everything below) — the Telegram bot
+- **Seven sessions before that's work** (on top of everything below) — the Telegram bot
   integration (previously Workflow-only: `/run`/`/status`/`/review`) can now
   also trigger manual, non-Workflow Builds and Deployment Manifest
   actions — requested directly, not via plan-mode. No migration needed.
@@ -663,7 +718,7 @@ Then ask me what to work on next rather than assuming.
   disabled-manifest and "nothing currently deployed" edge cases for
   deploy/stop, the AI-prefill confident-vs-not-confident branches (plus
   Confirm/Cancel) for Build, and the mixed-Version group-build rejection.
-- **Seven sessions before that's work** (on top of everything below) — two independent bug
+- **Eight sessions before that's work** (on top of everything below) — two independent bug
   fixes in the Deployment/Workflow pipeline, found via direct user reports
   rather than the test suite. No migration needed for either. Two commits,
   `45464ac` and `95d3b93`.
@@ -722,7 +777,7 @@ Then ask me what to work on next rather than assuming.
      duplicate rows from before the fix; they're inert leftovers (no
      corruption, just wasted redundant builds), and that one run will keep
      showing 3x "Build" until this fix is actually deployed there.
-- **Eight sessions before that's work** (on top of everything below) — the "kaniko" build
+- **Nine sessions before that's work** (on top of everything below) — the "kaniko" build
   engine now actually works, for a self-hosted deploy onto a real
   Kubernetes + CRI-O cluster (<CLUSTER_NAME>) with no Docker-compatible socket
   to mount at all. No migration needed. Two commits, `928fa53` and
@@ -782,7 +837,7 @@ Then ask me what to work on next rather than assuming.
     through this app — including future builds of itself — should work
     end-to-end. The RBAC manifest also still needs an actual Deploy once
     <CLUSTER_NAME>'s cert is sorted.
-- **Nine sessions before that's work** (on top of everything below) — commit messages
+- **Ten sessions before that's work** (on top of everything below) — commit messages
   now drive Bump Type/Object(s)/Change Type more directly, plus a way to
   actually try that out and understand it from `/ai-settings`. No
   migration needed for any of it.
@@ -859,7 +914,7 @@ Then ask me what to work on next rather than assuming.
   (+6, explicit word recognition and its priority over conflicting
   markers), `tests/test_ai_settings.py` (+6, the tester route including a
   regression test for the `is_submitted()` bug above).
-- **Ten sessions before that's work** (on top of everything below) — a Telegram bot
+- **Eleven sessions before that's work** (on top of everything below) — a Telegram bot
   integration, built in three parts in sequence (the first two planned via
   plan-mode with the user before implementation; the third — build/deploy
   notifications — was a small enough follow-up request to just implement
@@ -974,7 +1029,7 @@ Then ask me what to work on next rather than assuming.
   (start/finish hooks + the workflow-driven skip); plus additions to the
   existing `tests/test_telegram.py` (`notify_run_finished`,
   `notify_awaiting_review`).
-- **Eleven sessions before that's work** (on top of everything below), already
+- **Twelve sessions before that's work** (on top of everything below), already
   committed and pushed to `origin/main`:
   1. **Workflow build steps can auto-generate their Version Bump/Change
      Type/Object/Message at run time instead of requiring them typed in at
@@ -1065,7 +1120,7 @@ Then ask me what to work on next rather than assuming.
   the features themselves: the `menus` and `permissions` blueprints had **no
   test file at all** before this session (`tests/test_menus.py`,
   `tests/test_permissions.py` are new).
-- **Twelve sessions before that's work** (on top of everything below), already
+- **Thirteen sessions before that's work** (on top of everything below), already
   pushed to `origin/main`:
   1. **The container image never had `kubectl` installed at all** — every
      `DeploymentServer` action (test-connection, apply/delete, pods/

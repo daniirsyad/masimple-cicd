@@ -9,6 +9,7 @@
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Ingress: {{ server.name }}</h1>
   <div class="flex gap-2">
+    {% if current_user.has_permission("deployment_ingress.manage") %}
     <button
       type="button"
       class="btn btn-primary btn-sm"
@@ -16,6 +17,7 @@
     >
       New Ingress
     </button>
+    {% endif %}
     <a href="{{ url_for('deployment_pods.index') }}" class="btn btn-sm">Back to Servers</a>
   </div>
 </div>
@@ -78,6 +80,7 @@
               >
                 Describe
               </button>
+              {% if current_user.has_permission("deployment_ingress.manage") %}
               <button
                 type="button"
                 class="btn btn-xs"
@@ -92,6 +95,7 @@
               >
                 Delete
               </button>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}
@@ -226,6 +230,7 @@
 </div>
 {% endmacro %}
 
+{% if current_user.has_permission("deployment_ingress.manage") %}
 <dialog id="create-ingress-modal" class="modal">
   <div class="modal-box w-11/12 max-w-2xl">
     <h3 class="text-lg font-bold">New Ingress</h3>
@@ -360,6 +365,7 @@
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
 {% endfor %}
+{% endif %}
 
 <dialog id="resource-describe-modal" class="modal">
   <div class="modal-box w-11/12 max-w-3xl">

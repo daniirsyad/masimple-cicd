@@ -367,6 +367,23 @@ document.addEventListener("DOMContentLoaded", () => {
   // build_preview()). Every field stays editable; nothing is submitted
   // until "Build" is actually clicked. ---
   const previewBtn = document.getElementById("build-trigger-preview-btn");
+  const previewCommits = document.getElementById("build-trigger-preview-commits");
+
+  // The commits the build will contain, newest first, so the user sees
+  // what's going into the image before clicking Build. textContent only:
+  // commit messages are untrusted text.
+  function renderPreviewCommits(commits) {
+    if (!previewCommits) return;
+    previewCommits.replaceChildren();
+    commits.forEach((commit) => {
+      const item = document.createElement("li");
+      item.className = "truncate";
+      item.title = commit.subject;
+      item.textContent = `${commit.sha}  ${commit.author}  ${commit.subject}  [${commit.builder}]`;
+      previewCommits.appendChild(item);
+    });
+    previewCommits.classList.toggle("hidden", commits.length === 0);
+  }
   const previewStatus = document.getElementById("build-trigger-preview-status");
   if (previewBtn) {
     previewBtn.addEventListener("click", () => {
@@ -410,6 +427,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
           const descriptionField = document.getElementById("build-trigger-additional-description");
           if (descriptionField && data.description) descriptionField.value = data.description;
+
+          renderPreviewCommits(data.commits || []);
 
           previewStatus.textContent =
             data.commit_count > 0

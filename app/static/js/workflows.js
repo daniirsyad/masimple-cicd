@@ -12,12 +12,17 @@ document.addEventListener("DOMContentLoaded", () => {
       onEnd: async () => {
         const stepIds = Array.from(stepsBody.querySelectorAll(".workflow-step-row")).map((row) => row.dataset.stepId);
         try {
-          await fetch(reorderUrl, {
+          const response = await fetch(reorderUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
             body: JSON.stringify({ step_ids: stepIds }),
           });
-        } catch {
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.error || "Failed to save the new step order.");
+          }
+        } catch (err) {
+          alert(err.message);
           // A failed reorder leaves the DB order as it was — reloading shows
           // the real (unreordered) state rather than silently drifting.
           window.location.reload();

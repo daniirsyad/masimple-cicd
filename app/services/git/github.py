@@ -129,6 +129,17 @@ class GitHubProvider(GitProvider):
             for commit in reversed(commits)
         ]
 
+    def get_changed_files(self, local_path, since_ref, until_ref):
+        if not since_ref:
+            return None
+        repo = self._open_repo(local_path)
+        try:
+            output = repo.git.diff("--name-status", f"{since_ref}..{until_ref or 'HEAD'}")
+        except git.GitCommandError:
+            return None
+        # Renames/copies are "R100\told\tnew" — keep the letter and the new path.
+        return [(parts[0][0], parts[-1]) for parts in (line.split("\t") for line in output.splitlines() if line)]
+
     @staticmethod
     def _open_repo(local_path):
         try:

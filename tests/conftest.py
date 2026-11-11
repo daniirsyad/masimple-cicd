@@ -104,3 +104,35 @@ def noperm_client(client, noperm_user):
     """Test client logged in as a user with no permissions."""
     _login(client, "noperm_test", NOPERM_PASSWORD)
     return client
+
+
+@pytest.fixture
+def perm_client(client, app):
+    """perm_client("x.view", ...) -> test client logged in as a user holding
+    exactly those permission codes (each created if missing, described as
+    "Do <code>"). For "page shows/hides an action" tests."""
+
+    def make(*codes):
+        with app.app_context():
+            permissions = []
+            for code in codes:
+                permission = Permission.query.filter_by(code=code).first()
+                if permission is None:
+                    permission = Permission(code=code, description=f"Do {code}")
+                    db.session.add(permission)
+                permissions.append(permission)
+            role = Role(name="PermClientRole", description="test")
+            role.permissions = permissions
+            db.session.add(role)
+            db.session.flush()
+            db.session.add(User(
+                username="perm_client",
+                password_hash=generate_password_hash(NOPERM_PASSWORD),
+                is_active=True,
+                role_id=role.id,
+            ))
+            db.session.commit()
+        _login(client, "perm_client", NOPERM_PASSWORD)
+        return client
+
+    return make

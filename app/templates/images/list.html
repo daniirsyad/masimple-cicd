@@ -83,6 +83,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
               <th>Registry</th>
               <th>Started</th>
               <th>Finished</th>
+              <th>Changes</th>
             </tr>
           </thead>
           <tbody>
@@ -130,6 +131,18 @@ MASIMPLE CICD{% endblock %} {% block content %}
               </td>
               <td>{{ image.started_at | localtime("%Y-%m-%d %H:%M") if image.started_at else "—" }}</td>
               <td>{{ image.finished_at | localtime("%Y-%m-%d %H:%M") if image.finished_at else "—" }}</td>
+              <td>
+                {% set range = commit_ranges[image.id] %} {% if range.to_sha %}
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs font-mono"
+                  onclick="document.getElementById('commits-modal-{{ image.id }}').showModal()"
+                >
+                  {{ range.from_sha[:7] if range.from_sha else 'start' }} &rarr; {{ range.to_sha[:7] }}
+                  <span class="badge badge-ghost badge-xs ml-1">{{ range.commits | length }}</span>
+                </button>
+                {% include "partials/commits_modal.html" %} {% else %}—{% endif %}
+              </td>
             </tr>
             {% endfor %}
           </tbody>

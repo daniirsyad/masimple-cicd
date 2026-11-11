@@ -12,6 +12,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
   <h1 class="text-2xl font-bold">Builders</h1>
   <div class="flex gap-2">
     <a class="btn btn-sm" href="{{ url_for('builders.archived') }}">Archived</a>
+    {% if current_user.has_permission("builder.manage") %}
     <button
       type="button"
       class="btn btn-primary btn-sm"
@@ -19,6 +20,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
     >
       New Builder
     </button>
+    {% endif %}
   </div>
 </div>
 
@@ -97,7 +99,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
     {% endif %}
   </td>
   <td class="flex gap-2">
-    {% if show_build_button %}
+    {% if show_build_button and current_user.has_permission("builder.build") %}
     <button
       type="button"
       class="build-one-btn btn btn-sm btn-primary"
@@ -108,6 +110,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
       Build
     </button>
     {% endif %}
+    {% if current_user.has_permission("builder.manage") %}
     <button
       type="button"
       class="btn btn-sm"
@@ -129,6 +132,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
       <button type="submit" class="btn btn-sm btn-warning">Disable</button>
     </form>
     {% endif %}
+    {% endif %}
   </td>
 </tr>
 {% endmacro %}
@@ -141,9 +145,11 @@ MASIMPLE CICD{% endblock %} {% block content %}
         {{ group.name }}
         <span class="badge badge-ghost badge-sm">{{ group.builders|length }} builder{{ '' if group.builders|length == 1 else 's' }}</span>
       </h2>
+      {% if current_user.has_permission("builder.build") %}
       <button type="button" class="build-group-btn btn btn-primary btn-sm">
         Build Group
       </button>
+      {% endif %}
     </div>
 
     <div class="mt-2 overflow-x-auto">
@@ -207,6 +213,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 </div>
 {% endif %}
 
+{% if current_user.has_permission("builder.manage") %}
 <dialog id="create-builder-modal" class="modal">
   <div class="modal-box w-11/12 max-w-2xl">
     <h3 class="text-lg font-bold">New Builder</h3>
@@ -329,7 +336,9 @@ MASIMPLE CICD{% endblock %} {% block content %}
     <button>close</button>
   </form>
 </dialog>
+{% endif %}
 
+{% if current_user.has_permission("builder.manage") %}
 {% for builder in builders %}
 <dialog id="edit-builder-modal-{{ builder.id }}" class="modal">
   <div class="modal-box w-11/12 max-w-2xl">
@@ -497,6 +506,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
   </form>
 </dialog>
 {% endfor %}
+{% endif %}
 
 <dialog id="build-trigger-modal" class="modal">
   <div class="modal-box w-11/12 max-w-lg">
@@ -516,6 +526,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
         </button>
         <span id="build-trigger-preview-status" class="text-xs text-base-content/60"></span>
       </div>
+      <ul id="build-trigger-preview-commits" class="hidden max-h-40 overflow-auto rounded bg-base-200 p-2 font-mono text-xs"></ul>
 
       <div>
         <label class="label text-sm">Bump Type</label>

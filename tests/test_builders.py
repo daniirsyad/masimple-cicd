@@ -1197,6 +1197,9 @@ class TestBuildPreview:
         assert data["new_object_names"] == ["payments"]
         assert data["description"] == "Added a new payment method and fixed a checkout bug."
         assert data["commit_count"] == 2
+        # Newest first, so the user sees what's going into the image before building.
+        assert [c["subject"] for c in data["commits"]] == ["fix: checkout bug", "feat: add new payment method"]
+        assert data["commits"][0]["sha"] == "sha-1"
 
     def test_syncs_the_repo_before_reading_commits(self, builder_client, app, base_entities, monkeypatch):
         with app.app_context():

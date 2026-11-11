@@ -3,8 +3,9 @@ import uuid
 from datetime import timedelta
 
 from dotenv import load_dotenv
-from flask import Flask, flash, got_request_exception, redirect, request, url_for
+from flask import Flask, flash, got_request_exception, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user
+from werkzeug.exceptions import Forbidden
 
 load_dotenv()
 
@@ -122,6 +123,26 @@ def create_app(config_name=None):
         log_error(source=request.endpoint or request.path, exc=exc)
         flash(str(exc), "error")
         return redirect(request.referrer or url_for("main.index"))
+
+    @app.errorhandler(403)
+    def _handle_forbidden(exc):
+        # Instead of Flask's bare "Forbidden" page: the reason, inside the
+        # app's own layout (or as JSON for a page's fetch() calls). Status
+        # stays 403. permission_required puts a readable reason in
+        # description; a plain abort(403) is a per-item access check.
+        message = exc.description
+        if not message or message == Forbidden.description:
+            message = "You don't have access to this item."
+        wants_json = (
+            "/api/" in request.path
+            or request.is_json
+            or request.headers.get("Sec-Fetch-Mode", "navigate") != "navigate"
+            or request.accept_mimetypes.best == "application/json"
+        )
+        if wants_json:
+            return jsonify(ok=False, error=message, message=message), 403
+        back_url = request.referrer if (request.referrer or "").startswith(request.host_url) else url_for("main.index")
+        return render_template("errors/403.html", message=message, back_url=back_url), 403
 
     from app.blueprints.account import account_bp
     from app.blueprints.auth import auth_bp

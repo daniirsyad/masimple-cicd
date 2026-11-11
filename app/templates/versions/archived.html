@@ -28,10 +28,12 @@ MASIMPLE CICD{% endblock %} {% block content %}
             <td><span class="badge badge-ghost badge-sm">{{ version.version_type.name }}</span></td>
             <td>{{ version.major }}.{{ version.minor }}.{{ version.patch }}</td>
             <td>
+              {% if current_user.has_permission("version.manage") %}
               <form method="POST" action="{{ url_for('versions.enable_version', version_id=version.id) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
                 <button type="submit" class="btn btn-sm btn-primary">Restore</button>
               </form>
+              {% endif %}
             </td>
           </tr>
           {% else %}
