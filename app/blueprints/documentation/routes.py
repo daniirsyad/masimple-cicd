@@ -11,6 +11,7 @@ from app.models import (
     BuildBatch,
     ChangeType,
     ImageBuild,
+    ImageBuildCommit,
     Object,
     User,
     Version,
@@ -224,6 +225,15 @@ def list_documentation():
     page = request.args.get("page", 1, type=int)
     pagination = _documented_batches_query(filters).paginate(page=page, per_page=DOC_PER_PAGE, error_out=False)
 
+    # One grouped query for the whole page, not one per row.
+    commit_counts = dict(
+        db.session.query(ImageBuild.batch_id, db.func.count(ImageBuildCommit.id))
+        .join(ImageBuildCommit, ImageBuildCommit.image_build_id == ImageBuild.id)
+        .filter(ImageBuild.batch_id.in_([batch.id for batch in pagination.items]))
+        .group_by(ImageBuild.batch_id)
+        .all()
+    )
+
     selected_objects = (
         [{"id": str(obj.id), "name": obj.name} for obj in Object.query.filter(Object.id.in_(object_ids)).order_by(Object.name).all()]
         if object_ids
@@ -234,6 +244,7 @@ def list_documentation():
         "documentation/index.html",
         pagination=pagination,
         batches=pagination.items,
+        commit_counts=commit_counts,
         versions=_version_filter_choices(),
         change_type_choices=_change_type_choices()[1:],  # drop the "— None —" entry, not meaningful as a filter
         built_by_choices=_built_by_choices(),

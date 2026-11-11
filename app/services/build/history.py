@@ -27,7 +27,8 @@ def commit_range_for_image(image_build):
     commit for the same (builder, branch) pair as of when *this* build ran
     (None if this was the first build on that pair), and `commits` is the
     full ImageBuildCommit list captured at build time (see
-    worker._record_commit_history). All fields are None/empty for a build
+    worker._record_commit_history), and `files` the [status, path] list
+    saved alongside them (None if not recorded). All fields are None/empty for a build
     that predates commit tracking — the template shows "not tracked", not
     an error, for those.
 
@@ -51,4 +52,5 @@ def commit_range_for_image(image_build):
         "from_sha": previous.commit_sha if previous else None,
         "to_sha": image_build.commit_sha,
         "commits": list(image_build.commits),
+        "files": image_build.changed_files,
     }

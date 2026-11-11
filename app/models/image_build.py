@@ -22,6 +22,11 @@ class ImageBuild(db.Model):
     builder_id = db.Column(UUID(as_uuid=True), db.ForeignKey("builders.id"), nullable=False)
     branch_used = db.Column(db.String, nullable=False)
     commit_sha = db.Column(db.String, nullable=True)
+    # [[status, path], ...] from `git diff --name-status` since the previous
+    # successful build, captured at build time (worker._format_changes) like
+    # the ImageBuildCommit rows. None = not recorded (first build, git read
+    # failed, or built before this column existed).
+    changed_files = db.Column(db.JSON, nullable=True)
     status = db.Column(db.String, default="queued", nullable=False)
     registry_name = db.Column(db.String, nullable=True)
     image_tag = db.Column(db.String, nullable=True)

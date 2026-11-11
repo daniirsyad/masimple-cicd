@@ -41,16 +41,12 @@ MASIMPLE CICD{% endblock %} {% block content %}
             </td>
             <td>
               {% if range.to_sha %}
-              <button
-                type="button"
-                class="btn btn-ghost btn-xs font-mono"
-                onclick="document.getElementById('commits-modal-{{ image.id }}').showModal()"
-              >
+              <a href="#changes-{{ image.id }}" class="btn btn-ghost btn-xs font-mono">
                 {{ range.from_sha[:7] if range.from_sha else 'start' }} &rarr; {{ range.to_sha[:7] }}
                 {% if range.commits %}
                 <span class="badge badge-ghost badge-xs ml-1">{{ range.commits | length }}</span>
                 {% endif %}
-              </button>
+              </a>
               {% else %}
               <span class="text-xs text-base-content/60">not tracked</span>
               {% endif %}
@@ -63,12 +59,60 @@ MASIMPLE CICD{% endblock %} {% block content %}
   </div>
 </div>
 
-{% for image in batch.image_builds %}
-{% set range = commit_ranges[image.id | string] %}
-{% if range.to_sha %}
-{% include "partials/commits_modal.html" %}
-{% endif %}
-{% endfor %}
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+    <h2 class="card-title text-base">Changes</h2>
+    {% for image in batch.image_builds %}
+    {% set range = commit_ranges[image.id | string] %}
+    <section id="changes-{{ image.id }}" class="mt-2 scroll-mt-20">
+      <h3 class="text-sm font-semibold">
+        {{ image.builder.name }} <span class="font-normal text-base-content/60">({{ image.branch_used }})</span>
+        {% if range.to_sha %}
+        <code class="ml-1 text-xs font-normal">{{ range.from_sha[:7] if range.from_sha else 'initial build' }} &rarr; {{ range.to_sha[:7] }}</code>
+        {% endif %}
+      </h3>
+      {% if not range.to_sha %}
+      <p class="text-xs text-base-content/60">Commits not tracked for this build.</p>
+      {% else %}
+      {% if range.commits %}
+      <ul class="mt-1 flex flex-col gap-1">
+        {% for commit in range.commits | reverse %}
+        <li class="text-xs">
+          <details>
+            <summary class="cursor-pointer">
+              <code>{{ commit.sha[:7] }}</code>
+              <span class="text-base-content/60">{{ commit.author_name or "—" }}{% if commit.committed_at %} · {{ commit.committed_at | localtime("%Y-%m-%d %H:%M") }}{% endif %}</span>
+              {{ commit.message.partition("\n")[0] }}
+            </summary>
+            <pre class="mt-1 whitespace-pre-wrap rounded bg-base-200 p-2">{{ commit.message }}</pre>
+          </details>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="text-xs text-base-content/60">No new commits since the previous build.</p>
+      {% endif %}
+      {% if range.files %}
+      <details class="mt-2 text-xs">
+        <summary class="cursor-pointer">Files changed ({{ range.files | length }})</summary>
+        <ul class="mt-1 font-mono">
+          {% for status, path in range.files %}
+          <li>
+            <span class="badge badge-xs {{ 'badge-success' if status == 'A' else 'badge-error' if status == 'D' else 'badge-ghost' }}">{{ status }}</span>
+            {{ path }}
+          </li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% elif range.files is none %}
+      <p class="mt-1 text-xs text-base-content/60">Files not recorded.</p>
+      {% endif %}
+      {% endif %}
+    </section>
+    {% if not loop.last %}<div class="divider my-1"></div>{% endif %}
+    {% endfor %}
+  </div>
+</div>
 
 <div class="card mt-4 bg-base-100 shadow-sm">
   <div class="card-body p-4">

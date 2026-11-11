@@ -1123,6 +1123,11 @@ class TestRecordCommitHistory:
         assert "longer body" not in log
         assert "Files changed: 2" in log
         assert "M  docker/nginx.conf" in log
+        with app.app_context():
+            assert ImageBuild.query.get(second_id).changed_files == [
+                ["M", "docker/nginx.conf"],
+                ["A", "app/health.py"],
+            ]
 
     def test_first_build_log_says_it_has_no_previous_build(self, app, monkeypatch):
         entities = _make_entities(app)

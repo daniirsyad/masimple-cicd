@@ -104,7 +104,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
 | AWS SDK | `boto3` — ECR `RegistryProvider` only (SigV4-signed calls, doesn't fit the generic Docker Registry v2 bearer-token flow the other registry providers share) |
 | YAML generation | `PyYAML` — YAML Generator page only; everywhere else in this app deliberately avoids it in favor of dict→`json.dumps()` (JSON is valid YAML) since that output only ever feeds `kubectl apply -f -`, never a human — see `app/services/yaml_generator/render.py` |
-| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 1139 tests |
+| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 1142 tests |
 | Telegram integration | `requests` against the Bot API (`app/services/telegram/`) — both directions now: outbound `sendMessage` (security notifications, forgot-password links, workflow/build/deploy start-finish pushes) **and** inbound, via a long-polling `getUpdates` background thread (no webhook/public HTTPS needed) handling `/run`, `/status`, `/review`, `/build`, `/deploy`, `/update`, `/stop`, `/restart` bot commands and their inline-keyboard callbacks |
 | Discord integration | `requests` (REST) + `websocket-client` (Gateway) against the Discord API (`app/services/discord/`) — same notifications/commands as Telegram above (`/help` instead of `/start`), reached via a persistent Gateway WebSocket + native slash commands/Button/Select Menu components instead of long-polling + inline keyboards; group-resolution/action-table logic shared with Telegram via `app/services/bot_shared.py` |
 
@@ -239,13 +239,15 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   `additional_description` fields captured at trigger time.
 - `ImageBuild` — one `Builder`'s execution inside a `BuildBatch`: branch
   used, status, image tag/size, build log, timestamps, `commit_sha` (the
-  commit this build ran against), `error_log_id` (nullable FK →
+  commit this build ran against), `changed_files` (JSON `[status, path]`
+  list since the previous successful build, shown in the Documentation
+  page's "Changes" card), `error_log_id` (nullable FK →
   `ErrorLog`, set on failure so `/images` can link straight to the full
   error/traceback instead of making someone search Error Logs for it) →
   `ImageBuildCommit` (one row per commit since this `(builder, branch)`
   pair's previous successful build — sha, author, message, committed-at —
   captured at build time, powers the "since last build" AI context, the
-  commit-range modal on both Documentation and `/images`, and the
+  inline "Changes" card on Documentation, the commit-range modal on `/images`, and the
   "Changes since last build" block (commits + files changed) written into
   the build log right after the repo sync).
 - `ChangeType` (lookup: New Program/Update/Bug Fix/…, extensible).

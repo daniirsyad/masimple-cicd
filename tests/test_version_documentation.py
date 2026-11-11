@@ -202,6 +202,18 @@ class TestDocumentationIndex:
         assert b"checkout" in response.data
 
 
+    def test_shows_the_commit_count_per_batch(self, doc_client, app, base_entities):
+        with app.app_context():
+            from app.models import ImageBuildCommit
+
+            batch, _ = _make_documented_batch(base_entities)
+            for sha in ("a1", "b2"):
+                db.session.add(ImageBuildCommit(image_build_id=batch.image_builds[0].id, sha=sha, message=sha))
+            db.session.commit()
+
+        assert b"2 commits" in doc_client.get("/documentation/").data
+
+
 class TestDocumentationFilters:
     def _make_two_batches(self, app, base_entities):
         """One fully-documented batch (change type set, built by the seeded
@@ -479,6 +491,40 @@ class TestCommitRangeDisplay:
         assert b"abcdef1" in response.data
         assert b"fix: something" in response.data
         assert b"Ann" in response.data
+
+    def test_changes_section_lists_commits_and_files_without_a_popup(self, doc_client, app, base_entities):
+        with app.app_context():
+            from app.models import ImageBuildCommit
+
+            batch, _ = _make_documented_batch(base_entities)
+            image = batch.image_builds[0]
+            image.commit_sha = "abcdef1234567890"
+            image.changed_files = [["M", "docker/nginx.conf"], ["A", "app/health.py"]]
+            db.session.add(
+                ImageBuildCommit(
+                    image_build_id=image.id,
+                    sha="abcdef1234567890",
+                    message="fix: nginx path\n\nlonger body",
+                )
+            )
+            db.session.commit()
+            batch_id, image_id = batch.id, image.id
+
+        html = doc_client.get(f"/documentation/{batch_id}").get_data(as_text=True)
+        assert f'id="changes-{image_id}"' in html
+        assert "commits-modal" not in html
+        assert "longer body" in html  # full message inside <details>
+        assert "Files changed (2)" in html
+        assert "docker/nginx.conf" in html
+
+    def test_changes_section_says_files_not_recorded_for_older_builds(self, doc_client, app, base_entities):
+        with app.app_context():
+            batch, _ = _make_documented_batch(base_entities)
+            batch.image_builds[0].commit_sha = "abcdef1234567890"
+            db.session.commit()
+            batch_id = batch.id
+
+        assert b"Files not recorded." in doc_client.get(f"/documentation/{batch_id}").data
 
     def test_shows_the_from_sha_of_the_previous_successful_build(self, doc_client, app, base_entities):
         with app.app_context():

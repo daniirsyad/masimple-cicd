@@ -162,7 +162,12 @@ MASIMPLE CICD{% endblock %} {% block content %}
         <tbody>
           {% for batch in batches %} {% set doc = batch.documentation %}
           <tr>
-            <td><code class="text-xs">{{ batch.full_version_string }}</code></td>
+            <td>
+              <code class="text-xs">{{ batch.full_version_string }}</code>
+              {% if commit_counts.get(batch.id) %}
+              <span class="badge badge-ghost badge-xs ml-1">{{ commit_counts[batch.id] }} commits</span>
+              {% endif %}
+            </td>
             <td>
               {% if doc.change_type %}
               <span class="badge badge-ghost badge-sm">{{ doc.change_type.name }}</span>

@@ -27,7 +27,7 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1139 tests passing** (as of the last full run).
+- **1142 tests passing** (as of the last full run).
 - **This session's work** (on top of everything below): a user with only
   `deployment_manifest.view` could open Edit, change the YAML, and on Save got
   Flask's bare unstyled "403 Forbidden" page. Fixed app-wide.
@@ -82,7 +82,20 @@ Then ask me what to work on next rather than assuming.
      `partials/commits_modal.html`, and `_commit_range_for_image` moved to
      `app/services/build/history.py` as `commit_range_for_image`. No
      migration. Not done on purpose: a full line diff (too big for logs;
-     the git host shows it).
+     the git host shows it). Committed + pushed as e63b8b4.
+  7. **Changes list on the Documentation page** (asked: "make changes list
+     on the version documentation"). New `ImageBuild.changed_files` JSON
+     column (`[[status, path], ...]`, migration `e0944fc45ceb`), filled by
+     `worker._format_changes` from the same `get_changed_files` read as the
+     log. `documentation/view.html` now has a visible "Changes" card per
+     image: commits newest first (subject in a `<details>` summary, full
+     message inside), then a collapsible "Files changed (N)" with A/M/D
+     badges, or "Files not recorded." for older builds (`files` is None).
+     The table's range button is now a `#changes-<id>` anchor; the popup is
+     gone from this page (Images still uses `partials/commits_modal.html`).
+     The Documentation list shows an "N commits" badge per batch (one
+     grouped count query). Not done: writing the changes into the saved
+     Description text.
 - **A prior session's work** (on top of everything below) — after a real
   "Cannot reach Docker daemon … 10.5.0.38:2376 … Connection refused" from
   Test Connection (diagnosed as dockerd not listening on TCP at all, not an

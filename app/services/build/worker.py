@@ -416,7 +416,8 @@ MAX_LOGGED_CHANGED_FILES = 50
 def _format_changes(git_provider, repository, build, recorded):
     """The "what's in this build" block written to the build log right after
     the sync: the commits `_record_commit_history` just recorded, plus the
-    files changed since the last successful build. Best-effort like the
+    files changed since the last successful build (also saved to
+    `build.changed_files`). Best-effort like the
     recording itself — a failed file listing just leaves that part out.
     """
     if recorded is None:
@@ -436,6 +437,8 @@ def _format_changes(git_provider, repository, build, recorded):
         files = git_provider.get_changed_files(repository.local_path, since_ref, build.branch_used)
     except Exception:
         files = None
+    # Saved for the Documentation page; committed by the caller's next log flush.
+    build.changed_files = [list(f) for f in files] if files is not None else None
     if files:
         lines.append(f"Files changed: {len(files)}\n")
         lines.extend(f"  {status}  {path}\n" for status, path in files[:MAX_LOGGED_CHANGED_FILES])
