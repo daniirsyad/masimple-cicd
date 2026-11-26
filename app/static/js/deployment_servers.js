@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onPageReady(() => {
   // --- YAML editor (CodeMirror) for the kubeconfig field — same
   // progressive-enhancement approach as deployment_manifests.js's
   // yaml_content editor; shared init lives in yaml_editor.js. Unlike that

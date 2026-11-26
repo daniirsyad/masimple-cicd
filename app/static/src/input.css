@@ -96,4 +96,39 @@
     font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
     font-size: 0.8rem;
   }
+  /* Manifest modals only: the editor is the main thing being edited there. */
+  .yaml-editor-tall .CodeMirror {
+    height: 60vh;
+  }
+  /* Colors from daisyUI's theme variables so light and dark both match. */
+  .yaml-editor-wrapper .CodeMirror .CodeMirror-activeline-background {
+    background: oklch(var(--bc) / 0.06);
+  }
+  .yaml-editor-wrapper .CodeMirror .cm-sys-placeholder {
+    background: oklch(var(--p) / 0.15);
+    color: oklch(var(--p));
+    border-radius: 3px;
+    font-weight: 600;
+  }
+  .yaml-editor-wrapper .CodeMirror-foldgutter {
+    width: 1em;
+  }
+  .yaml-editor-wrapper .CodeMirror-foldgutter-open,
+  .yaml-editor-wrapper .CodeMirror-foldgutter-folded {
+    cursor: pointer;
+    color: oklch(var(--bc) / 0.4);
+  }
+  .yaml-editor-wrapper .CodeMirror-foldgutter-open::after {
+    content: "\25BE";
+  }
+  .yaml-editor-wrapper .CodeMirror-foldgutter-folded::after {
+    content: "\25B8";
+  }
+  .yaml-editor-wrapper .CodeMirror-foldmarker {
+    padding: 0 4px;
+    border-radius: 3px;
+    background: oklch(var(--bc) / 0.1);
+    color: oklch(var(--bc) / 0.7);
+    cursor: pointer;
+  }
 }

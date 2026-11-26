@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onEveryPage(() => {
   const STORAGE_KEY = "sidebarCollapsed";
 
   const wrapper = document.getElementById("app-drawer-wrapper");
@@ -47,7 +47,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Desktop vs. mobile read different state (the wrapper class vs. the
   // checkbox) for what "open" means — crossing that breakpoint via resize
   // must re-evaluate both the icon and the title, not just clicks/toggles.
-  window.addEventListener("resize", updateIcon);
+  window.addEventListener("resize", updateIcon, { signal: pageSignal() });
 
   updateIcon();
 });

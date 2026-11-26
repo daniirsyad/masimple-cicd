@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onPageReady(() => {
   const csrfToken = document.getElementById("deployment-manifests-page")?.dataset.csrf;
 
   function parseJsonData(elementId) {
@@ -23,7 +23,25 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".yaml-content-input").forEach((textarea) => {
     // A disabled <fieldset> = the read-only View modal for users without deployment_manifest.manage.
     const cm = window.YamlEditor.initYamlEditor(textarea, { readOnly: !!textarea.closest("fieldset[disabled]") });
-    if (cm) yamlEditors[textarea.id] = cm;
+    if (!cm) return;
+    yamlEditors[textarea.id] = cm;
+
+    const pos = document.querySelector(`.yaml-cursor-pos[data-yaml-input-id="${textarea.id}"]`);
+    if (pos) {
+      cm.on("cursorActivity", () => {
+        const cursor = cm.getCursor();
+        pos.textContent = `Line ${cursor.line + 1}, column ${cursor.ch + 1}`;
+      });
+    }
+  });
+
+  document.querySelectorAll(".yaml-insert-placeholder-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const cm = yamlEditors[btn.dataset.yamlInputId];
+      if (!cm) return;
+      cm.replaceSelection("{{SYS:VERSION}}");
+      cm.focus();
+    });
   });
 
   // --- Searchable dropdown for the Group field — same pattern as builders.js. ---
@@ -421,7 +439,7 @@ document.addEventListener("DOMContentLoaded", () => {
             alert(err.message);
             // Reload so the table falls back to the last-saved order rather
             // than silently drifting from what the server actually has.
-            location.reload();
+            refreshPage();
           }
         },
       });

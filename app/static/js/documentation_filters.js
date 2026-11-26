@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onPageReady(() => {
   // --- Object filter (/documentation index page): a hand-rolled
   // search+pills multi-select, backed by a plain <input type="hidden"
   // name="object_id"> per selection so the surrounding GET form submits
@@ -192,19 +192,27 @@ document.addEventListener("DOMContentLoaded", () => {
   // fail on the now-detached original node and immediately re-close the
   // list addPill just reopened. event.composedPath() is captured at
   // dispatch time, before any of that mutation, so it stays accurate.
-  document.addEventListener("click", (event) => {
-    const path = event.composedPath();
-    if (!path.includes(root) && !path.includes(dropdown)) hideDropdown();
-  });
+  document.addEventListener(
+    "click",
+    (event) => {
+      const path = event.composedPath();
+      if (!path.includes(root) && !path.includes(dropdown)) hideDropdown();
+    },
+    { signal: pageSignal() }
+  );
 
   window.addEventListener(
     "scroll",
     () => {
       if (!dropdown.classList.contains("hidden")) positionDropdown();
     },
-    true
+    { capture: true, signal: pageSignal() }
   );
-  window.addEventListener("resize", () => {
-    if (!dropdown.classList.contains("hidden")) positionDropdown();
-  });
+  window.addEventListener(
+    "resize",
+    () => {
+      if (!dropdown.classList.contains("hidden")) positionDropdown();
+    },
+    { signal: pageSignal() }
+  );
 });

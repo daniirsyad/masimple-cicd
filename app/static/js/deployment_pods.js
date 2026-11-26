@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onPageReady(() => {
   const page = document.getElementById("deployment-pods-list-page");
   if (!page) return;
   const serverId = page.dataset.serverId;
@@ -70,6 +70,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (toggleButton) {
       toggleButton.addEventListener("click", () => (live ? stop() : start()));
     }
+    // Leaving the page removes the modal without a "close" event.
+    onPageLeave(stop);
 
     return { start, stop };
   }
@@ -168,6 +170,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     logsModal.addEventListener("close", () => stopLogsStream());
+    onPageLeave(stopLogsStream);
   }
 
   // --- Describe modal ---

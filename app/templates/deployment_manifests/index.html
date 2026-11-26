@@ -1,9 +1,5 @@
 {% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Deployment Manifests -
 MASIMPLE CICD{% endblock %}
-{% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/codemirror.css') }}" />
-<link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/material-darker.css') }}" />
-{% endblock %}
 {% block content %}
 <span id="deployment-manifests-page" data-csrf="{{ csrf_token() }}" class="hidden"></span>
 {# Same rationale as builders/index.html's group-name-suggestions-data block:
@@ -269,9 +265,27 @@ MASIMPLE CICD{% endblock %}
 </div>
 
 <div>
-  {{ form.yaml_content.label(class="label text-sm") }}
-  <div class="yaml-editor-wrapper overflow-hidden rounded-lg border border-base-300">
+  <div class="flex items-end justify-between gap-2">
+    {{ form.yaml_content.label(class="label text-sm") }}
+    <button
+      type="button"
+      class="yaml-insert-placeholder-btn btn btn-ghost btn-xs mb-1 font-mono"
+      data-yaml-input-id="{{ form.yaml_content.id }}"
+      title="Insert at the cursor"
+    >
+      + {{ '{{SYS:VERSION}}' }}
+    </button>
+  </div>
+  <div class="yaml-editor-wrapper yaml-editor-tall min-w-0 overflow-hidden rounded-lg border border-base-300">
     {{ form.yaml_content(class="yaml-content-input textarea textarea-bordered textarea-sm w-full font-mono", rows="12") }}
+    <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-base-300 bg-base-200 px-3 py-1 text-xs text-base-content/60">
+      <span class="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span><kbd class="kbd kbd-xs">Tab</kbd> <kbd class="kbd kbd-xs">Shift+Tab</kbd> indent</span>
+        <span><kbd class="kbd kbd-xs">Ctrl+/</kbd> comment</span>
+        <span>Click the arrows by the line numbers to fold a section</span>
+      </span>
+      <span class="yaml-cursor-pos tabular-nums" data-yaml-input-id="{{ form.yaml_content.id }}">Line 1, column 1</span>
+    </div>
   </div>
   {% for error in form.yaml_content.errors %}
   <p class="text-error text-sm">{{ error }}</p>
@@ -354,7 +368,7 @@ MASIMPLE CICD{% endblock %}
 
 {% if current_user.has_permission("deployment_manifest.manage") %}
 <dialog id="create-manifest-modal" class="modal">
-  <div class="modal-box w-11/12 max-w-2xl">
+  <div class="modal-box w-11/12 max-w-none">
     <h3 class="text-lg font-bold">New Manifest</h3>
     <form
       method="post"
@@ -376,7 +390,7 @@ MASIMPLE CICD{% endblock %}
 
 {% for manifest in manifests %}
 <dialog id="edit-manifest-modal-{{ manifest.id }}" class="modal">
-  <div class="modal-box w-11/12 max-w-2xl">
+  <div class="modal-box w-11/12 max-w-none">
     {% set can_manage = current_user.has_permission("deployment_manifest.manage") %}
     <h3 class="text-lg font-bold">{{ 'Edit' if can_manage else 'View' }} Manifest: {{ manifest.name }}</h3>
     {% set form = edit_forms[manifest.id] %}
@@ -388,7 +402,7 @@ MASIMPLE CICD{% endblock %}
     >
       {{ form.hidden_tag() }}
       {# disabled fieldset = read-only view; deployment_manifests.js makes the YAML editor read-only too #}
-      <fieldset class="flex flex-col gap-3" {{ '' if can_manage else 'disabled' }}>
+      <fieldset class="flex min-w-0 flex-col gap-3" {{ '' if can_manage else 'disabled' }}>
         {{ manifest_form_fields(form, manifest_id=manifest.id) }}
       </fieldset>
       <div class="modal-action">
@@ -508,6 +522,11 @@ MASIMPLE CICD{% endblock %}
 
 <script src="{{ url_for('static', filename='vendor/codemirror/codemirror.min.js') }}"></script>
 <script src="{{ url_for('static', filename='vendor/codemirror/yaml.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/addon/active-line.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/addon/comment.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/addon/foldcode.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/addon/foldgutter.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/addon/indent-fold.js') }}"></script>
 <script src="{{ url_for('static', filename='vendor/sortablejs/Sortable.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/yaml_editor.js') }}"></script>
 <script src="{{ url_for('static', filename='js/deployment_manifests.js') }}"></script>

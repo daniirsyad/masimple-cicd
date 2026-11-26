@@ -1,9 +1,5 @@
 {% extends "base.html" %} {% block title %}YAML Generator -
 MASIMPLE CICD{% endblock %}
-{% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/codemirror.css') }}" />
-<link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/material-darker.css') }}" />
-{% endblock %}
 {% block content %}
 <span id="yaml-generator-page" data-csrf="{{ csrf_token() }}" class="hidden"></span>
 

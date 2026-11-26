@@ -1,8 +1,4 @@
 {% extends "base.html" %} {% block title %}Ingress: {{ server.name }} - MASIMPLE CICD{% endblock %}
-{% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/codemirror.css') }}" />
-<link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/material-darker.css') }}" />
-{% endblock %}
 {% block content %}
 <span id="deployment-pods-list-page" data-server-id="{{ server.id }}" class="hidden"></span>
 {% set active_kind = 'ingresses' %}

@@ -29,16 +29,33 @@
       rel="stylesheet"
       href="{{ url_for('static', filename='dist/output.css') }}"
     />
+    {# CodeMirror's CSS is here rather than on the pages that use it: htmx
+       swaps only <body> between pages, so a page's own <head> links never load. #}
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/codemirror.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/material-darker.css') }}" />
+    {# Links and forms load in the background and swap <body> (hx-boost
+       below). No history cache: Back reloads the page for real, since a
+       cached copy would come back without its scripts running. Error
+       responses (403, 500) are swapped in too, so their pages still show. #}
+    <meta
+      name="htmx-config"
+      content='{"historyCacheSize": 0, "refreshOnHistoryMiss": true, "scrollIntoViewOnBoost": false, "responseHandling": [{"code": "204", "swap": false}, {"code": "...", "swap": true}]}'
+    />
+    <script src="{{ url_for('static', filename='js/page.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/sidebar.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modal-form.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/htmx/htmx.min.js') }}" defer></script>
     {% block extra_head %}{% endblock %}
   </head>
-  <body data-open-modal="{{ open_modal|default('') }}">
+  <body hx-boost="true">
     <div class="drawer lg:drawer-open" id="app-drawer-wrapper">
       <input id="app-drawer" type="checkbox" class="drawer-toggle" />
 
       <div class="drawer-content flex min-h-screen flex-col">
         {% include "partials/navbar.html" %}
 
-        <main class="flex-1 p-4">
+        <main class="flex-1 p-4" data-open-modal="{{ open_modal|default('') }}">
           {% with messages = get_flashed_messages(with_categories=true) %} {% if
           messages %}
           <div class="mb-4 flex flex-col gap-2">
@@ -64,8 +81,5 @@
       </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/sidebar.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/modal-form.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
   </body>
 </html>

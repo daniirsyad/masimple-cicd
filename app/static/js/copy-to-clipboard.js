@@ -21,7 +21,7 @@ function copyText(text) {
   return Promise.resolve();
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+onPageReady(() => {
   document.querySelectorAll(".copy-to-clipboard-btn").forEach((btn) => {
     const target = document.getElementById(btn.dataset.copyTarget);
     const copyIcon = btn.querySelector(".copy-icon");

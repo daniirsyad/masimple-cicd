@@ -107,18 +107,45 @@
       // start any token"). CodeMirror's default Tab-key behavior inserts
       // a real tab, so it's rebound here to insert spaces instead.
       indentWithTabs: false,
-      extraKeys: { Tab: (editor) => editor.execCommand("insertSoftTab") },
+      // Tab over a selection indents the selected lines (insertSoftTab
+      // alone would replace the selection with spaces); Shift-Tab dedents.
+      extraKeys: {
+        Tab: (editor) => editor.execCommand(editor.somethingSelected() ? "indentMore" : "insertSoftTab"),
+        "Shift-Tab": "indentLess",
+        "Ctrl-/": "toggleComment",
+        "Cmd-/": "toggleComment",
+      },
       theme: currentCodeMirrorTheme(),
       readOnly: options.readOnly || false,
+      // Addons are optional per page (only deployment_manifests loads them);
+      // without them these options are ignored / the gutter is left out.
+      styleActiveLine: true,
+      foldGutter: !!CodeMirror.fold,
+      gutters: CodeMirror.fold ? ["CodeMirror-linenumbers", "CodeMirror-foldgutter"] : ["CodeMirror-linenumbers"],
+    });
+
+    // Same reason as indentWithTabs: a pasted tab is a YAML syntax error.
+    cm.on("beforeChange", (editor, change) => {
+      if (change.update && change.text.some((line) => line.includes("\t"))) {
+        change.update(null, null, change.text.map((line) => line.replace(/\t/g, "  ")));
+      }
+    });
+
+    // Highlight {{SYS:VERSION}} / {{SYS:VERSION:key}} (the resolver's
+    // placeholder syntax) so they stand out from ordinary YAML values.
+    cm.addOverlay({
+      token(stream) {
+        if (stream.match(/\{\{SYS:VERSION(?::[\w.-]+)?\}\}/)) return "sys-placeholder";
+        while (stream.next() != null && !stream.match(/\{\{SYS:/, false)) {}
+        return null;
+      },
     });
 
     // CodeMirror only writes back into the underlying textarea when
-    // .save() is called — without this, the server would always see
-    // whatever the textarea had at page load, not the edited YAML. Only
-    // relevant when the textarea actually lives inside a <form> (the YAML
-    // generator's read-only preview pane doesn't).
-    const form = textarea.closest("form");
-    if (form) form.addEventListener("submit", () => cm.save());
+    // .save() is called. Saved on every change, not on submit: htmx
+    // (hx-boost) reads the form's values in its own submit listener, which
+    // can run before one added here.
+    cm.on("change", () => cm.save());
 
     const dialog = textarea.closest("dialog");
     if (dialog) {

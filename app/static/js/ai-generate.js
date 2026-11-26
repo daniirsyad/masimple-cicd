@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onPageReady(() => {
   const container = document.getElementById("ai-generate");
   const generateBtn = document.getElementById("generate-description-btn");
   if (!container || !generateBtn) return;

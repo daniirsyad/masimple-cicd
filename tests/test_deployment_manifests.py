@@ -142,6 +142,14 @@ class TestViewOnlyUser:
         assert "You don&#39;t have permission to create and edit deployment manifests." in html
         assert "MASIMPLE CICD" in html and "Go back" in html
 
+    def test_htmx_page_load_gets_html_403(self, perm_client, manifest_id):
+        # hx-boost sends fetch-mode requests too; HX-Request marks them as page loads.
+        response = perm_client("deployment_manifest.view").post(
+            f"/deployment-manifests/{manifest_id}/edit", data={}, headers={"Sec-Fetch-Mode": "cors", "HX-Request": "true"}
+        )
+        assert response.status_code == 403
+        assert "Go back" in response.get_data(as_text=True)
+
     def test_fetch_request_gets_json_403(self, perm_client):
         response = perm_client("deployment_manifest.view").post(
             "/deployment-manifests/reorder", json={}, headers={"Sec-Fetch-Mode": "cors"}

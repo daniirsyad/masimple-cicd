@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onPageReady(() => {
   const csrfToken = document.getElementById("yaml-generator-page")?.dataset.csrf;
 
   // --- Kind switcher: exactly one of the 5 per-kind <form> fieldsets is

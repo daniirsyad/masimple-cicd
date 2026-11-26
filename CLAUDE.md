@@ -8,7 +8,7 @@ Guidance for AI agents working in this repository.
 - **ORM/Migrations**: Flask-SQLAlchemy + Flask-Migrate (Alembic)
 - **Database**: PostgreSQL (UUID primary keys everywhere)
 - **Auth**: Flask-Login (session-based) + Flask-WTF (CSRF) + Werkzeug password hashing
-- **Frontend**: Jinja2 templates + TailwindCSS 3 + daisyUI 4 (no JS framework/SPA); vanilla JS + vendored SortableJS for drag-and-drop
+- **Frontend**: Jinja2 templates + TailwindCSS 3 + daisyUI 4 (no JS framework); vanilla JS + vendored SortableJS for drag-and-drop. Vendored htmx with `hx-boost` on `<body>` makes links and forms load without a full page reload (server-rendered pages unchanged)
 - **Deployment**: Docker (multi-stage: Node build for CSS, then Python/gunicorn), Docker Compose (`web` + `db` services)
 - **Config/env**: `python-dotenv`, `.env` file
 - **Tests**: pytest, hitting a real Postgres test DB (not sqlite/mocked)
@@ -58,6 +58,7 @@ Menus (sidebar/navbar) are DB-driven (`Menu` model), rendered dynamically per us
 - **Jinja gotcha**: the body of a `{% call %}` block (and other literal template text) is raw HTML, not autoescaped — a placeholder like `<app-deployment>` inside a `<pre>` is parsed as a tag and vanishes. Write `&lt;...&gt;`
 - **daisyUI gotcha**: `.collapse` is `display: grid; overflow: hidden`, so wide content (a long `<pre>`) grows the column and gets clipped instead of scrolling. Add `grid-cols-1` (`minmax(0, 1fr)`) to the collapse element
 - Flash categories map directly to daisyUI alert classes (`success`, `error`, `info`)
+- **Page scripts under hx-boost** ([app/static/js/page.js](app/static/js/page.js)): htmx swaps `<body>`, so `DOMContentLoaded` fires once per real load and timers/listeners outlive their page. Start page JS with `onPageReady(() => {...})`, never `DOMContentLoaded`; poll with `pageInterval(fn, ms)`; give window/document listeners and polling `fetch()` `{ signal: pageSignal() }`; stop anything else (EventSource, chained `setTimeout`) with `onPageLeave(fn)`; re-fetch the page with `refreshPage()`, not `location.reload()`. Scripts loaded once in `<head>` (sidebar/theme/modal-form) use `onEveryPage(fn)`. A page's `{% block extra_head %}` is not loaded on htmx navigation, so shared CSS goes in `base.html`'s head. A form whose submit JS handles itself (`preventDefault` + fetch) needs `hx-boost="false"`, since htmx submits it anyway; for the same reason, don't sync a field into a form on `submit` (the YAML editor saves on every change instead). Modal-on-validation-error uses `<main data-open-modal>`, not `<body>`
 
 ## Business Rules / Domain Logic
 
@@ -67,11 +68,14 @@ Menus (sidebar/navbar) are DB-driven (`Menu` model), rendered dynamically per us
 - A menu that still has children cannot be deleted, and cannot be re-parented (must stay top-level)
 - Roles with `is_system=True` are built-in and must not be deletable
 - Every login/logout/failed-login and every create/update/delete on users/roles/menus should write an `ActivityLog` row
+- **A build's git changes are captured at build time, never re-read later** (a force-push can make the old range unreadable): the worker saves `ImageBuild.commit_sha`, the `ImageBuildCommit` rows and `ImageBuild.changed_files` right after the repo sync, and writes the same data into the build log (`_record_commit_history`, `_format_changes` in [app/services/build/worker.py](app/services/build/worker.py)). All of it is best-effort: a git read failing must not fail the build. Pages that show a build's changes (Documentation, Images) get them from `commit_range_for_image()` in [app/services/build/history.py](app/services/build/history.py); `changed_files` is `None` for builds made before it existed, so templates must handle "not recorded"
 
 ## Do NOT Touch
 
 - `app/static/dist/` — generated Tailwind output (built by `npm run build:css` / Docker asset stage), not hand-edited
 - `app/static/vendor/sortablejs/Sortable.min.js` — vendored third-party file, copied from `node_modules`, not edited directly
+- `app/static/vendor/htmx/htmx.min.js` — vendored htmx 2.0.11, copied from `node_modules/htmx.org/dist`
+- `app/static/vendor/codemirror/` (incl. `addon/`) — vendored CodeMirror 5.65.21 core + addons, copied from `node_modules/codemirror`; keep addon versions matching the core
 - `migrations/versions/*` — Alembic-generated migrations; create new ones via `flask db migrate`, don't hand-edit existing ones
 - `migrations/env.py`, `alembic.ini`, `script.py.mako` — Alembic scaffolding
 - `.env` — real secrets/DB credentials, never commit or print its contents
@@ -82,5 +86,7 @@ Menus (sidebar/navbar) are DB-driven (`Menu` model), rendered dynamically per us
 - Run tests: `source .venv/bin/activate && python -m pytest tests/ -v` (needs `requirements-dev.txt`)
 - A long-running `flask run` dev server does not always reload when _new_ blueprint modules are added (only edits to already-imported files trigger the reloader) — a full restart may be needed after adding a new blueprint
 - CSRF protection (`Flask-WTF`) is active on all POST endpoints except under `TestingConfig`, where it's disabled
+- Test fakes for the git provider (`_FakeGitProvider` in `tests/test_worker.py`, `_FakePreviewGitProvider` in `tests/test_builders.py`) are duck-typed, not `GitProvider` subclasses: when you add a method to `GitProvider` that the worker or preview calls, add it to the fakes too, or the tests silently take the best-effort "git failed" path
+- `flask db migrate` compares against the local dev database, so that database must be at head first (`flask db current`). A new migration isn't applied to the dev database until `flask db upgrade`; the Docker entrypoint runs it on startup
 - `reorder_menus()` expects a specific JSON shape (`{"top_level": [...], "children": {parent_id: [child_id, ...]}}`) and rejects payloads that would create depth > 1
 - **Always update `SESSION_START.md`'s "Current state" section (and `APP_SUMMARY.md` if the change affects current-state architecture/features) at the end of any substantive session** — new feature, bug fix, architecture change, or DB/manifest edits made directly outside git — without waiting to be asked. Follow the existing style: a numbered list under a "This session's work" bullet, with prior sessions' bullets relabeled down a tier (see the file's own history for the cascade)

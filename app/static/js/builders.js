@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onPageReady(() => {
   // --- Repo -> branch/dockerfile cascading (create + each edit form) ---
   document.querySelectorAll(".builder-form").forEach((form) => {
     const repoSelect = form.querySelector(".repo-select");
@@ -334,11 +334,15 @@ document.addEventListener("DOMContentLoaded", () => {
       () => {
         if (!dropdown.classList.contains("hidden")) positionDropdown();
       },
-      true
+      { capture: true, signal: pageSignal() }
     );
-    window.addEventListener("resize", () => {
-      if (!dropdown.classList.contains("hidden")) positionDropdown();
-    });
+    window.addEventListener(
+      "resize",
+      () => {
+        if (!dropdown.classList.contains("hidden")) positionDropdown();
+      },
+      { signal: pageSignal() }
+    );
 
     renderPills();
 
@@ -555,7 +559,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function poll() {
-      fetch("/builders/status")
+      fetch("/builders/status", { signal: pageSignal() })
         .then((r) => r.json())
         .then((data) => {
           if (!data.busy) {
@@ -564,7 +568,7 @@ document.addEventListener("DOMContentLoaded", () => {
               // finished — each row's "Last Build" column is static
               // server-rendered HTML from page load, so it wouldn't pick
               // up the new status/version without a reload.
-              window.location.reload();
+              refreshPage();
               return;
             }
             if (wasBusy !== false) {
@@ -597,6 +601,6 @@ document.addEventListener("DOMContentLoaded", () => {
         .catch(() => {});
     }
     poll();
-    setInterval(poll, 3000);
+    pageInterval(poll, 3000);
   }
 });

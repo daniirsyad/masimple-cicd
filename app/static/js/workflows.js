@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onPageReady(() => {
   const csrfToken = document.getElementById("workflow-view-page")?.dataset.csrf;
 
   // --- Step drag-and-drop reordering (workflows/view.html) — same Sortable
@@ -25,7 +25,7 @@ document.addEventListener("DOMContentLoaded", () => {
           alert(err.message);
           // A failed reorder leaves the DB order as it was — reloading shows
           // the real (unreordered) state rather than silently drifting.
-          window.location.reload();
+          refreshPage();
         }
       },
     });
@@ -141,12 +141,12 @@ document.addEventListener("DOMContentLoaded", () => {
     let lastIndexSnapshot = null;
 
     function pollIndexStatuses() {
-      fetch(indexStatusUrl)
+      fetch(indexStatusUrl, { signal: pageSignal() })
         .then((response) => response.json())
         .then((data) => {
           const snapshot = JSON.stringify(data);
           if (lastIndexSnapshot !== null && snapshot !== lastIndexSnapshot) {
-            window.location.reload();
+            refreshPage();
             return;
           }
           lastIndexSnapshot = snapshot;
@@ -154,7 +154,7 @@ document.addEventListener("DOMContentLoaded", () => {
         .catch(() => {});
     }
     pollIndexStatuses();
-    setInterval(pollIndexStatuses, 5000);
+    pageInterval(pollIndexStatuses, 5000);
   }
 
   // --- Run detail page (workflows/run.html) — polls run_status() and
@@ -223,13 +223,15 @@ document.addEventListener("DOMContentLoaded", () => {
     return row;
   }
 
+  // Captured once: a poll still chained after leaving the page sees it aborted and stops.
+  const signal = pageSignal();
   function poll() {
-    fetch(statusUrl)
+    fetch(statusUrl, { signal })
       .then((response) => response.json())
       .then((data) => {
         const nowAwaitingReview = data.step_runs.some((stepRun) => stepRun.status === "awaiting_review");
         if (nowAwaitingReview && !hadAwaitingReview) {
-          window.location.reload();
+          refreshPage();
           return;
         }
         hadAwaitingReview = nowAwaitingReview;
@@ -247,7 +249,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       })
       .catch(() => {
-        setTimeout(poll, 2000);
+        if (!signal.aborted) setTimeout(poll, 2000);
       });
   }
 

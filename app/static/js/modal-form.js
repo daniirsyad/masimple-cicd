@@ -23,8 +23,11 @@
   };
 })();
 
-document.addEventListener("DOMContentLoaded", () => {
-  const modalId = document.body.dataset.openModal;
+onEveryPage(() => {
+  // A dialog removed by an htmx page swap never fires "close".
+  document.documentElement.style.paddingRight = "";
+
+  const modalId = document.querySelector("main[data-open-modal]")?.dataset.openModal;
   if (!modalId) return;
 
   const dialog = document.getElementById(modalId);

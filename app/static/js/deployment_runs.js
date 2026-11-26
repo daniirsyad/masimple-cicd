@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onPageReady(() => {
   const statusEl = document.getElementById("deployment-runs-status-content");
   if (!statusEl) return;
 
@@ -25,14 +25,14 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function poll() {
-    fetch("/deployment-runs/status")
+    fetch("/deployment-runs/status", { signal: pageSignal() })
       .then((r) => r.json())
       .then((data) => {
         if (!data.busy) {
           if (wasBusy === true) {
             // A deploy that was running just finished — the run/execution
             // rows below are static server-rendered HTML from page load.
-            window.location.reload();
+            refreshPage();
             return;
           }
           if (wasBusy !== false) {
@@ -67,7 +67,7 @@ document.addEventListener("DOMContentLoaded", () => {
       .catch(() => {});
   }
   poll();
-  setInterval(poll, 3000);
+  pageInterval(poll, 3000);
 
   // --- Configurable page auto-refresh — a full reload at the interval the
   // user picks (independent of the 3s status-widget poll above), so new
@@ -84,7 +84,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function applyAutoRefresh() {
       if (autoRefreshTimer) clearInterval(autoRefreshTimer);
       const ms = parseInt(autoRefreshSelect.value, 10);
-      if (ms > 0) autoRefreshTimer = setInterval(() => window.location.reload(), ms);
+      if (ms > 0) autoRefreshTimer = setInterval(refreshPage, ms);
     }
 
     autoRefreshSelect.addEventListener("change", () => {
@@ -93,5 +93,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     applyAutoRefresh();
+    onPageLeave(() => clearInterval(autoRefreshTimer));
   }
 });

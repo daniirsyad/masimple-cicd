@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onPageReady(() => {
   const statusEl = document.getElementById("images-status-content");
   if (!statusEl) return;
 
@@ -26,7 +26,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function poll() {
-    fetch("/images/status")
+    fetch("/images/status", { signal: pageSignal() })
       .then((r) => r.json())
       .then((data) => {
         if (!data.busy) {
@@ -35,7 +35,7 @@ document.addEventListener("DOMContentLoaded", () => {
             // earlier poll) just finished — the batch/build rows below are
             // static server-rendered HTML from page load, so nothing else
             // on the page would reflect the new status without a reload.
-            window.location.reload();
+            refreshPage();
             return;
           }
           if (wasBusy !== false) {
@@ -73,5 +73,5 @@ document.addEventListener("DOMContentLoaded", () => {
       .catch(() => {});
   }
   poll();
-  setInterval(poll, 3000);
+  pageInterval(poll, 3000);
 });

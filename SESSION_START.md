@@ -27,8 +27,92 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1142 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below): a user with only
+- **1143 tests passing** (as of the last full run).
+- **This session's work** (on top of everything below) — the YAML editor on
+  Deployment Manifests (asked: "the modal must be full, and it scrolls right
+  with the modal's bottom scrollbar instead of the editor's"; then "make the
+  YAML editor easy to use and edit").
+  1. **Root cause of the sideways scroll**: the Edit/View modal wraps its
+     fields in a `<fieldset>` (added for the read-only View), and browsers
+     give a fieldset `min-width: min-content`. With line wrapping off, one
+     long YAML line widened the fieldset past the modal. Fix: `min-w-0` on
+     the fieldset and the editor wrapper. Long lines now scroll inside the
+     editor.
+  2. **Bigger modal and editor**: Create/Edit modals are `w-11/12
+     max-w-none`; the editor is `60vh` tall via a new `yaml-editor-tall`
+     class (manifests only — Servers and YAML Generator keep 260px).
+  3. **Editor behavior** (`yaml_editor.js`, so shared by all three pages):
+     Tab over a selection indents the lines (before, it replaced the
+     selection with spaces), Shift-Tab dedents, `Ctrl+/`/`Cmd+/` toggles
+     `#` comments, pasted/typed tab characters become two spaces (a tab is
+     a YAML syntax error), and `{{SYS:VERSION}}`/`{{SYS:VERSION:key}}` are
+     highlighted (same pattern as `resolver.PLACEHOLDER_PATTERN`). Active
+     line and fold-by-indentation are enabled only where the addons are
+     loaded (feature-detected via `CodeMirror.fold`).
+  4. **Manifest page only**: new vendored CodeMirror addons in
+     `app/static/vendor/codemirror/addon/` (active-line, comment, foldcode,
+     foldgutter, indent-fold — copied from `node_modules/codemirror` 5.65.21,
+     same version as the core); a "+ {{SYS:VERSION}}" button that inserts at
+     the cursor; a status bar under the editor with key hints and
+     "Line N, column N". Fold-gutter/placeholder/active-line colors use
+     daisyUI theme variables in `input.css`.
+  5. **Checked** in headless Chromium against the real rendered page (light
+     and dark, 1440px and 900px): modal doesn't scroll sideways, editor
+     does; Tab/Shift-Tab, comment toggle, tab-to-spaces, insert button,
+     cursor position and folding all driven and asserted. 126 tests for the
+     manifest/server/YAML-generator/view-only pages pass; full suite not run.
+  6. **SPA-style navigation with htmx** (asked: "make the site like a
+     single page application, every action reloads the page"). Chose
+     `hx-boost` over a real SPA rewrite: every link/form loads in the
+     background and swaps `<body>`, routes/templates/flash/permission checks
+     unchanged. Vendored `app/static/vendor/htmx/htmx.min.js` (2.0.11, also
+     in `package.json` devDependencies). Config in a `<meta name=
+     "htmx-config">` in `base.html`: no history cache (Back does a real
+     reload), error responses swapped too (so 403/500 pages show), no
+     scroll-to-top on boost.
+  7. **New `app/static/js/page.js`** (head): `onPageReady`, `onEveryPage`,
+     `pageSignal`/`onPageLeave` (one AbortController per page, aborted on
+     the body swap), `pageInterval`, `refreshPage` (htmx GET of the current
+     URL). Also: a form posting back to the same page keeps its scroll
+     position, other pages start at the top; a response that lands on
+     `/login` (expired session) is loaded for real.
+  8. **Every page script converted**: `DOMContentLoaded` -> `onPageReady`
+     (15 files); sidebar/theme/modal-form moved into `<head>` and run via
+     `onEveryPage` (so the collapsed sidebar doesn't flash open);
+     status polls in builders/images/deployment_runs/workflows use
+     `pageInterval` + `fetch(..., { signal })`; workflow run page's chained
+     `setTimeout` stops when aborted; pod Describe polling and Logs
+     EventSource stop on leave; window/document listeners in builders and
+     documentation_filters take `pageSignal()`; all 8
+     `location.reload()` calls -> `refreshPage()`.
+  9. **Other fixes the swap needed**: `data-open-modal` moved from `<body>`
+     to `<main>` (htmx doesn't update body attributes); CodeMirror CSS moved
+     from 5 pages' `extra_head` into `base.html` (head isn't swapped); YAML
+     editor saves to its textarea on every change instead of on submit
+     (htmx reads the form first); `hx-boost="false"` on Logout and the pod
+     logs container form (JS-handled submit); Builders' version filter uses
+     `requestSubmit()`; the 403 handler returns the HTML page when
+     `HX-Request` is set (htmx requests aren't `navigate` mode, so they'd
+     have got JSON). New test `test_htmx_page_load_gets_html_403`.
+  10. **Checked** against a real running app (test DB, seeded admin) in
+     headless Chromium: 20 pages navigated with no full reload and no
+     console errors; manifest save swaps in the flash with no reload;
+     validation error reopens the modal with a working editor; deploy-runs
+     polling stops after leaving (0 requests in 7s); theme/sidebar toggles
+     fire once after several swaps and the collapsed sidebar persists;
+     Back works; expired session goes to the real login page. Full suite:
+     1142 passed (before the new test; 1143 with it).
+     Not checked: a real build/deploy finishing (`refreshPage` after a
+     poll sees the status change), Sortable reorder, pod logs against a
+     real cluster.
+  11. **Flash colors fixed** (pre-existing): flashes build their class as
+     `alert-{{ category }}`, which Tailwind's scanner can't see, so
+     `alert-success`/`alert-info` were never generated and those flashes
+     rendered grey (errors were fine only because `alert-error` appears
+     literally elsewhere). Added a `safelist` for the four alert classes in
+     `tailwind.config.js`; covers base.html, login, setup, reset/forgot
+     password at once.
+- **A prior session's work** (on top of everything below): a user with only
   `deployment_manifest.view` could open Edit, change the YAML, and on Save got
   Flask's bare unstyled "403 Forbidden" page. Fixed app-wide.
   1. **App-wide 403 handler** (`app/__init__.py`, new
@@ -96,7 +180,7 @@ Then ask me what to work on next rather than assuming.
      The Documentation list shows an "N commits" badge per batch (one
      grouped count query). Not done: writing the changes into the saved
      Description text.
-- **A prior session's work** (on top of everything below) — after a real
+- **An earlier session's work** (on top of everything below) — after a real
   "Cannot reach Docker daemon … 10.5.0.38:2376 … Connection refused" from
   Test Connection (diagnosed as dockerd not listening on TCP at all, not an
   app bug), added a TLS setup guide for a remote Docker host to `/config`.
@@ -139,7 +223,7 @@ Then ask me what to work on next rather than assuming.
      root@<host>:/etc/docker/certs/{ca,cert,key}.pem .`). The user ran the
      test command where the files weren't, and docker failed with "open
      ca.pem: no such file or directory".
-- **An earlier session's work** (on top of everything below) — answered "can the
+- **A session before that's work** (on top of everything below) — answered "can the
   Docker build engine use a Docker host while this app runs in a pod?" (yes:
   hostPath-mount the node's socket if the node runs dockerd, or point
   `DOCKER_HOST` at a remote daemon), then made that configurable in the UI.
@@ -162,7 +246,7 @@ Then ask me what to work on next rather than assuming.
      (connected), a closed TCP port, and a missing socket. Not tried in a
      real browser.
   4. 5 new tests (`tests/test_system_config.py`, `tests/test_build_factory.py`).
-- **A session before that's work** (on top of everything below) — diagnosed a
+- **Two sessions before that's work** (on top of everything below) — diagnosed a
   "`/deployment-manifests` is very slow" report (started from a pasted,
   truncated `SELECT deployment_executions.* ...` query).
   1. **Root cause: `deployment_executions` had no index on `(manifest_id,
@@ -213,7 +297,7 @@ Then ask me what to work on next rather than assuming.
   query per request is the next step if the page is still slow in prod
   after this migration. Production's own `EXPLAIN` was not checked from
   this session.
-- **Two sessions before that's work** (on top of everything below) — a real production
+- **Three sessions before that's work** (on top of everything below) — a real production
   bug report plus a cluster of small, directly-requested Workflow UX
   additions, each implemented and pushed as its own commit rather than
   batched into one.
@@ -294,7 +378,7 @@ Then ask me what to work on next rather than assuming.
   (`TestPollLoopHandlesATickException`). 1086 → 1102 tests; full suite
   re-run clean after each of the four points above, not just at the end —
   each was its own commit and push, per direct request.
-- **Three sessions before that's work** (on top of everything below) — a full Discord bot
+- **Four sessions before that's work** (on top of everything below) — a full Discord bot
   integration, feature-parity with the existing Telegram integration (both
   directions: outbound notifications and inbound commands). Scoped up front
   via AskUserQuestion (Discord Gateway WebSocket transport, not an HTTP
@@ -512,7 +596,7 @@ Then ask me what to work on next rather than assuming.
        full suite re-run clean (an earlier run showed spurious failures in
        unrelated files purely from two `pytest` processes hitting the same
        Postgres test DB concurrently — a re-run by itself was clean).
-- **Four sessions before that's work** (on top of everything below) — Deploy/Update/
+- **Five sessions before that's work** (on top of everything below) — Deploy/Update/
   Restart's rollout wait (see the prior session's work just below for how
   that wait itself was added) now stops immediately on an obviously-fatal
   pod state instead of blocking out the full configured timeout — requested
@@ -564,7 +648,7 @@ Then ask me what to work on next rather than assuming.
   alongside the existing timeout description. No migration needed — no
   model/schema change, this only changes `KubernetesProvider`'s own internal
   polling.
-- **Five sessions before that's work** (on top of everything below):
+- **Six sessions before that's work** (on top of everything below):
   1. **Deploy/Update/Restart now waits for the rollout to actually become
      Ready before counting as a success, with a configurable timeout** —
      planned via plan-mode (AskUserQuestion locked the design up front, then
@@ -626,7 +710,7 @@ Then ask me what to work on next rather than assuming.
      SortableJS's drag-reorder still initializes fine against the collapsed
      table since daisyUI hides collapse content via a zero-height grid row,
      not `display:none`.
-- **Six sessions before that's work** (on top of everything below) — pressing Build,
+- **Seven sessions before that's work** (on top of everything below) — pressing Build,
   Deploy, Update, Stop, or Restart (single or "Whole group") on the
   Builders / Deployment Manifests index pages no longer navigates away to
   the Images / Deployment Runs list on success — it stays on the same
@@ -648,7 +732,7 @@ Then ask me what to work on next rather than assuming.
   `/deployment-manifests/` accordingly; no new tests added since this is a
   redirect-target/flash-content change to already-covered routes, not new
   behavior. No migration needed.
-- **Seven sessions before that's work** (on top of everything below) — the Telegram bot
+- **Eight sessions before that's work** (on top of everything below) — the Telegram bot
   integration (previously Workflow-only: `/run`/`/status`/`/review`) can now
   also trigger manual, non-Workflow Builds and Deployment Manifest
   actions — requested directly, not via plan-mode. No migration needed.
@@ -731,7 +815,7 @@ Then ask me what to work on next rather than assuming.
   disabled-manifest and "nothing currently deployed" edge cases for
   deploy/stop, the AI-prefill confident-vs-not-confident branches (plus
   Confirm/Cancel) for Build, and the mixed-Version group-build rejection.
-- **Eight sessions before that's work** (on top of everything below) — two independent bug
+- **Nine sessions before that's work** (on top of everything below) — two independent bug
   fixes in the Deployment/Workflow pipeline, found via direct user reports
   rather than the test suite. No migration needed for either. Two commits,
   `45464ac` and `95d3b93`.
@@ -790,7 +874,7 @@ Then ask me what to work on next rather than assuming.
      duplicate rows from before the fix; they're inert leftovers (no
      corruption, just wasted redundant builds), and that one run will keep
      showing 3x "Build" until this fix is actually deployed there.
-- **Nine sessions before that's work** (on top of everything below) — the "kaniko" build
+- **Ten sessions before that's work** (on top of everything below) — the "kaniko" build
   engine now actually works, for a self-hosted deploy onto a real
   Kubernetes + CRI-O cluster (<CLUSTER_NAME>) with no Docker-compatible socket
   to mount at all. No migration needed. Two commits, `928fa53` and
@@ -850,7 +934,7 @@ Then ask me what to work on next rather than assuming.
     through this app — including future builds of itself — should work
     end-to-end. The RBAC manifest also still needs an actual Deploy once
     <CLUSTER_NAME>'s cert is sorted.
-- **Ten sessions before that's work** (on top of everything below) — commit messages
+- **Eleven sessions before that's work** (on top of everything below) — commit messages
   now drive Bump Type/Object(s)/Change Type more directly, plus a way to
   actually try that out and understand it from `/ai-settings`. No
   migration needed for any of it.
@@ -927,7 +1011,7 @@ Then ask me what to work on next rather than assuming.
   (+6, explicit word recognition and its priority over conflicting
   markers), `tests/test_ai_settings.py` (+6, the tester route including a
   regression test for the `is_submitted()` bug above).
-- **Eleven sessions before that's work** (on top of everything below) — a Telegram bot
+- **Twelve sessions before that's work** (on top of everything below) — a Telegram bot
   integration, built in three parts in sequence (the first two planned via
   plan-mode with the user before implementation; the third — build/deploy
   notifications — was a small enough follow-up request to just implement
@@ -1042,7 +1126,7 @@ Then ask me what to work on next rather than assuming.
   (start/finish hooks + the workflow-driven skip); plus additions to the
   existing `tests/test_telegram.py` (`notify_run_finished`,
   `notify_awaiting_review`).
-- **Twelve sessions before that's work** (on top of everything below), already
+- **Thirteen sessions before that's work** (on top of everything below), already
   committed and pushed to `origin/main`:
   1. **Workflow build steps can auto-generate their Version Bump/Change
      Type/Object/Message at run time instead of requiring them typed in at
@@ -1133,7 +1217,7 @@ Then ask me what to work on next rather than assuming.
   the features themselves: the `menus` and `permissions` blueprints had **no
   test file at all** before this session (`tests/test_menus.py`,
   `tests/test_permissions.py` are new).
-- **Thirteen sessions before that's work** (on top of everything below), already
+- **Fourteen sessions before that's work** (on top of everything below), already
   pushed to `origin/main`:
   1. **The container image never had `kubectl` installed at all** — every
      `DeploymentServer` action (test-connection, apply/delete, pods/

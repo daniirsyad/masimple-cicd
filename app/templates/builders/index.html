@@ -42,7 +42,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
     <form method="get" class="mt-2 flex items-end gap-3">
       <div>
         <label class="label text-sm">Version</label>
-        <select name="version_id" class="select select-bordered select-sm" onchange="this.form.submit()">
+        <select name="version_id" class="select select-bordered select-sm" onchange="this.form.requestSubmit()">
           <option value="">All</option>
           {% for version in versions %}
           <option value="{{ version.id }}" {{ 'selected' if selected_version_id == version.id|string else '' }}>

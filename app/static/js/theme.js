@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onEveryPage(() => {
   const STORAGE_KEY = "theme";
   const toggle = document.getElementById("theme-toggle");
   if (!toggle) return;

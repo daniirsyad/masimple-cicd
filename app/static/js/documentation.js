@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onPageReady(() => {
   function parseJsonData(elementId) {
     const dataEl = document.getElementById(elementId);
     if (!dataEl) return [];

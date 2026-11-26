@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onPageReady(() => {
   // --- Version Type field: a searchable dropdown of previously-used values
   // layered on top of a plain text input — typing a brand-new value is
   // always still accepted on submit (routes.py creates it if unseen), this

@@ -93,7 +93,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | ORM / Migrations | Flask-SQLAlchemy + Flask-Migrate (Alembic) |
 | Database | PostgreSQL, UUID primary keys everywhere |
 | Auth | Flask-Login (session-based) + Flask-WTF (CSRF) + Werkzeug password hashing |
-| Frontend | Jinja2 + Tailwind CSS 3 + daisyUI 4 — **no JS framework/SPA**; vanilla JS per page, vendored SortableJS for drag-and-drop |
+| Frontend | Jinja2 + Tailwind CSS 3 + daisyUI 4 — **no JS framework**; vanilla JS per page, vendored SortableJS for drag-and-drop. Vendored htmx (`hx-boost` on `<body>`) loads every link/form in the background and swaps `<body>`, so the app navigates like an SPA while every page stays server-rendered; page scripts follow the lifecycle helpers in `app/static/js/page.js` (`onPageReady`, `pageInterval`, `pageSignal`, `onPageLeave`, `refreshPage`) |
 | Background work | Python `threading`/`queue` — independent in-process worker threads (one for builds, one for deploys, one deploy live-status poller, one workflow orchestrator, one Telegram bot long-poller, one Discord Gateway WebSocket connection), no Celery/Redis |
 | Deployment (of MASIMPLE CICD itself) | Docker (multi-stage: Node build for CSS, then Python/gunicorn `--worker-class gthread --threads 4`), Docker Compose (`web` + `db`) |
 | Git integration | GitPython, provider-abstracted (`GitProvider` → `GitHubProvider`) |

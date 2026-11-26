@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+onPageReady(() => {
   const tree = document.getElementById("menu-tree");
   if (!tree || typeof Sortable === "undefined") return;
 

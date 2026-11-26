@@ -133,11 +133,15 @@ def create_app(config_name=None):
         message = exc.description
         if not message or message == Forbidden.description:
             message = "You don't have access to this item."
-        wants_json = (
-            "/api/" in request.path
-            or request.is_json
-            or request.headers.get("Sec-Fetch-Mode", "navigate") != "navigate"
-            or request.accept_mimetypes.best == "application/json"
+        # htmx (hx-boost) loads pages with fetch-mode requests too, but marks
+        # them with HX-Request: those still want the page.
+        wants_json = "/api/" in request.path or (
+            not request.headers.get("HX-Request")
+            and (
+                request.is_json
+                or request.headers.get("Sec-Fetch-Mode", "navigate") != "navigate"
+                or request.accept_mimetypes.best == "application/json"
+            )
         )
         if wants_json:
             return jsonify(ok=False, error=message, message=message), 403
