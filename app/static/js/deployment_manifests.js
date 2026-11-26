@@ -35,6 +35,71 @@ onPageReady(() => {
     }
   });
 
+  // --- Type switch: Kubernetes YAML vs. Helm chart. The Helm fields and
+  // the "values" wording only show for Helm; the editor stays the same. ---
+  document.querySelectorAll(".deployment-manifest-form").forEach((form) => {
+    const sync = () => {
+      const isHelm = form.querySelector(".manifest-type-input:checked")?.value === "helm";
+      form.querySelectorAll(".helm-only").forEach((el) => el.classList.toggle("hidden", !isHelm));
+      const label = form.querySelector(".yaml-content-label");
+      if (label) label.textContent = isHelm ? "Values (values.yaml)" : "YAML";
+    };
+    form.querySelectorAll(".manifest-type-input").forEach((input) => input.addEventListener("change", sync));
+
+    const syncChartSource = () => {
+      const isUpload = form.querySelector(".chart-source-input:checked")?.value === "upload";
+      form.querySelectorAll(".chart-repo-only").forEach((el) => el.classList.toggle("hidden", isUpload));
+      form.querySelectorAll(".chart-upload-only").forEach((el) => el.classList.toggle("hidden", !isUpload));
+    };
+    form.querySelectorAll(".chart-source-input").forEach((input) => input.addEventListener("change", syncChartSource));
+  });
+
+  document.querySelectorAll(".helm-load-defaults-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const form = btn.closest("form");
+      const status = form.querySelector(".helm-defaults-status");
+      const field = (name) => form.querySelector(`[name$="${name}"]`)?.value.trim() || "";
+      const cm = yamlEditors[btn.dataset.yamlInputId];
+      if (cm && cm.getValue().trim() && !confirm("Replace what's in the editor with the chart's default values?")) return;
+
+      btn.disabled = true;
+      status.textContent = "Loading chart defaults...";
+      status.classList.remove("text-error");
+      try {
+        // Multipart, so a chart file picked but not saved yet can go along.
+        const body = new FormData();
+        const source = form.querySelector(".chart-source-input:checked")?.value || "repo";
+        body.append("source", source);
+        body.append("manifest_id", btn.dataset.manifestId);
+        if (source === "upload") {
+          const file = form.querySelector(".helm-chart-file-input")?.files[0];
+          if (file) body.append("chart_file", file);
+          body.append("upload_version", form.querySelector(".helm-chart-upload-version")?.value || "");
+        } else {
+          body.append("repo", field("helm_chart_repo"));
+          body.append("name", field("helm_chart_name"));
+          body.append("version", field("helm_chart_version"));
+          body.append("username", field("helm_repo_username"));
+          body.append("password", form.querySelector('[name$="helm_repo_password"]')?.value || "");
+        }
+        const response = await fetch("/deployment-manifests/api/helm-default-values", {
+          method: "POST",
+          headers: { "X-CSRFToken": csrfToken },
+          body,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!data.ok) throw new Error(data.error || "Couldn't load the chart's default values.");
+        if (cm) cm.setValue(data.values);
+        status.textContent = "";
+      } catch (err) {
+        status.textContent = err.message;
+        status.classList.add("text-error");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
   document.querySelectorAll(".yaml-insert-placeholder-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const cm = yamlEditors[btn.dataset.yamlInputId];

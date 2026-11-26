@@ -58,6 +58,12 @@ class DeploymentExecution(db.Model):
     # audit — never mutated after the fact even if the manifest itself is
     # later edited.
     rendered_yaml = db.Column(db.Text, nullable=True)
+    # Helm manifests only: the release this execution installed (or acts
+    # on), so a later Stop/Restart/status check uses what was actually
+    # installed even if the manifest's release name/namespace was edited.
+    # rendered_yaml then holds the resolved values file.
+    helm_release_name = db.Column(db.String, nullable=True)
+    helm_namespace = db.Column(db.String, nullable=True)
     # "queued" / "running" / "success" / "failed" / "skipped" — "skipped" is
     # only ever set on remaining queued executions of a run once another
     # execution in that same run has failed (see worker._update_run_status),

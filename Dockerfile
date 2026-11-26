@@ -46,6 +46,18 @@ RUN curl -fsSL -o /usr/local/bin/kubectl \
       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/$(dpkg --print-architecture)/kubectl" \
     && chmod +x /usr/local/bin/kubectl
 
+# helm: Helm chart manifests (DeploymentManifest.source_type="helm") deploy
+# with `helm upgrade --install` (app/services/deployment/helm.py). Pinned,
+# and checked against the release's published sha256 before installing.
+ARG HELM_VERSION=v4.3.2
+RUN arch="$(dpkg --print-architecture)" \
+    && cd /tmp \
+    && curl -fsSLO "https://get.helm.sh/helm-${HELM_VERSION}-linux-${arch}.tar.gz" \
+    && curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${arch}.tar.gz.sha256sum" | sha256sum -c - \
+    && tar -xzf "helm-${HELM_VERSION}-linux-${arch}.tar.gz" "linux-${arch}/helm" \
+    && mv "linux-${arch}/helm" /usr/local/bin/helm \
+    && rm -rf "/tmp/helm-${HELM_VERSION}-linux-${arch}.tar.gz" "/tmp/linux-${arch}"
+
 # docker CLI + buildx plugin: the "docker" build engine (see
 # app/services/build/engine.py) shells out to `docker buildx build` against
 # the mounted host socket, for BuildKit support (RUN --mount, heredocs, ...)

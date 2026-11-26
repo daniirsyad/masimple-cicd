@@ -62,6 +62,26 @@ class DeploymentManifest(db.Model):
     # Capped at 1800s by the form's NumberRange validator for exactly that
     # reason.
     wait_for_ready_timeout_seconds = db.Column(db.Integer, default=300, nullable=False)
+    # "yaml": yaml_content is applied with kubectl. "helm": the manifest is a
+    # Helm release (`helm upgrade --install`) and yaml_content is its values
+    # file, so {{SYS:VERSION}} placeholders and version bindings work the
+    # same way. Helm manifests only target "kube" servers.
+    source_type = db.Column(db.String, default="yaml", server_default="yaml", nullable=False)
+    # Chart repository: an https:// chart repo or an oci:// registry path
+    # (the chart name is appended for OCI). Version is required, so a deploy
+    # never silently picks up a new chart release.
+    # "repo" (helm_chart_repo below) or "upload" (a HelmChartUpload of this
+    # manifest; helm_chart_name/helm_chart_version then mirror the upload
+    # being deployed, so the version string and list badge work the same).
+    helm_chart_source = db.Column(db.String, default="repo", server_default="repo", nullable=False)
+    helm_chart_repo = db.Column(db.String, nullable=True)
+    helm_chart_name = db.Column(db.String, nullable=True)
+    helm_chart_version = db.Column(db.String, nullable=True)
+    helm_release_name = db.Column(db.String, nullable=True)
+    helm_namespace = db.Column(db.String, nullable=True)
+    # Optional {"username", "password"} JSON for a private repo/registry,
+    # Fernet-encrypted like DeploymentServer.encrypted_credentials.
+    encrypted_helm_repo_credentials = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -85,6 +105,17 @@ class DeploymentManifest(db.Model):
     allowed_users = db.relationship(
         "User", secondary=deployment_manifest_users, backref=db.backref("allowed_deployment_manifests", lazy="dynamic")
     )
+
+    @property
+    def is_helm(self):
+        return self.source_type == "helm"
+
+    @property
+    def selected_chart_upload(self):
+        """The uploaded chart this manifest deploys (upload source only)."""
+        if not self.is_helm or self.helm_chart_source != "upload" or not self.helm_chart_version:
+            return None
+        return self.helm_chart_uploads.filter_by(chart_version=self.helm_chart_version).first()
 
     def is_accessible_to(self, user):
         if user.has_permission("deployment_manifest.manage"):

@@ -25,6 +25,7 @@ from app.models.system_config import SystemConfig
 from app.models.deployment_server import DeploymentServer
 from app.models.deployment_manifest import DeploymentManifest
 from app.models.deployment_manifest_version_binding import DeploymentManifestVersionBinding
+from app.models.helm_chart_upload import HelmChartUpload
 from app.models.deployment_run import DeploymentRun
 from app.models.deployment_execution import DeploymentExecution
 from app.models.workflow import Workflow

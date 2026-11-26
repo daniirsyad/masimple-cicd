@@ -99,7 +99,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | Git integration | GitPython, provider-abstracted (`GitProvider` → `GitHubProvider`) |
 | Registry integration | docker-py, provider-abstracted (`RegistryProvider` → `DockerHubProvider`/`GHCRProvider`/`HarborProvider`/`ECRProvider`, all implemented) |
 | Image builds | provider-abstracted (`BuildEngine`): `"docker"` shells out to `docker buildx build` against a Docker/Podman-API daemon: a mounted socket, or a remote one set via `SystemConfig.docker_host` on `/config` (`tcp://`/`ssh://`/`unix://`; blank falls back to the `DOCKER_HOST` env var; "Test Connection" button pings it; a collapsible full-width guide below the form (linked from the field; field and guide only shown while Docker is the selected engine) generates the openssl/`daemon.json`/firewall/`kubectl` commands to set a remote host up for TLS on 2376, filled from the typed host); `"kaniko"` (re-enabled this session — see SESSION_START.md) launches `kaniko-executor` as its own short-lived Kubernetes Job in the app's own namespace instead, for clusters (e.g. CRI-O-backed) with no Docker-compatible socket to mount at all |
-| Kubernetes integration | shells out to the `kubectl` CLI (no `kubernetes` client library), provider-abstracted (`DeploymentProvider` → `KubernetesProvider`/`CustomAPIProvider`) — `kubectl` must be installed wherever MASIMPLE CICD itself runs; pod logs stream via `kubectl logs -f` over Server-Sent Events |
+| Kubernetes integration | shells out to the `kubectl` CLI (no `kubernetes` client library), provider-abstracted (`DeploymentProvider` → `KubernetesProvider`/`CustomAPIProvider`) — `kubectl` must be installed wherever MASIMPLE CICD itself runs; pod logs stream via `kubectl logs -f` over Server-Sent Events. Helm chart manifests shell out to the `helm` CLI (Helm 4 pinned in the Dockerfile; Helm 3 also works, `--atomic` vs `--rollback-on-failure` is picked by version) from `app/services/deployment/helm.py`, each call in its own temporary HELM_*_HOME |
 | AI description generation | provider-abstracted (`AIProvider` → `QwenProvider`/`ClaudeProvider`/`GeminiProvider`/`CustomAPIProvider`, all implemented) |
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
 | AWS SDK | `boto3` — ECR `RegistryProvider` only (SigV4-signed calls, doesn't fit the generic Docker Registry v2 bearer-token flow the other registry providers share) |
@@ -321,6 +321,25 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   JSON for a custom agent), health `status` from a manual "Test Connection"
   check, `allowed_roles` (many-to-many `Role` — empty means locked to
   `deployment_server.manage` users only).
+- `DeploymentManifest` has a `source_type`: `"yaml"` (below) or `"helm"` — a
+  Helm release (`helm_chart_repo` https:// or oci://, `helm_chart_name`,
+  required `helm_chart_version`, `helm_release_name`, `helm_namespace`,
+  optional Fernet-encrypted repo login). For Helm, `yaml_content` is the
+  values file, so placeholders/version bindings/pinning work unchanged.
+  Deploy/Update = `helm upgrade --install` (wait + roll back on failure),
+  Stop = `helm uninstall` of the release recorded on the source execution,
+  Restart = rolling restart of the release's workloads (no downtime, no
+  re-install), live status = `helm status`. Kubernetes servers only; the
+  release name/namespace/type can't change while deployed. The chart
+  version is part of the resolved version string ("helm chart" key), so a
+  chart bump shows as an available update. The form's "Load chart defaults"
+  runs `helm show values`. `helm_chart_source` is `"repo"` or `"upload"`:
+  an uploaded `.tgz` (`HelmChartUpload`: manifest_id, chart name/version
+  read from its Chart.yaml, filename, sha256, size, bytes in Postgres, max
+  10 MB, unique per manifest+version). Every version is kept; the manifest
+  deploys the one matching its `helm_chart_version`, so rolling back is
+  picking an older version and pressing Update. Dependencies must be
+  packaged inside the archive.
 - `DeploymentManifest` — a YAML template with `{{SYS:VERSION}}` /
   `{{SYS:VERSION:key}}` placeholders, one or more `target_servers`
   (many-to-many `DeploymentServer`), an optional `group_name` (manifests
@@ -337,7 +356,7 @@ backs the forgot-password flow: single-use, 15-minute expiry.
 - `DeploymentRun` — one Deploy/Update/Stop/Restart click, `action`
   (`deploy`/`stop`/`restart` — Update reuses `"deploy"`, it's the same
   operation under a different permission/button), aggregate `status`.
-- `DeploymentExecution` — one manifest × one server inside a
+- `DeploymentExecution` (also `helm_release_name`/`helm_namespace` for Helm runs: what was actually installed; `rendered_yaml` then holds the resolved values) — one manifest × one server inside a
   `DeploymentRun`: resolved version string, rendered YAML (audit snapshot,
   never mutated after the fact), status, log, live-status poll result
   (`live_status`/`live_checked_at`), and `source_execution_id`

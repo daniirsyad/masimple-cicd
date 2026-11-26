@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from app.extensions import db
 from app.models import DeploymentExecution, DeploymentRun
 from app.services.deployment.helpers import provider_for_server
+from app.services.deployment.helm import HelmChart
 from app.services.deployment.resolver import UnresolvedPlaceholderError, resolve_manifest
 from app.services.discord.helpers import notify_deploy_finished as discord_notify_deploy_finished
 from app.services.discord.helpers import notify_deploy_started as discord_notify_deploy_started
@@ -382,7 +383,42 @@ def _run_deployment(app, execution_id):
                 log_lines.append(f"Stopping '{manifest.name}' on server '{server.name}'...\n")
                 flush_log()
 
-                result = provider_for_server(server).delete(source.rendered_yaml)
+                if source.helm_release_name:
+                    # Uninstall the release that was actually installed, even
+                    # if the manifest has since been edited.
+                    execution.helm_release_name = source.helm_release_name
+                    execution.helm_namespace = source.helm_namespace
+                    log_lines.append(
+                        f"Uninstalling Helm release '{source.helm_release_name}' "
+                        f"(namespace '{source.helm_namespace}')...\n"
+                    )
+                    flush_log()
+                    result = provider_for_server(server).helm_uninstall(
+                        source.helm_release_name, source.helm_namespace
+                    )
+                else:
+                    result = provider_for_server(server).delete(source.rendered_yaml)
+            elif run_action == "restart" and manifest.is_helm:
+                # A rolling restart of the installed release's workloads —
+                # nothing is re-resolved or re-installed (Deploy/Update does
+                # that), so the snapshot carries over from what's running.
+                verb = "Restart"
+                source = execution.source_execution
+                if source is None or not source.helm_release_name:
+                    raise RuntimeError("No installed Helm release recorded for this execution to restart.")
+                execution.helm_release_name = source.helm_release_name
+                execution.helm_namespace = source.helm_namespace
+                execution.rendered_yaml = source.rendered_yaml
+                execution.resolved_version_string = source.resolved_version_string
+                log_lines.append(
+                    f"Restarting Helm release '{source.helm_release_name}' (namespace "
+                    f"'{source.helm_namespace}') on server '{server.name}'...\n"
+                )
+                flush_log()
+                result = provider_for_server(server).helm_restart(
+                    source.helm_release_name, source.helm_namespace,
+                    wait_timeout_seconds=manifest.wait_for_ready_timeout_seconds,
+                )
             elif run_action == "restart":
                 # Re-resolve from scratch, same as a "deploy" — a restart
                 # should pick up whatever the manifest's current template/
@@ -419,11 +455,26 @@ def _run_deployment(app, execution_id):
                     "; ".join(f"{key}={tag}" for key, tag in resolved_versions.items()) or None
                 )
 
-                log_lines.append(f"Applying to server '{server.name}'...\n")
-                flush_log()
-                result = provider_for_server(server).apply(
-                    rendered_yaml, wait_timeout_seconds=manifest.wait_for_ready_timeout_seconds
-                )
+                if manifest.is_helm:
+                    chart = HelmChart.for_manifest(manifest)
+                    execution.helm_release_name = manifest.helm_release_name
+                    execution.helm_namespace = manifest.helm_namespace
+                    log_lines.append(
+                        f"Installing/upgrading Helm release '{manifest.helm_release_name}' "
+                        f"({chart.label()} from {chart.source_label()}) in namespace '{manifest.helm_namespace}' "
+                        f"on server '{server.name}'...\n"
+                    )
+                    flush_log()
+                    result = provider_for_server(server).helm_upgrade(
+                        chart, manifest.helm_release_name, manifest.helm_namespace, rendered_yaml,
+                        wait_timeout_seconds=manifest.wait_for_ready_timeout_seconds,
+                    )
+                else:
+                    log_lines.append(f"Applying to server '{server.name}'...\n")
+                    flush_log()
+                    result = provider_for_server(server).apply(
+                        rendered_yaml, wait_timeout_seconds=manifest.wait_for_ready_timeout_seconds
+                    )
 
             log_lines.append(result.log or "")
 
@@ -514,7 +565,10 @@ def _refresh_live_status(app):
         for execution in _live_check_candidates():
             try:
                 provider = provider_for_server(execution.server)
-                status = provider.get_live_status(execution.rendered_yaml)
+                if execution.helm_release_name:
+                    status = provider.helm_live_status(execution.helm_release_name, execution.helm_namespace)
+                else:
+                    status = provider.get_live_status(execution.rendered_yaml)
             except NotImplementedError:
                 # This provider type (e.g. "api") has no reliable way to
                 # tell — leave live_status as whatever it already was

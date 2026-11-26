@@ -3,6 +3,7 @@ import re
 from app.models import ImageBuild
 
 DEFAULT_PLACEHOLDER_KEY = "default"
+HELM_CHART_VERSION_KEY = "helm chart"
 
 # {{SYS:VERSION}} (group 1 unmatched -> DEFAULT_PLACEHOLDER_KEY) or
 # {{SYS:VERSION:some_key}} (group 1 -> "some_key").
@@ -86,4 +87,9 @@ def resolve_manifest(manifest):
         return image_build.image_tag
 
     rendered_yaml = PLACEHOLDER_PATTERN.sub(_substitute, manifest.yaml_content)
+    if manifest.is_helm:
+        # Part of the version string, so a chart version change counts as an
+        # available update and shows in the deploy preview. The space keeps
+        # it from ever colliding with a placeholder key.
+        resolved_versions[HELM_CHART_VERSION_KEY] = f"{manifest.helm_chart_name}@{manifest.helm_chart_version}"
     return rendered_yaml, resolved_versions

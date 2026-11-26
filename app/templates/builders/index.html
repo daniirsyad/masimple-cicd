@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Builders -
+{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs, list_search %} {% block title %}Builders -
 MASIMPLE CICD{% endblock %} {% block content %}
 {# Shared by every Group field's searchable-history dropdown below (the create
    form plus one per Builder's edit form) — see builders.js. Not an HTML
@@ -62,6 +62,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 {% set last = last_builds.get(builder.id) %}
 <tr
   class="builder-row"
+  data-search="{{ [builder.name, builder.group_name, builder.image_name, builder.version.name, builder.repository.full_name, builder.default_branch, builder.registry_target.name]|select|join(' ')|lower }}"
   data-builder-id="{{ builder.id }}"
   data-builder-name="{{ builder.name }}"
   data-default-branch="{{ builder.default_branch or '' }}"
@@ -137,8 +138,11 @@ MASIMPLE CICD{% endblock %} {% block content %}
 </tr>
 {% endmacro %}
 
+{% if groups or ungrouped %}{{ list_search("#builder-lists", "builders", "name, group, repository, branch or version") }}{% endif %}
+
+<div id="builder-lists">
 {% for group in groups %}
-<div class="card mt-4 bg-base-100 shadow-sm builder-group" data-group-name="{{ group.name }}">
+<div class="card mt-4 bg-base-100 shadow-sm builder-group" data-group-name="{{ group.name }}" data-search-card="{{ group.name|lower }}">
   <div class="card-body p-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <h2 class="card-title text-base">
@@ -176,7 +180,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 {% endfor %}
 
 {% if ungrouped %}
-<div class="card mt-4 bg-base-100 shadow-sm">
+<div class="card mt-4 bg-base-100 shadow-sm" data-search-card="">
   <div class="card-body p-4">
     <h2 class="card-title text-base">
       Ungrouped
@@ -206,6 +210,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
   </div>
 </div>
 {% endif %}
+</div>
 
 {% if not groups and not ungrouped %}
 <div class="card mt-4 bg-base-100 shadow-sm">
@@ -596,4 +601,5 @@ MASIMPLE CICD{% endblock %} {% block content %}
 </dialog>
 
 <script src="{{ url_for('static', filename='js/builders.js') }}"></script>
+<script src="{{ url_for('static', filename='js/list-search.js') }}"></script>
 {% endblock %}

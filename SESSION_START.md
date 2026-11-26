@@ -27,7 +27,7 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1143 tests passing** (as of the last full run).
+- **1205 tests passing** (as of the last full run).
 - **This session's work** (on top of everything below) — the YAML editor on
   Deployment Manifests (asked: "the modal must be full, and it scrolls right
   with the modal's bottom scrollbar instead of the editor's"; then "make the
@@ -112,6 +112,68 @@ Then ask me what to work on next rather than assuming.
      literally elsewhere). Added a `safelist` for the four alert classes in
      `tailwind.config.js`; covers base.html, login, setup, reset/forgot
      password at once.
+  12. **Helm chart manifests** (asked: "upload helm chart"; chose real Helm
+     releases over render-only after discussing). A manifest now has a
+     type: Kubernetes YAML or Helm chart (repo https:// or oci://, chart
+     name, required version, release name, namespace, optional encrypted
+     login). `yaml_content` is the values file, so placeholders/bindings/
+     pinning work unchanged. New `app/services/deployment/helm.py` (temp
+     HELM_*_HOME per call, passwords via stdin, `helm show values`, Helm 3
+     `--atomic` vs Helm 4 `--rollback-on-failure` picked from `helm
+     version`); `KubernetesProvider.helm_upgrade/helm_uninstall/
+     helm_live_status/helm_restart`; base provider raises a clear "needs a
+     Kubernetes server" for the rest. Worker: deploy = upgrade --install
+     (wait + rollback), stop = uninstall of the release recorded on the
+     source execution, restart = rolling restart of the release's
+     workloads (`_rollout_targets`/`_wait_for_rollout` gained
+     `default_namespace`), status poller uses `helm status`. Resolver adds
+     a "helm chart" entry so a chart bump is an available update. Form:
+     type switch, Helm fields, "Load chart defaults" (`POST
+     /deployment-manifests/api/helm-default-values`), Kubernetes-servers-
+     only check, can't change type/release/namespace while deployed, blank
+     password keeps the stored one. List shows a Helm badge with
+     chart@version and release. Migration `320c1d030df0` (applied to the
+     dev DB). Dockerfile installs Helm v4.3.2 with its sha256 checked.
+     Tests: `tests/test_helm.py` (commands), `tests/test_helm_manifests.py`
+     (form, API, worker). Checked against real public charts (ingress-nginx
+     https repo, bitnami OCI): defaults load; and the form in a real
+     browser. **Not checked: an actual `helm upgrade` against a cluster**
+     (only real clusters were configured locally, not touched), nor the
+     Docker build's Helm download (running the downloaded binary locally
+     was blocked by the permission check).
+  13. **Search on Deployment Manifests, Builders and Workflows**: instant,
+     client-side (`list_search` macro + `js/list-search.js`). Matches every
+     typed word against each row's `data-search` (manifests: name, group,
+     servers, chart, release, namespace, "helm"; builders: name, group,
+     image name, version, repo, branch, registry; workflows: name,
+     description); a matching group name shows its whole group; "No ...
+     match" message; Esc clears; the query is kept per page for the
+     session so it survives a save/deploy re-render. Tests:
+     `tests/test_list_search.py`; checked in a real browser.
+     Full suite: 1186 passed.
+  14. **Upload a Helm chart** (asked: "make the helm chart upload the
+     chart"; chose keeping every version). Helm manifests get a chart
+     source: Chart repository or Upload a chart (.tgz). New
+     `HelmChartUpload` table (migration `a8694bbd7947`, applied to the dev
+     DB) + `DeploymentManifest.helm_chart_source`. `read_chart_archive()`
+     checks the file in memory (gzip tar, one `<chart>/Chart.yaml` with
+     name+version, declared dependencies present under `charts/`, 10 MB
+     cap) and gives a plain reason otherwise. Name/version come from the
+     file. A version can't be re-uploaded with different contents (same
+     file again is a no-op). Edit form: upload a new version (becomes the
+     deployed one) or pick an older one from "Chart version to deploy" to
+     roll back, then Update. Deploy writes the bytes into the temp Helm
+     home and runs `helm upgrade --install <release> <file>` without
+     `--version`; "Load chart defaults" works from a picked-but-unsaved
+     file or a stored version (the API now takes multipart). Deleting a
+     manifest deletes its uploads. Forms are `multipart/form-data`; checked
+     that htmx-boosted submits carry the file. Tests:
+     `tests/test_helm_chart_upload.py` (19). Checked with a real `helm
+     create` + `helm package` chart (archive check + `helm show values`),
+     and the whole create / new version / roll back flow in a real browser
+     with no full page loads. Still not checked: a real `helm upgrade`
+     against a cluster. Not built: deleting old uploaded versions (they
+     accumulate, each up to 10 MB). Full suite: 1205 passed.
 - **A prior session's work** (on top of everything below): a user with only
   `deployment_manifest.view` could open Edit, change the YAML, and on Save got
   Flask's bare unstyled "403 Forbidden" page. Fixed app-wide.

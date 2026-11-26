@@ -9,6 +9,13 @@ import time
 import yaml
 
 from app.services.deployment.base import DeployResult, DeploymentProvider
+from app.services.deployment.helm import (
+    HelmError,
+    helm_session,
+    live_status_from_json,
+    prepare_chart,
+    rollback_on_failure_flag,
+)
 
 POD_LIST_TIMEOUT_SECONDS = 15
 POD_LOGS_TIMEOUT_SECONDS = 30
@@ -152,7 +159,7 @@ class KubernetesProvider(DeploymentProvider):
         combined_log = delete_result.log + "\n" + apply_result.log
         return DeployResult(success=apply_result.success, log=combined_log, error=apply_result.error)
 
-    def _rollout_targets(self, manifest_yaml):
+    def _rollout_targets(self, manifest_yaml, default_namespace=None):
         """[(kind, name, namespace_or_None, match_labels), ...] for every
         Deployment/StatefulSet/DaemonSet document in `manifest_yaml`, in
         document order — the three kinds `kubectl rollout status`
@@ -186,7 +193,7 @@ class KubernetesProvider(DeploymentProvider):
                 if name:
                     spec = doc.get("spec") or {}
                     match_labels = (spec.get("selector") or {}).get("matchLabels") or {}
-                    targets.append((doc["kind"], name, metadata.get("namespace"), match_labels))
+                    targets.append((doc["kind"], name, metadata.get("namespace") or default_namespace, match_labels))
         except yaml.YAMLError:
             return []
         return targets
@@ -243,7 +250,7 @@ class KubernetesProvider(DeploymentProvider):
                 process.kill()
                 process.wait()
 
-    def _wait_for_rollout(self, manifest_yaml, wait_timeout_seconds):
+    def _wait_for_rollout(self, manifest_yaml, wait_timeout_seconds, default_namespace=None):
         """Runs `kubectl rollout status <kind>/<name> [-n <namespace>]
         --timeout=<remaining>s` for every workload _rollout_targets() finds,
         sequentially, against ONE SHARED DEADLINE
@@ -267,7 +274,7 @@ class KubernetesProvider(DeploymentProvider):
         ordinary rollout failure/timeout (no fail-fast reason seen) keeps
         the existing behavior of still attempting every remaining resource.
         """
-        targets = self._rollout_targets(manifest_yaml)
+        targets = self._rollout_targets(manifest_yaml, default_namespace=default_namespace)
         if not targets:
             return DeployResult(success=True, log="")
 
@@ -835,6 +842,103 @@ class KubernetesProvider(DeploymentProvider):
                 success=False, log=log, error=f"kubectl delete networkpolicy exited with code {process.returncode}"
             )
         return DeployResult(success=True, log=log)
+
+    # --- Helm releases (DeploymentManifest.source_type == "helm") ---
+
+    def helm_upgrade(self, chart, release, namespace, values_yaml, wait_timeout_seconds=None):
+        """`helm upgrade --install`. With a wait, Helm itself waits for the
+        release's resources and rolls back to the previous working revision
+        if they don't come up (--atomic / --rollback-on-failure), instead of
+        leaving the release half-upgraded."""
+        try:
+            with helm_session(self.kubeconfig) as (run, home):
+                ref = prepare_chart(run, chart, home)
+                values_path = os.path.join(home, "values.yaml")
+                with open(values_path, "w") as values_file:
+                    values_file.write(values_yaml or "")
+                args = [
+                    "upgrade", "--install", release, ref,
+                    "--namespace", namespace, "--create-namespace",
+                    "-f", values_path,
+                ]
+                if chart.archive is None:  # an uploaded archive is already one exact version
+                    args += ["--version", chart.version]
+                timeout = APPLY_TIMEOUT_SECONDS
+                if wait_timeout_seconds and wait_timeout_seconds > 0:
+                    args += ["--wait", f"--timeout={wait_timeout_seconds}s", rollback_on_failure_flag()]
+                    timeout += wait_timeout_seconds
+                process = run(args, timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired, HelmError) as exc:
+            return DeployResult(success=False, log="", error=str(exc))
+
+        log = process.stdout + process.stderr
+        if process.returncode != 0:
+            return DeployResult(success=False, log=log, error=f"helm upgrade exited with code {process.returncode}")
+        return DeployResult(success=True, log=log)
+
+    def helm_uninstall(self, release, namespace):
+        try:
+            with helm_session(self.kubeconfig) as (run, _home):
+                # --ignore-not-found: same reasoning as delete() — already gone is the goal.
+                process = run(["uninstall", release, "--namespace", namespace, "--ignore-not-found"],
+                              timeout=APPLY_TIMEOUT_SECONDS)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return DeployResult(success=False, log="", error=str(exc))
+
+        log = process.stdout + process.stderr
+        if process.returncode != 0:
+            return DeployResult(success=False, log=log, error=f"helm uninstall exited with code {process.returncode}")
+        return DeployResult(success=True, log=log)
+
+    def helm_live_status(self, release, namespace):
+        try:
+            with helm_session(self.kubeconfig) as (run, _home):
+                process = run(["status", release, "--namespace", namespace, "-o", "json"],
+                              timeout=TEST_CONNECTION_TIMEOUT_SECONDS)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"Could not check Helm release status: {exc}") from None
+
+        if process.returncode == 0:
+            return live_status_from_json(process.stdout)
+        if "not found" in process.stderr.lower():
+            return "missing"
+        raise RuntimeError(process.stderr.strip() or "helm status failed.")
+
+    def helm_restart(self, release, namespace, wait_timeout_seconds=None):
+        """A rolling restart of the release's Deployments/StatefulSets/
+        DaemonSets (no downtime), unlike restart()'s delete+apply — Helm
+        keeps owning every resource, nothing is torn down. Config changes
+        go through Deploy/Update (helm upgrade), not this."""
+        try:
+            with helm_session(self.kubeconfig) as (run, _home):
+                process = run(["get", "manifest", release, "--namespace", namespace])
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return DeployResult(success=False, log="", error=str(exc))
+        if process.returncode != 0:
+            return DeployResult(success=False, log=process.stderr,
+                                error=f"helm get manifest exited with code {process.returncode}")
+
+        release_manifest = process.stdout
+        targets = self._rollout_targets(release_manifest, default_namespace=namespace)
+        if not targets:
+            return DeployResult(success=True, log="Release has no Deployment/StatefulSet/DaemonSet to restart.\n")
+
+        log_parts = []
+        for kind, name, target_namespace, _labels in targets:
+            try:
+                restart = self._run_kubectl(["rollout", "restart", f"{kind.lower()}/{name}", "-n", target_namespace])
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return DeployResult(success=False, log="".join(log_parts), error=str(exc))
+            log_parts.append(restart.stdout + restart.stderr)
+            if restart.returncode != 0:
+                return DeployResult(success=False, log="".join(log_parts),
+                                    error=f"kubectl rollout restart {kind.lower()}/{name} failed")
+
+        log = "".join(log_parts)
+        if not wait_timeout_seconds or wait_timeout_seconds <= 0:
+            return DeployResult(success=True, log=log)
+        wait = self._wait_for_rollout(release_manifest, wait_timeout_seconds, default_namespace=namespace)
+        return DeployResult(success=wait.success, log=log + "\n" + wait.log, error=wait.error)
 
     def restart_deployment(self, namespace, name):
         """A true `kubectl rollout restart` against one specific, already-

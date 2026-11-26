@@ -79,3 +79,18 @@ class DeploymentProvider(ABC):
         `wait_timeout_seconds` contract as apply() — restart's own re-apply
         half waits the same way.
         """
+
+    # Helm releases. Only KubernetesProvider can run helm (it needs a
+    # kubeconfig); the manifest form only lets Helm manifests target "kube"
+    # servers, and this is the backstop if one slips through.
+    def helm_upgrade(self, chart, release, namespace, values_yaml, wait_timeout_seconds=None):
+        raise NotImplementedError("Helm charts can only be deployed to a Kubernetes (kubeconfig) server.")
+
+    def helm_uninstall(self, release, namespace):
+        raise NotImplementedError("Helm charts can only be deployed to a Kubernetes (kubeconfig) server.")
+
+    def helm_live_status(self, release, namespace):
+        raise NotImplementedError("Helm charts can only be deployed to a Kubernetes (kubeconfig) server.")
+
+    def helm_restart(self, release, namespace, wait_timeout_seconds=None):
+        raise NotImplementedError("Helm charts can only be deployed to a Kubernetes (kubeconfig) server.")

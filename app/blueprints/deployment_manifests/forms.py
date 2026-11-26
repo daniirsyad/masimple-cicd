@@ -1,6 +1,18 @@
 from flask_wtf import FlaskForm
-from wtforms import IntegerField, SelectMultipleField, StringField, SubmitField, TextAreaField
+from flask_wtf.file import FileField
+from wtforms import (
+    IntegerField,
+    PasswordField,
+    RadioField,
+    SelectField,
+    SelectMultipleField,
+    StringField,
+    SubmitField,
+    TextAreaField,
+)
 from wtforms.validators import DataRequired, Length, NumberRange, Optional
+
+from app.services.deployment.helm import NAMESPACE_MAX, RELEASE_NAME_MAX, RELEASE_NAME_RE
 from wtforms.widgets import CheckboxInput, ListWidget
 
 
@@ -11,7 +23,27 @@ class MultiCheckboxField(SelectMultipleField):
 
 class DeploymentManifestForm(FlaskForm):
     name = StringField("Name", validators=[DataRequired(), Length(max=120)])
-    yaml_content = TextAreaField("YAML", validators=[DataRequired()])
+    source_type = RadioField(
+        "Type", choices=[("yaml", "Kubernetes YAML"), ("helm", "Helm chart")], default="yaml"
+    )
+    # Required for "yaml" (checked in validate()); for "helm" it's the
+    # release's values file, which may legitimately be empty.
+    yaml_content = TextAreaField("YAML", validators=[Optional()])
+    helm_chart_source = RadioField(
+        "Chart source", choices=[("repo", "Chart repository"), ("upload", "Upload a chart")], default="repo"
+    )
+    # Upload source: a new .tgz, and/or which already-uploaded version to
+    # deploy (choices set per manifest in routes; checked there, with the DB).
+    helm_chart_file = FileField("Chart file (.tgz)")
+    helm_chart_upload_version = SelectField("Chart version to deploy", choices=[], validate_choice=False)
+    helm_chart_repo = StringField("Chart repository", validators=[Optional(), Length(max=500)])
+    helm_chart_name = StringField("Chart name", validators=[Optional(), Length(max=200)])
+    helm_chart_version = StringField("Chart version", validators=[Optional(), Length(max=100)])
+    helm_release_name = StringField("Release name", validators=[Optional(), Length(max=RELEASE_NAME_MAX)])
+    helm_namespace = StringField("Namespace", validators=[Optional(), Length(max=NAMESPACE_MAX)])
+    helm_repo_username = StringField("Username (private repository only)", validators=[Optional(), Length(max=200)])
+    # Never rendered back; left blank on edit keeps the stored password.
+    helm_repo_password = PasswordField("Password or token", validators=[Optional()])
     # After a successful apply, Deploy/Update/Restart waits up to this long
     # for this manifest's Deployment/StatefulSet/DaemonSet resources to
     # report Ready before counting as success — see
@@ -57,3 +89,29 @@ class DeploymentManifestForm(FlaskForm):
         validators=[Optional()],
     )
     submit = SubmitField("Save Manifest")
+
+    def validate(self, extra_validators=None):
+        valid = super().validate(extra_validators)
+        if self.source_type.data == "helm":
+            checks = []
+            if self.helm_chart_source.data != "upload":
+                checks += [
+                    (self.helm_chart_repo, "Enter the chart repository (https://... or oci://...).",
+                     lambda v: v.startswith(("https://", "http://", "oci://"))),
+                    (self.helm_chart_name, "Enter the chart name.", bool),
+                    (self.helm_chart_version, "Enter the chart version, e.g. 1.2.3.", bool),
+                ]
+            checks += [
+                (self.helm_release_name, "Use lowercase letters, numbers and dashes, starting and ending with a "
+                 "letter or number.", RELEASE_NAME_RE.match),
+                (self.helm_namespace, "Use lowercase letters, numbers and dashes, starting and ending with a "
+                 "letter or number.", RELEASE_NAME_RE.match),
+            ]
+            for field, message, ok in checks:
+                if not ok((field.data or "").strip()):
+                    field.errors = [*field.errors, message]
+                    valid = False
+        elif not (self.yaml_content.data or "").strip():
+            self.yaml_content.errors = [*self.yaml_content.errors, "This field is required."]
+            valid = False
+        return valid

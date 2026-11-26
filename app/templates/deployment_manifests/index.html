@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Deployment Manifests -
+{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs, list_search %} {% block title %}Deployment Manifests -
 MASIMPLE CICD{% endblock %}
 {% block content %}
 <span id="deployment-manifests-page" data-csrf="{{ csrf_token() }}" class="hidden"></span>
@@ -59,6 +59,7 @@ MASIMPLE CICD{% endblock %}
 {% set has_update = manifest_updates.get(manifest.id|string, [])|length > 0 %}
 <tr
   class="manifest-row"
+  data-search="{{ [manifest.name, manifest.group_name, manifest.target_servers|map(attribute='name')|join(' '), manifest.helm_chart_name, manifest.helm_release_name, manifest.helm_namespace, 'helm' if manifest.is_helm else '']|select|join(' ')|lower }}"
   data-manifest-id="{{ manifest.id }}"
   data-manifest-name="{{ manifest.name }}"
 >
@@ -67,7 +68,17 @@ MASIMPLE CICD{% endblock %}
     <span class="drag-handle cursor-move text-base-content/40" title="Drag to reorder">⠿</span>
   </td>
   {% endif %}
-  <td>{{ manifest.name }}</td>
+  <td>
+    {{ manifest.name }}
+    {% if manifest.is_helm %}
+    <div class="mt-1 flex flex-wrap items-center gap-1 text-xs text-base-content/60">
+      <span class="badge badge-info badge-outline badge-sm">Helm</span>
+      <span class="font-mono">{{ manifest.helm_chart_name }}@{{ manifest.helm_chart_version }}</span>
+      {% if manifest.helm_chart_source == 'upload' %}<span>(uploaded)</span>{% endif %}
+      <span>release <span class="font-mono">{{ manifest.helm_release_name }}</span> in <span class="font-mono">{{ manifest.helm_namespace }}</span></span>
+    </div>
+    {% endif %}
+  </td>
   <td>
     {% if manifest.target_servers %}
     {% for server in manifest.target_servers %}
@@ -163,8 +174,11 @@ MASIMPLE CICD{% endblock %}
 </tr>
 {% endmacro %}
 
+{% if groups or ungrouped %}{{ list_search("#manifest-lists", "manifests", "name, group, server or chart") }}{% endif %}
+
+<div id="manifest-lists">
 {% for group in groups %}
-<div class="card mt-4 bg-base-100 shadow-sm manifest-group" data-group-name="{{ group.name }}">
+<div class="card mt-4 bg-base-100 shadow-sm manifest-group" data-group-name="{{ group.name }}" data-search-card="{{ group.name|lower }}">
   <div class="card-body p-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <h2 class="card-title text-base">
@@ -222,7 +236,7 @@ MASIMPLE CICD{% endblock %}
 {% endfor %}
 
 {% if ungrouped %}
-<div class="card mt-4 bg-base-100 shadow-sm">
+<div class="card mt-4 bg-base-100 shadow-sm" data-search-card="">
   <div class="card-body p-4">
     <h2 class="card-title text-base">
       Ungrouped
@@ -248,6 +262,7 @@ MASIMPLE CICD{% endblock %}
   </div>
 </div>
 {% endif %}
+</div>
 
 {% if not groups and not ungrouped %}
 <div class="card mt-4 bg-base-100 shadow-sm">
@@ -264,9 +279,98 @@ MASIMPLE CICD{% endblock %}
   {% endfor %}
 </div>
 
+{% set is_helm = form.source_type.data == 'helm' %}
+<div>
+  <span class="label text-sm">Type</span>
+  <div class="join">
+    {% for option in form.source_type %}
+    <label class="btn join-item btn-sm has-[:checked]:btn-primary has-[:focus-visible]:outline has-[:focus-visible]:outline-2">
+      {{ option(class="manifest-type-input sr-only") }} {{ option.label.text }}
+    </label>
+    {% endfor %}
+  </div>
+  {% for error in form.source_type.errors %}
+  <p class="text-error text-sm">{{ error }}</p>
+  {% endfor %}
+</div>
+
+{% set is_upload = form.helm_chart_source.data == 'upload' %}
+<div class="helm-only {{ '' if is_helm else 'hidden' }} grid grid-cols-1 gap-3 rounded-lg border border-base-300 p-3 sm:grid-cols-2">
+  {% macro helm_field(field, hint=none, extra_class="", placeholder="") %}
+  <div class="{{ extra_class }}">
+    {{ field.label(class="label text-sm") }}
+    {{ field(class="input input-bordered input-sm w-full", placeholder=placeholder, autocomplete="off") }}
+    {% for error in field.errors %}
+    <p class="text-error text-sm">{{ error }}</p>
+    {% endfor %}
+    {% if hint %}<p class="mt-1 text-xs text-base-content/60">{{ hint }}</p>{% endif %}
+  </div>
+  {% endmacro %}
+  {% set repo_class = 'chart-repo-only hidden' if is_upload else 'chart-repo-only' %}
+  {% set upload_class = 'chart-upload-only' if is_upload else 'chart-upload-only hidden' %}
+
+  <div class="sm:col-span-2">
+    <span class="label text-sm">Chart source</span>
+    <div class="join">
+      {% for option in form.helm_chart_source %}
+      <label class="btn join-item btn-sm has-[:checked]:btn-primary has-[:focus-visible]:outline has-[:focus-visible]:outline-2">
+        {{ option(class="chart-source-input sr-only") }} {{ option.label.text }}
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+
+  {{ helm_field(form.helm_chart_repo, "A chart repository URL, or an OCI registry path (the chart name is added to it).", repo_class ~ " sm:col-span-2", "https://charts.bitnami.com/bitnami or oci://ghcr.io/org/charts") }}
+  {{ helm_field(form.helm_chart_name, extra_class=repo_class, placeholder="nginx") }}
+  {{ helm_field(form.helm_chart_version, "An exact version, so a deploy never picks up a new chart release by surprise.", repo_class, "18.2.4") }}
+  {{ helm_field(form.helm_repo_username, extra_class=repo_class) }}
+  <div class="{{ repo_class }}">
+    {{ form.helm_repo_password.label(class="label text-sm") }}
+    {{ form.helm_repo_password(class="input input-bordered input-sm w-full", autocomplete="new-password") }}
+    <p class="mt-1 text-xs text-base-content/60">
+      {{ 'Leave blank to keep the saved one.' if manifest_id else 'Only for a private repository or registry.' }}
+    </p>
+  </div>
+
+  <div class="{{ upload_class }} sm:col-span-2">
+    {{ form.helm_chart_file.label(class="label text-sm") }}
+    {{ form.helm_chart_file(class="helm-chart-file-input file-input file-input-bordered file-input-sm w-full", accept=".tgz,.tar.gz,application/gzip") }}
+    {% for error in form.helm_chart_file.errors %}
+    <p class="text-error text-sm">{{ error }}</p>
+    {% endfor %}
+    <p class="mt-1 text-xs text-base-content/60">
+      Make it with <code>helm package &lt;chart-folder&gt;</code>. If the chart has dependencies, run
+      <code>helm dependency update</code> first so they're packaged inside. Up to 10 MB.
+    </p>
+  </div>
+  {% if form.helm_chart_upload_version.choices %}
+  <div class="{{ upload_class }} sm:col-span-2">
+    {{ form.helm_chart_upload_version.label(class="label text-sm") }}
+    {{ form.helm_chart_upload_version(class="helm-chart-upload-version select select-bordered select-sm w-full") }}
+    <p class="mt-1 text-xs text-base-content/60">
+      A new upload is added here and becomes the version to deploy. To roll back, pick an earlier version,
+      save, then use Update.
+    </p>
+  </div>
+  {% endif %}
+
+  {{ helm_field(form.helm_release_name, "Lowercase letters, numbers and dashes. Can't be changed while deployed.", placeholder="checkout-api") }}
+  {{ helm_field(form.helm_namespace, "Created if it doesn't exist. Can't be changed while deployed.", placeholder="apps") }}
+</div>
+
 <div>
   <div class="flex items-end justify-between gap-2">
-    {{ form.yaml_content.label(class="label text-sm") }}
+    <label for="{{ form.yaml_content.id }}" class="yaml-content-label label text-sm">{{ 'Values (values.yaml)' if is_helm else 'YAML' }}</label>
+    <span class="flex flex-wrap items-center justify-end gap-1">
+    <span class="helm-defaults-status text-xs text-base-content/60" aria-live="polite"></span>
+    <button
+      type="button"
+      class="helm-only {{ '' if is_helm else 'hidden' }} helm-load-defaults-btn btn btn-ghost btn-xs mb-1"
+      data-yaml-input-id="{{ form.yaml_content.id }}"
+      data-manifest-id="{{ manifest_id or '' }}"
+    >
+      Load chart defaults
+    </button>
     <button
       type="button"
       class="yaml-insert-placeholder-btn btn btn-ghost btn-xs mb-1 font-mono"
@@ -275,6 +379,7 @@ MASIMPLE CICD{% endblock %}
     >
       + {{ '{{SYS:VERSION}}' }}
     </button>
+    </span>
   </div>
   <div class="yaml-editor-wrapper yaml-editor-tall min-w-0 overflow-hidden rounded-lg border border-base-300">
     {{ form.yaml_content(class="yaml-content-input textarea textarea-bordered textarea-sm w-full font-mono", rows="12") }}
@@ -292,7 +397,9 @@ MASIMPLE CICD{% endblock %}
   {% endfor %}
   <p class="mt-1 text-xs text-base-content/60">
     Use <code>{{ '{{SYS:VERSION}}' }}</code> or <code>{{ '{{SYS:VERSION:key}}' }}</code> for each image tag that
-    should resolve against a Builder's latest (or a pinned) successful build.
+    should resolve against a Builder's latest (or a pinned) successful build<span class="helm-only {{ '' if is_helm else 'hidden' }}">,
+    e.g. <code>image.tag: {{ '{{SYS:VERSION}}' }}</code>. Only the values you change need to be here; the
+    chart's defaults cover the rest</span>.
   </p>
 </div>
 
@@ -373,6 +480,7 @@ MASIMPLE CICD{% endblock %}
     <form
       method="post"
       action="{{ url_for('deployment_manifests.create_manifest') }}"
+      enctype="multipart/form-data"
       novalidate
       class="deployment-manifest-form mt-4 flex flex-col gap-3"
     >
@@ -397,6 +505,7 @@ MASIMPLE CICD{% endblock %}
     <form
       method="post"
       action="{{ url_for('deployment_manifests.edit_manifest', manifest_id=manifest.id) }}"
+      enctype="multipart/form-data"
       novalidate
       class="deployment-manifest-form mt-4 flex flex-col gap-3"
     >
@@ -530,4 +639,5 @@ MASIMPLE CICD{% endblock %}
 <script src="{{ url_for('static', filename='vendor/sortablejs/Sortable.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/yaml_editor.js') }}"></script>
 <script src="{{ url_for('static', filename='js/deployment_manifests.js') }}"></script>
+<script src="{{ url_for('static', filename='js/list-search.js') }}"></script>
 {% endblock %}

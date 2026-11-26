@@ -13,10 +13,21 @@ from app.models import (
     DeploymentManifest,
     DeploymentManifestVersionBinding,
     DeploymentServer,
+    HelmChartUpload,
     ImageBuild,
     User,
     WorkflowStep,
 )
+from app.services.deployment.helm import (
+    ChartArchiveError,
+    HelmChart,
+    HelmError,
+    decode_credentials,
+    encode_credentials,
+    read_chart_archive,
+    show_values,
+)
+from app.services.deployment.helpers import KUBE_CONNECTION_TYPE
 from app.services.deployment.resolver import UnresolvedPlaceholderError, find_placeholder_keys, resolve_manifest
 from app.services.deployment.worker import (
     enqueue_deployment_run,
@@ -96,6 +107,131 @@ def _builder_successful_builds():
 def _apply_target_servers(manifest, form):
     selected_ids = {uuid.UUID(sid) for sid in form.server_ids.data}
     manifest.target_servers = DeploymentServer.query.filter(DeploymentServer.id.in_(selected_ids)).all() if selected_ids else []
+
+
+HELM_FIELDS = ("helm_chart_repo", "helm_chart_name", "helm_chart_version", "helm_release_name", "helm_namespace")
+
+
+def _apply_helm_fields(manifest, form):
+    """Everything but a new chart upload, which needs manifest.id — see
+    _apply_chart_upload, called after the flush."""
+    manifest.source_type = form.source_type.data
+    if not manifest.is_helm:
+        for field in HELM_FIELDS:
+            setattr(manifest, field, None)
+        manifest.helm_chart_source = "repo"
+        manifest.encrypted_helm_repo_credentials = None
+        return
+    for field in HELM_FIELDS:
+        setattr(manifest, field, (getattr(form, field).data or "").strip())
+    manifest.helm_chart_source = form.helm_chart_source.data
+    if manifest.helm_chart_source == "upload":
+        # Name/version come from the upload being deployed (_apply_chart_upload).
+        manifest.helm_chart_repo = None
+        manifest.encrypted_helm_repo_credentials = None
+        return
+    username = (form.helm_repo_username.data or "").strip()
+    # A blank password keeps the stored one; clearing the username removes both.
+    password = form.helm_repo_password.data or decode_credentials(manifest.encrypted_helm_repo_credentials).get(
+        "password", ""
+    )
+    manifest.encrypted_helm_repo_credentials = encode_credentials(username, password)
+
+
+def _apply_chart_upload(manifest, form):
+    """Upload source only, after the manifest has an id: stores a newly
+    uploaded archive (checked by _helm_form_errors) as a new version, and
+    points the manifest at the version being deployed."""
+    if not manifest.is_helm or manifest.helm_chart_source != "upload":
+        return
+    new_upload = getattr(form, "new_chart_upload", None)
+    if new_upload:
+        info, filename, data = new_upload
+        if manifest.helm_chart_uploads.filter_by(chart_version=info["version"]).first() is None:
+            db.session.add(HelmChartUpload(
+                manifest_id=manifest.id, chart_name=info["name"], chart_version=info["version"],
+                filename=filename, sha256=info["sha256"], size_bytes=len(data), data=data,
+            ))
+        manifest.helm_chart_name, manifest.helm_chart_version = info["name"], info["version"]
+        return
+    upload = manifest.helm_chart_uploads.filter_by(chart_version=form.helm_chart_upload_version.data).first()
+    manifest.helm_chart_name, manifest.helm_chart_version = upload.chart_name, upload.chart_version
+
+
+def _chart_upload_choices(manifest):
+    if manifest is None:
+        return []
+    return [
+        (upload.chart_version, f"{upload.chart_name} {upload.chart_version} ({upload.filename}, uploaded "
+                               f"{upload.uploaded_at:%Y-%m-%d %H:%M} UTC)")
+        for upload in manifest.helm_chart_uploads
+    ]
+
+
+def _check_chart_upload(form, manifest):
+    """Upload source: a new file must be a packaged chart, and a version
+    already uploaded can't come back with different contents (a version
+    always means one exact chart). Without a new file, an already-uploaded
+    version must be picked. Returns True if there were errors."""
+    file = form.helm_chart_file.data
+    if file and getattr(file, "filename", ""):
+        data = file.read()
+        try:
+            info = read_chart_archive(data)
+        except ChartArchiveError as exc:
+            form.helm_chart_file.errors = [*form.helm_chart_file.errors, str(exc)]
+            return True
+        existing = manifest.helm_chart_uploads.filter_by(chart_version=info["version"]).first() if manifest else None
+        if existing is not None and existing.sha256 != info["sha256"]:
+            form.helm_chart_file.errors = [
+                *form.helm_chart_file.errors,
+                f"Version {info['version']} is already uploaded with different contents. Raise the version in "
+                "Chart.yaml and package it again.",
+            ]
+            return True
+        form.new_chart_upload = (info, file.filename, data)
+        return False
+
+    chosen = form.helm_chart_upload_version.data
+    if manifest is None or not chosen or manifest.helm_chart_uploads.filter_by(chart_version=chosen).first() is None:
+        form.helm_chart_file.errors = [*form.helm_chart_file.errors, "Choose a chart file (.tgz) to upload."]
+        return True
+    return False
+
+
+def _helm_form_errors(form, manifest=None):
+    """Checks that need the database, run after form.validate(). Adds the
+    errors to the form and returns True if there were any."""
+    has_errors = False
+    if form.source_type.data == "helm" and form.helm_chart_source.data == "upload":
+        has_errors = _check_chart_upload(form, manifest) or has_errors
+    if form.source_type.data == "helm":
+        selected_ids = {uuid.UUID(sid) for sid in form.server_ids.data}
+        not_kube = DeploymentServer.query.filter(
+            DeploymentServer.id.in_(selected_ids), DeploymentServer.connection_type != KUBE_CONNECTION_TYPE
+        ).all()
+        if not_kube:
+            names = ", ".join(server.name for server in not_kube)
+            form.server_ids.errors = [*form.server_ids.errors, f"Helm charts need a Kubernetes server: {names} is not one."]
+            has_errors = True
+
+    if manifest is not None and any(is_currently_deployed(manifest.id, server.id) for server in manifest.target_servers):
+        # Changing these would install a second release (or switch to
+        # kubectl) and orphan the one that's running.
+        changed = form.source_type.data != manifest.source_type or (
+            manifest.is_helm
+            and (
+                (form.helm_release_name.data or "").strip() != manifest.helm_release_name
+                or (form.helm_namespace.data or "").strip() != manifest.helm_namespace
+            )
+        )
+        if changed:
+            form.source_type.errors = [
+                *form.source_type.errors,
+                "Stop this manifest before changing its type, release name or namespace.",
+            ]
+            has_errors = True
+    return has_errors
 
 
 def _apply_allowed_users(manifest, form):
@@ -301,6 +437,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
         if manifest.id == invalid_id:
             invalid_form.server_ids.choices = _server_choices(include_servers=manifest.target_servers)
             invalid_form.allowed_user_ids.choices = _user_choices()
+            invalid_form.helm_chart_upload_version.choices = _chart_upload_choices(manifest)
             edit_forms[manifest.id] = invalid_form
         else:
             form = DeploymentManifestForm(obj=manifest, prefix=_edit_prefix(manifest.id))
@@ -308,6 +445,9 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
             form.server_ids.data = [str(server.id) for server in manifest.target_servers]
             form.allowed_user_ids.choices = _user_choices()
             form.allowed_user_ids.data = [str(user.id) for user in manifest.allowed_users]
+            form.helm_repo_username.data = decode_credentials(manifest.encrypted_helm_repo_credentials).get("username", "")
+            form.helm_chart_upload_version.choices = _chart_upload_choices(manifest)
+            form.helm_chart_upload_version.data = manifest.helm_chart_version
             edit_forms[manifest.id] = form
 
     manifest_live_servers = _manifest_live_server_ids(manifests)
@@ -370,6 +510,61 @@ def placeholder_keys():
     return jsonify({"keys": find_placeholder_keys(yaml_content)})
 
 
+@deployment_manifests_bp.route("/api/helm-default-values", methods=["POST"])
+@permission_required("deployment_manifest.manage")
+def helm_default_values():
+    """The chart's own default values.yaml, for the form's "Load chart
+    defaults" button. A blank password on an existing manifest's form falls
+    back to its stored one, same as saving."""
+    manifest_id = _parse_uuid(request.form.get("manifest_id"))
+    if request.form.get("source") == "upload":
+        return _uploaded_chart_default_values(manifest_id)
+
+    chart = HelmChart(
+        repo=(request.form.get("repo") or "").strip(),
+        name=(request.form.get("name") or "").strip(),
+        version=(request.form.get("version") or "").strip(),
+        username=(request.form.get("username") or "").strip(),
+        password=request.form.get("password") or "",
+    )
+    if not (chart.repo and chart.name and chart.version):
+        return jsonify({"ok": False, "error": "Fill in the chart repository, name and version first."}), 400
+    if chart.username and not chart.password and manifest_id:
+        manifest = DeploymentManifest.query.get(manifest_id)
+        if manifest is not None:
+            chart.password = decode_credentials(manifest.encrypted_helm_repo_credentials).get("password", "")
+    try:
+        return jsonify({"ok": True, "values": show_values(chart)})
+    except HelmError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 502
+
+
+def _uploaded_chart_default_values(manifest_id):
+    """Default values from a chart file picked in the form (not saved yet),
+    or from one of the manifest's already-uploaded versions."""
+    file = request.files.get("chart_file")
+    if file and file.filename:
+        data = file.read()
+        try:
+            info = read_chart_archive(data)
+        except ChartArchiveError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        chart = HelmChart(repo="", name=info["name"], version=info["version"], archive=data)
+    else:
+        manifest = DeploymentManifest.query.get(manifest_id) if manifest_id else None
+        upload = (
+            manifest.helm_chart_uploads.filter_by(chart_version=request.form.get("upload_version")).first()
+            if manifest is not None else None
+        )
+        if upload is None:
+            return jsonify({"ok": False, "error": "Choose a chart file (.tgz) first."}), 400
+        chart = HelmChart(repo="", name=upload.chart_name, version=upload.chart_version, archive=upload.data)
+    try:
+        return jsonify({"ok": True, "values": show_values(chart)})
+    except HelmError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 502
+
+
 @deployment_manifests_bp.route("/create", methods=["POST"])
 @permission_required("deployment_manifest.manage")
 def create_manifest():
@@ -377,17 +572,19 @@ def create_manifest():
     form.server_ids.choices = _server_choices()
     form.allowed_user_ids.choices = _user_choices()
 
-    if form.validate_on_submit():
+    if form.validate_on_submit() and not _helm_form_errors(form):
         manifest = DeploymentManifest(
             name=form.name.data,
-            yaml_content=form.yaml_content.data,
+            yaml_content=form.yaml_content.data or "",
             group_name=(form.group_name.data or "").strip() or None,
             wait_for_ready_timeout_seconds=form.wait_for_ready_timeout_seconds.data,
         )
         _apply_target_servers(manifest, form)
         _apply_allowed_users(manifest, form)
+        _apply_helm_fields(manifest, form)
         db.session.add(manifest)
         db.session.flush()  # assign manifest.id so bindings below can reference it
+        _apply_chart_upload(manifest, form)
         _apply_version_bindings(manifest, _parse_version_bindings())
         db.session.commit()
 
@@ -412,13 +609,15 @@ def edit_manifest(manifest_id):
     form.server_ids.choices = _server_choices(include_servers=manifest.target_servers)
     form.allowed_user_ids.choices = _user_choices()
 
-    if form.validate_on_submit():
+    if form.validate_on_submit() and not _helm_form_errors(form, manifest):
         manifest.name = form.name.data
-        manifest.yaml_content = form.yaml_content.data
+        manifest.yaml_content = form.yaml_content.data or ""
         manifest.group_name = (form.group_name.data or "").strip() or None
         manifest.wait_for_ready_timeout_seconds = form.wait_for_ready_timeout_seconds.data
         _apply_target_servers(manifest, form)
         _apply_allowed_users(manifest, form)
+        _apply_helm_fields(manifest, form)
+        _apply_chart_upload(manifest, form)
         _apply_version_bindings(manifest, _parse_version_bindings())
         db.session.commit()
 
@@ -529,6 +728,7 @@ def delete_manifest(manifest_id):
     # instead of failing on the FK or being deleted along with it. Mirrors
     # users.routes hard-delete nulling ActivityLog.user_id.
     DeploymentManifestVersionBinding.query.filter_by(manifest_id=manifest.id).delete()
+    HelmChartUpload.query.filter_by(manifest_id=manifest.id).delete()
     DeploymentExecution.query.filter_by(manifest_id=manifest.id).update({"manifest_id": None})
 
     name = manifest.name
