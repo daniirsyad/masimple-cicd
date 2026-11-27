@@ -3,6 +3,7 @@ import uuid
 from flask import abort, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user
 from markupsafe import Markup
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.blueprints.builders import builders_bp
 from app.blueprints.builders.forms import BuilderForm
@@ -18,7 +19,6 @@ from app.models import (
     Repository,
     Role,
     Version,
-    WorkflowStep,
 )
 from app.services.build.prefill import compute_build_prefill
 from app.services.build.versioning import BUMP_TYPES
@@ -53,7 +53,13 @@ def _active_choices_with_fallback(query, include_id, extra_lookup):
     Registry got disabled would silently drop that assignment (or fail
     WTForms' choice validation outright), rather than just leaving it as-is.
     """
-    choices = [(str(row.id), row.name) for row in query.all()]
+    return _with_fallback([(str(row.id), row.name) for row in query.all()], include_id, extra_lookup)
+
+
+def _with_fallback(choices, include_id, extra_lookup):
+    """A copy of `choices` plus `include_id`'s row if it isn't in them (see
+    above). Lets a page build the active list once for many forms."""
+    choices = list(choices)
     if include_id and str(include_id) not in {choice_id for choice_id, _ in choices}:
         extra = extra_lookup(include_id)
         if extra is not None:
@@ -231,6 +237,7 @@ def _last_build_by_builder():
     # DISTINCT ON: one row per Builder, instead of loading every build ever.
     latest_per_builder = (
         ImageBuild.query.filter(ImageBuild.builder_id.isnot(None))
+        .options(joinedload(ImageBuild.batch))
         .distinct(ImageBuild.builder_id)
         .order_by(ImageBuild.builder_id, ImageBuild.created_at.desc())
     )
@@ -264,13 +271,36 @@ def _log_tail(log_text, max_lines=LOG_TAIL_LINES):
 def _render_index(create_form=None, open_modal=None, invalid_edit=None, selected_version_id=None):
     if create_form is None:
         create_form = BuilderForm(prefix=CREATE_PREFIX)
-    create_form.version_id.choices = _version_choices()
-    create_form.repository_id.choices = _repository_choices()
-    create_form.registry_target_id.choices = _registry_choices()
-    create_form.managed_dockerfile_id.choices = _dockerfile_choices()
-    create_form.allowed_role_ids.choices = _role_choices()
+    # Each list is queried once here, not again for every Builder's edit form.
+    version_choices = _version_choices()
+    repository_choices = _repository_choices()
+    registry_choices = _registry_choices()
+    dockerfile_choices = _dockerfile_choices()
+    role_choices = _role_choices()
+    create_form.version_id.choices = version_choices
+    create_form.repository_id.choices = repository_choices
+    create_form.registry_target_id.choices = registry_choices
+    create_form.managed_dockerfile_id.choices = dockerfile_choices
+    create_form.allowed_role_ids.choices = role_choices
 
-    query = Builder.query.filter_by(is_active=True)
+    def set_choices(form, builder):
+        form.version_id.choices = _with_fallback(version_choices, builder.version_id, Version.query.get)
+        form.repository_id.choices = repository_choices
+        form.registry_target_id.choices = _with_fallback(
+            registry_choices, builder.registry_target_id, RegistryTarget.query.get
+        )
+        form.managed_dockerfile_id.choices = _with_fallback(
+            dockerfile_choices, builder.managed_dockerfile_id, Dockerfile.query.get
+        )
+        form.allowed_role_ids.choices = role_choices
+
+    query = Builder.query.filter_by(is_active=True).options(
+        selectinload(Builder.allowed_roles),
+        joinedload(Builder.version),
+        joinedload(Builder.repository).joinedload(Repository.git_source),
+        joinedload(Builder.registry_target),
+        joinedload(Builder.managed_dockerfile),
+    )
     if selected_version_id:
         query = query.filter_by(version_id=selected_version_id)
     builders = [b for b in query.order_by(Builder.name).all() if b.is_accessible_to(current_user)]
@@ -284,21 +314,13 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None, selected
         repo_info_by_builder[builder.id] = info
 
         if builder.id == invalid_id:
-            invalid_form.version_id.choices = _version_choices(include_id=builder.version_id)
-            invalid_form.repository_id.choices = _repository_choices()
-            invalid_form.registry_target_id.choices = _registry_choices(include_id=builder.registry_target_id)
-            invalid_form.managed_dockerfile_id.choices = _dockerfile_choices(include_id=builder.managed_dockerfile_id)
-            invalid_form.allowed_role_ids.choices = _role_choices()
+            set_choices(invalid_form, builder)
             invalid_form.default_branch.choices = _branch_choices(info, invalid_form.default_branch.data)
             _set_link_fields(invalid_form, builder, set_data=False)
             edit_forms[builder.id] = invalid_form
         else:
             form = BuilderForm(obj=builder, prefix=_edit_prefix(builder.id))
-            form.version_id.choices = _version_choices(include_id=builder.version_id)
-            form.repository_id.choices = _repository_choices()
-            form.registry_target_id.choices = _registry_choices(include_id=builder.registry_target_id)
-            form.managed_dockerfile_id.choices = _dockerfile_choices(include_id=builder.managed_dockerfile_id)
-            form.allowed_role_ids.choices = _role_choices()
+            set_choices(form, builder)
             _set_link_fields(form, builder, set_data=True)
             form.managed_dockerfile_id.data = str(builder.managed_dockerfile_id) if builder.managed_dockerfile_id else ""
             form.allowed_role_ids.data = [str(role.id) for role in builder.allowed_roles]
@@ -309,18 +331,25 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None, selected
     groups, ungrouped = _builder_groups(builders)
 
     # What deleting each one would affect, shown in its delete confirm.
+    # One grouped count per kind for all Builders, not three queries each.
+    def counts_by_builder(column):
+        return dict(db.session.query(column, db.func.count()).filter(column.isnot(None)).group_by(column))
+
+    binding_counts = counts_by_builder(DeploymentManifestVersionBinding.builder_id)
+    step_counts = counts_by_builder(workflow_step_builders.c.builder_id)
+    build_counts = counts_by_builder(ImageBuild.builder_id)
     delete_impacts = {}
     for builder in builders:
         parts = []
-        binding_count = DeploymentManifestVersionBinding.query.filter_by(builder_id=builder.id).count()
+        binding_count = binding_counts.get(builder.id, 0)
         if binding_count:
             parts.append(
                 f"{binding_count} manifest placeholder(s) use it and won't resolve until bound to another Builder."
             )
-        referencing_steps = WorkflowStep.query.filter(WorkflowStep.selected_builders.any(id=builder.id)).count()
+        referencing_steps = step_counts.get(builder.id, 0)
         if referencing_steps:
             parts.append(f"It will be removed from {referencing_steps} workflow step(s).")
-        build_count = ImageBuild.query.filter_by(builder_id=builder.id).count()
+        build_count = build_counts.get(builder.id, 0)
         if build_count:
             parts.append(f"{build_count} past build(s) keep its name.")
         delete_impacts[builder.id] = " ".join(parts) or None

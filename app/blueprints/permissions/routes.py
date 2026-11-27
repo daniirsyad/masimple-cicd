@@ -1,4 +1,6 @@
 from flask import flash, redirect, render_template, url_for
+from sqlalchemy import func
+from sqlalchemy.orm import selectinload
 
 from app.blueprints.permissions import permissions_bp
 from app.blueprints.permissions.forms import PermissionForm
@@ -14,7 +16,7 @@ def _edit_prefix(permission_id):
 
 
 def _render_permissions_list(create_form=None, open_modal=None, invalid_edit=None):
-    permissions = Permission.query.order_by(Permission.code).all()
+    permissions = Permission.query.options(selectinload(Permission.roles)).order_by(Permission.code).all()
 
     if create_form is None:
         create_form = PermissionForm()
@@ -31,12 +33,15 @@ def _render_permissions_list(create_form=None, open_modal=None, invalid_edit=Non
     # What deleting each one would affect, shown in its delete confirm. The
     # app's own routes check codes like user.view: deleting one of those
     # locks that page for everyone until a permission with that code exists again.
+    menu_counts = dict(
+        db.session.query(Menu.permission_code, func.count()).filter(Menu.permission_code.isnot(None)).group_by(Menu.permission_code)
+    )
     delete_impacts = {}
     for permission in permissions:
         parts = []
         if permission.roles:
             parts.append(f"It will be removed from {len(permission.roles)} role(s).")
-        menus_using_it = Menu.query.filter_by(permission_code=permission.code).count()
+        menus_using_it = menu_counts.get(permission.code, 0)
         if menus_using_it:
             parts.append(f"{menus_using_it} menu item(s) require it and will be hidden from everyone.")
         parts.append(

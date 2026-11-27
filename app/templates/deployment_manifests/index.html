@@ -89,8 +89,8 @@ MASIMPLE CICD{% endblock %}
       Helm chart <span class="font-mono">{{ manifest.helm_chart_name }} {{ manifest.helm_chart_version }}</span>{{ ' (uploaded)' if manifest.helm_chart_source == 'upload' else '' }},
       release <span class="font-mono">{{ manifest.helm_release_name }}</span> in
       <span class="font-mono">{{ manifest.helm_namespace }}</span>
-      {% elif manifest.version_bindings.count() %}
-      Uses {% for binding in manifest.version_bindings %}{{ ' and ' if loop.last and not loop.first else (', ' if not loop.first else '') }}{% if binding.pinned_image_build %}{{ binding.builder.name }} build {{ binding.pinned_image_build.batch.short_version }}{% else %}the latest {{ binding.builder.name }} build{% endif %}{{ ' for ' ~ binding.placeholder_key if binding.placeholder_key != 'default' else '' }}{% endfor %}
+      {% elif bindings_by_manifest[manifest.id] %}
+      Uses {% for binding in bindings_by_manifest[manifest.id] %}{{ ' and ' if loop.last and not loop.first else (', ' if not loop.first else '') }}{% if binding.pinned_image_build %}{{ binding.builder.name }} build {{ binding.pinned_image_build.batch.short_version }}{% else %}the latest {{ binding.builder.name }} build{% endif %}{{ ' for ' ~ binding.placeholder_key if binding.placeholder_key != 'default' else '' }}{% endfor %}
       {% else %}
       Plain YAML with no version placeholders
       {% endif %}

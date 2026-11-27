@@ -27,7 +27,27 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1270 tests passing** (as of the last full run).
+- **1276 tests passing** (as of the last full run).
+- **This session's work, part 17** — performance plan step 4 (N+1 queries
+  on list pages; asked: "go ahead with step 4"):
+  1. Images: the page's images in one query (`images_by_batch`, since
+     `batch.image_builds` is dynamic) and `commit_ranges_for_images()` in
+     `history.py` (previous commit via a correlated subquery + one commits
+     query; `commit_range_for_image` now calls it). 222 -> 13 queries.
+  2. Permissions: roles `selectinload`, menu counts grouped. Menus: form
+     choices built once, template uses `children_by_parent`. Documentation:
+     eager-loads doc, objects, change type, author.
+  3. Builders: dropdown choices built once (`_with_fallback` adds a
+     disabled current value), relationships joined, delete-impact counts
+     grouped, latest build joins its batch.
+  4. Manifests: `current_deployments_for(ids)` in the deploy worker (one
+     DISTINCT ON for every manifest/server pair's latest success) feeds the
+     status lights and delete impact (`_live_servers` removed); choices,
+     chart uploads and bindings (`bindings_by_manifest`) loaded once; recent
+     builds per Builder via `row_number()`. 76 -> 28 (the "update available"
+     resolve per deployed manifest is left).
+  5. Tests: `test_list_page_queries_do_not_grow_with_rows` (6 pages, 1 vs 4
+     rows of everything, query counts equal). Full suite 1276 passed.
 - **This session's work, part 16** — page-to-page navigation felt slow
   (asked: check performance, plan it, then "go ahead with steps 0-3" of
   `docs/performance-plan.md`, which has the measurements and steps 4–6):

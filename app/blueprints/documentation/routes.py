@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from flask import flash, jsonify, redirect, render_template, request, url_for
+from sqlalchemy.orm import selectinload
 
 from app.blueprints.documentation import documentation_bp
 from app.blueprints.documentation.forms import DocumentationForm
@@ -21,7 +22,7 @@ from app.models import (
 from app.services.ai.context import gather_batch_ai_context
 from app.services.ai.factory import default_provider_type, get_ai_provider
 from app.services.ai.prompt import render_default_prompt
-from app.services.build.history import commit_range_for_image
+from app.services.build.history import commit_ranges_for_images
 from app.utils.decorators import permission_required
 from app.utils.error_logger import log_error
 from app.utils.logger import log_activity
@@ -183,7 +184,10 @@ def _render_view(batch, doc, form=None):
         rendered_prompt=_rendered_prompt(batch, doc.objects),
         provider_choices=_ai_provider_choices(),
         default_provider_type=default_provider_type(),
-        commit_ranges={str(image.id): commit_range_for_image(image) for image in batch.image_builds},
+        commit_ranges={
+            str(image_id): commit_range
+            for image_id, commit_range in commit_ranges_for_images(batch.image_builds.all()).items()
+        },
     )
 
 
@@ -225,7 +229,16 @@ def list_documentation():
     }
 
     page = request.args.get("page", 1, type=int)
-    pagination = _documented_batches_query(filters).paginate(page=page, per_page=DOC_PER_PAGE, error_out=False)
+    doc = selectinload(BuildBatch.documentation)
+    pagination = (
+        _documented_batches_query(filters)
+        .options(
+            doc.selectinload(VersionDocumentation.objects),
+            doc.joinedload(VersionDocumentation.change_type),
+            doc.joinedload(VersionDocumentation.built_by_user),
+        )
+        .paginate(page=page, per_page=DOC_PER_PAGE, error_out=False)
+    )
 
     # One grouped query for the whole page, not one per row.
     commit_counts = dict(

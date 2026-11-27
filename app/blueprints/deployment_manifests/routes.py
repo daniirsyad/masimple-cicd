@@ -6,6 +6,7 @@ import yaml
 from flask import abort, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user
 from markupsafe import Markup
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.blueprints.deployment_manifests import deployment_manifests_bp
 from app.blueprints.deployment_manifests.forms import DeploymentManifestForm
@@ -19,7 +20,6 @@ from app.models import (
     HelmChartUpload,
     ImageBuild,
     User,
-    WorkflowStep,
 )
 from app.services.deployment.helm import (
     ChartArchiveError,
@@ -39,7 +39,7 @@ from app.services.deployment.resolver import UnresolvedPlaceholderError, find_pl
 from app.services.deployment.worker import (
     enqueue_deployment_run,
     fail_queued_executions,
-    get_current_deployment,
+    current_deployments_for,
     get_available_update,
     is_currently_deployed,
 )
@@ -61,13 +61,16 @@ def _parse_uuid(value):
         return None
 
 
-def _server_choices(include_servers=None):
+def _server_choices(include_servers=None, active=None):
     """Active servers only — plus, if given, `include_servers` (a manifest's
     own currently-targeted servers) so re-submitting its edit form doesn't
     fail WTForms' choice validation, or silently drop a target, just because
-    one of them has since been disabled.
+    one of them has since been disabled. `active`: the active list, already
+    built once for a page with many forms.
     """
-    choices = [(str(s.id), s.name) for s in DeploymentServer.query.filter_by(is_active=True).order_by(DeploymentServer.name).all()]
+    if active is None:
+        active = [(str(s.id), s.name) for s in DeploymentServer.query.filter_by(is_active=True).order_by(DeploymentServer.name).all()]
+    choices = list(active)
     if include_servers:
         existing_ids = {choice_id for choice_id, _ in choices}
         for server in include_servers:
@@ -95,22 +98,32 @@ def _builder_successful_builds():
     ImageBuilds per Builder, most recent first, for the manifest form's
     per-binding "Pinned Build (optional)" picker (see deployment_manifests.js).
     """
-    result = {}
-    for builder in Builder.query.all():
-        builds = (
-            ImageBuild.query.filter_by(builder_id=builder.id, status="success")
-            .order_by(ImageBuild.created_at.desc())
-            .limit(BUILDER_SUCCESSFUL_BUILDS_LIMIT)
-            .all()
-        )
-        result[str(builder.id)] = [
+    result = {str(builder_id): [] for (builder_id,) in db.session.query(Builder.id)}
+    # One query for all Builders: number each Builder's builds newest first
+    # and keep the first N.
+    position = (
+        db.func.row_number()
+        .over(partition_by=ImageBuild.builder_id, order_by=ImageBuild.created_at.desc())
+        .label("position")
+    )
+    ranked = (
+        db.session.query(ImageBuild.id, position)
+        .filter(ImageBuild.builder_id.isnot(None), ImageBuild.status == "success")
+        .subquery()
+    )
+    builds = (
+        ImageBuild.query.join(ranked, ranked.c.id == ImageBuild.id)
+        .filter(ranked.c.position <= BUILDER_SUCCESSFUL_BUILDS_LIMIT)
+        .order_by(ImageBuild.builder_id, ranked.c.position)
+    )
+    for build in builds:
+        result[str(build.builder_id)].append(
             {
                 "id": str(build.id),
                 "tag": build.image_tag,
                 "created_at": build.created_at.strftime("%Y-%m-%d %H:%M"),
             }
-            for build in builds
-        ]
+        )
     return result
 
 
@@ -168,13 +181,16 @@ def _apply_chart_upload(manifest, form):
     manifest.helm_chart_name, manifest.helm_chart_version = upload.chart_name, upload.chart_version
 
 
-def _chart_upload_choices(manifest):
+def _chart_upload_choices(manifest, uploads=None):
+    """`uploads`: the manifest's uploads, newest first, if already loaded."""
     if manifest is None:
         return []
+    if uploads is None:
+        uploads = manifest.helm_chart_uploads
     return [
         (upload.chart_version, f"{upload.chart_name} {upload.chart_version} ({upload.filename}, uploaded "
                                f"{upload.uploaded_at:%Y-%m-%d %H:%M} UTC)")
-        for upload in manifest.helm_chart_uploads
+        for upload in uploads
     ]
 
 
@@ -294,7 +310,7 @@ def _group_name_suggestions():
     ]
 
 
-def _manifest_current_deployments(manifests):
+def _manifest_current_deployments(manifests, latest):
     """{manifest_id_str: {server_id_str: execution}} for the target servers
     each manifest is *currently deployed* on (is_currently_deployed's rule:
     latest successful execution wasn't a stop). Its keys drive whether a
@@ -305,7 +321,7 @@ def _manifest_current_deployments(manifests):
     for manifest in manifests:
         live = {}
         for server in manifest.target_servers:
-            execution = get_current_deployment(manifest.id, server.id)
+            execution = latest.get((manifest.id, server.id))
             if execution is not None and execution.run.action != "stop":
                 live[str(server.id)] = execution
         current[str(manifest.id)] = live
@@ -313,37 +329,32 @@ def _manifest_current_deployments(manifests):
 
 
 
-def _live_servers(manifest):
-    """Servers this manifest is still deployed on: every server with any
-    execution history for it, not just its current target_servers, since
-    those can drift apart after its targets are edited."""
-    server_ids = {
-        row[0]
-        for row in DeploymentExecution.query.with_entities(DeploymentExecution.server_id)
-        .filter_by(manifest_id=manifest.id)
-        .distinct()
-        if row[0] is not None
-    }
-    return [
-        server
-        for server in DeploymentServer.query.filter(DeploymentServer.id.in_(server_ids)).all()
-        if is_currently_deployed(manifest.id, server.id)
-    ]
-
-
-def _manifest_delete_impacts(manifests):
+def _manifest_delete_impacts(manifests, latest):
     """{manifest_id: text_or_None}: what deleting each one would affect,
-    shown in its delete confirm. Nothing blocks the delete."""
+    shown in its delete confirm. Nothing blocks the delete. "Still deployed"
+    counts every server with a current deployment, not just the current
+    target_servers, since those can drift apart after its targets are edited."""
+    step_counts = dict(
+        db.session.query(workflow_step_manifests.c.manifest_id, db.func.count())
+        .group_by(workflow_step_manifests.c.manifest_id)
+    )
     impacts = {}
     for manifest in manifests:
         parts = []
-        live_servers = _live_servers(manifest)
+        live_servers = sorted(
+            (
+                execution.server
+                for (manifest_id, _), execution in latest.items()
+                if manifest_id == manifest.id and execution.server is not None and execution.run.action != "stop"
+            ),
+            key=lambda server: server.name,
+        )
         if live_servers:
             names = ", ".join(server.name for server in live_servers)
             parts.append(
                 f"Still deployed on: {names}. It keeps running there, and this app can no longer stop it."
             )
-        referencing_steps = WorkflowStep.query.filter(WorkflowStep.selected_manifests.any(id=manifest.id)).count()
+        referencing_steps = step_counts.get(manifest.id, 0)
         if referencing_steps:
             parts.append(f"It will be removed from {referencing_steps} workflow step(s).")
         impacts[manifest.id] = " ".join(parts) or None
@@ -432,35 +443,70 @@ def _manifest_groups(manifests, manifest_live_servers, manifest_updates):
 def _render_index(create_form=None, open_modal=None, invalid_edit=None):
     if create_form is None:
         create_form = DeploymentManifestForm(prefix=CREATE_PREFIX)
-    create_form.server_ids.choices = _server_choices()
-    create_form.allowed_user_ids.choices = _user_choices()
+    # Built once here, not again for every manifest's edit form.
+    active_servers = _server_choices()
+    user_choices = _user_choices()
+    create_form.server_ids.choices = active_servers
+    create_form.allowed_user_ids.choices = user_choices
 
-    manifests = DeploymentManifest.query.filter_by(is_active=True).order_by(DeploymentManifest.name).all()
+    manifests = (
+        DeploymentManifest.query.filter_by(is_active=True)
+        .options(
+            selectinload(DeploymentManifest.target_servers),
+            selectinload(DeploymentManifest.allowed_users),
+        )
+        .order_by(DeploymentManifest.name)
+        .all()
+    )
+    uploads = {manifest.id: [] for manifest in manifests}
+    for upload in (
+        HelmChartUpload.query.filter(HelmChartUpload.manifest_id.in_(list(uploads)))
+        .order_by(HelmChartUpload.uploaded_at.desc())
+        if manifests
+        else []
+    ):
+        uploads[upload.manifest_id].append(upload)
 
     invalid_id, invalid_form = invalid_edit or (None, None)
     edit_forms = {}
     for manifest in manifests:
         if manifest.id == invalid_id:
-            invalid_form.server_ids.choices = _server_choices(include_servers=manifest.target_servers)
-            invalid_form.allowed_user_ids.choices = _user_choices()
-            invalid_form.helm_chart_upload_version.choices = _chart_upload_choices(manifest)
+            invalid_form.server_ids.choices = _server_choices(manifest.target_servers, active_servers)
+            invalid_form.allowed_user_ids.choices = user_choices
+            invalid_form.helm_chart_upload_version.choices = _chart_upload_choices(manifest, uploads[manifest.id])
             edit_forms[manifest.id] = invalid_form
         else:
             form = DeploymentManifestForm(obj=manifest, prefix=_edit_prefix(manifest.id))
-            form.server_ids.choices = _server_choices(include_servers=manifest.target_servers)
+            form.server_ids.choices = _server_choices(manifest.target_servers, active_servers)
             form.server_ids.data = [str(server.id) for server in manifest.target_servers]
-            form.allowed_user_ids.choices = _user_choices()
+            form.allowed_user_ids.choices = user_choices
             form.allowed_user_ids.data = [str(user.id) for user in manifest.allowed_users]
             form.helm_repo_username.data = decode_credentials(manifest.encrypted_helm_repo_credentials).get("username", "")
-            form.helm_chart_upload_version.choices = _chart_upload_choices(manifest)
+            form.helm_chart_upload_version.choices = _chart_upload_choices(manifest, uploads[manifest.id])
             form.helm_chart_upload_version.data = manifest.helm_chart_version
             edit_forms[manifest.id] = form
 
-    current_deployments = _manifest_current_deployments(manifests)
+    latest = current_deployments_for([manifest.id for manifest in manifests])
+    current_deployments = _manifest_current_deployments(manifests, latest)
     manifest_live_servers = {manifest_id: list(live) for manifest_id, live in current_deployments.items()}
     manifest_updates = _manifest_update_availability(manifests, manifest_live_servers)
     groups, ungrouped = _manifest_groups(manifests, manifest_live_servers, manifest_updates)
-    delete_impacts = _manifest_delete_impacts(manifests)
+    delete_impacts = _manifest_delete_impacts(manifests, latest)
+
+    bindings_by_manifest = {manifest.id: [] for manifest in manifests}
+    for binding in (
+        DeploymentManifestVersionBinding.query.filter(
+            DeploymentManifestVersionBinding.manifest_id.in_(list(bindings_by_manifest))
+        )
+        .options(
+            joinedload(DeploymentManifestVersionBinding.builder),
+            joinedload(DeploymentManifestVersionBinding.pinned_image_build).joinedload(ImageBuild.batch),
+        )
+        .order_by(DeploymentManifestVersionBinding.placeholder_key)
+        if manifests
+        else []
+    ):
+        bindings_by_manifest[binding.manifest_id].append(binding)
 
     manifest_bindings = {
         str(manifest.id): [
@@ -469,7 +515,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
                 "builder_id": str(binding.builder_id),
                 "pinned_image_build_id": str(binding.pinned_image_build_id) if binding.pinned_image_build_id else "",
             }
-            for binding in manifest.version_bindings
+            for binding in bindings_by_manifest[manifest.id]
         ]
         for manifest in manifests
     }
@@ -488,6 +534,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
         builders=Builder.query.order_by(Builder.name).all(),
         group_name_suggestions=_group_name_suggestions(),
         manifest_bindings=manifest_bindings,
+        bindings_by_manifest=bindings_by_manifest,
         builder_successful_builds=_builder_successful_builds(),
         open_modal=open_modal,
     )

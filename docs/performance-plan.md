@@ -58,7 +58,7 @@ Findings, in order of how much they likely cost:
    (3× the `kubectl`/`helm` calls). Only Telegram and Discord use an
    advisory lock to run once.
 
-## Done so far (steps 0–3, 2026-11-27)
+## Done so far (steps 0–4, 2026-11-27)
 
 Same dev measurement after the change:
 
@@ -73,7 +73,21 @@ Same dev measurement after the change:
 
 Page scripts no longer go back to the server on page changes (step 1).
 That saving shows only in the browser, so the table above leaves it out.
-Steps 4–6 are still open.
+### Step 4 (2026-11-27)
+
+| Page | Before step 0 | After step 3 | After step 4 |
+|---|---|---|---|
+| `/images/` | 145 ms, 222 q | 99 ms, 129 q | 18 ms, 13 q |
+| `/permissions/` | 97 ms, 114 q | 77 ms, 107 q | 21 ms, 11 q |
+| `/menus/` | 98 ms, 96 q | 72 ms, 89 q | 24 ms, 10 q |
+| `/deployment-manifests/` | 79 ms, 88 q | 59 ms, 76 q | 30 ms, 28 q |
+| `/builders/` | 69 ms, 82 q | 51 ms, 68 q | 27 ms, 22 q |
+| `/documentation/` | 62 ms, 84 q | 37 ms, 57 q | 16 ms, 17 q |
+
+These six pages' query counts no longer grow with the number of rows
+(`test_list_page_queries_do_not_grow_with_rows`). One per-row cost is
+left: Manifests' "update available" check still resolves each manifest
+that is deployed somewhere. Steps 5–6 are still open.
 
 ## Plan
 

@@ -10,11 +10,10 @@ from app.utils.decorators import permission_required
 from app.utils.logger import log_activity
 
 
-def _top_level_choices(exclude_id=None):
-    query = Menu.query.filter_by(parent_id=None).order_by(Menu.order)
-    if exclude_id:
-        query = query.filter(Menu.id != exclude_id)
-    return [("", "Top level")] + [(str(menu.id), menu.label) for menu in query.all()]
+def _top_level_choices(exclude_id=None, top_level=None):
+    if top_level is None:
+        top_level = Menu.query.filter_by(parent_id=None).order_by(Menu.order).all()
+    return [("", "Top level")] + [(str(menu.id), menu.label) for menu in top_level if menu.id != exclude_id]
 
 
 def _permission_choices():
@@ -42,8 +41,10 @@ def _render_menus_list(create_form=None, open_modal=None, invalid_edit=None):
 
     if create_form is None:
         create_form = MenuForm()
-    create_form.parent_id.choices = _top_level_choices()
-    create_form.permission_code.choices = _permission_choices()
+    # Built once, not per row: the list has an edit form for every menu.
+    permission_choices = _permission_choices()
+    create_form.parent_id.choices = _top_level_choices(top_level=top_level)
+    create_form.permission_code.choices = permission_choices
 
     invalid_menu_id, invalid_form = invalid_edit or (None, None)
 
@@ -56,8 +57,8 @@ def _render_menus_list(create_form=None, open_modal=None, invalid_edit=None):
             edit_forms[menu.id] = invalid_form
         else:
             form = MenuForm(obj=menu, prefix=_edit_prefix(menu.id))
-            form.parent_id.choices = _top_level_choices(exclude_id=menu.id)
-            form.permission_code.choices = _permission_choices()
+            form.parent_id.choices = _top_level_choices(exclude_id=menu.id, top_level=top_level)
+            form.permission_code.choices = permission_choices
             form.parent_id.data = str(menu.parent_id) if menu.parent_id else ""
             form.permission_code.data = menu.permission_code or ""
             edit_forms[menu.id] = form

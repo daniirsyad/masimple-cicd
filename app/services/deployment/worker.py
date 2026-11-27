@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timedelta
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import contains_eager, joinedload
 
 from app.extensions import db
 from app.models import DeploymentExecution, DeploymentRun
@@ -66,6 +67,28 @@ def get_current_deployment(manifest_id, server_id):
         .order_by(DeploymentExecution.created_at.desc())
         .first()
     )
+
+
+def current_deployments_for(manifest_ids):
+    """{(manifest_id, server_id): get_current_deployment(...)} for every pair
+    of these manifests that has one, in a single query (DISTINCT ON), with
+    each execution's run and server loaded. For list pages."""
+    if not manifest_ids:
+        return {}
+    executions = (
+        DeploymentExecution.query.join(DeploymentRun, DeploymentExecution.run_id == DeploymentRun.id)
+        .options(contains_eager(DeploymentExecution.run), joinedload(DeploymentExecution.server))
+        .filter(
+            DeploymentExecution.manifest_id.in_(manifest_ids),
+            DeploymentExecution.server_id.isnot(None),
+            DeploymentExecution.status == "success",
+        )
+        .distinct(DeploymentExecution.manifest_id, DeploymentExecution.server_id)
+        .order_by(
+            DeploymentExecution.manifest_id, DeploymentExecution.server_id, DeploymentExecution.created_at.desc()
+        )
+    )
+    return {(execution.manifest_id, execution.server_id): execution for execution in executions}
 
 
 def is_currently_deployed(manifest_id, server_id):

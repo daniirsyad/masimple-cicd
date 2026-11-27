@@ -1,4 +1,8 @@
-from app.models import ImageBuild
+from sqlalchemy import select
+from sqlalchemy.orm import aliased
+
+from app.extensions import db
+from app.models import ImageBuild, ImageBuildCommit
 
 
 def get_last_built_commit(builder_id, branch):
@@ -38,19 +42,46 @@ def commit_range_for_image(image_build):
     an older batch must show the range that was true then, not one that's
     since moved on because of newer builds.
     """
-    previous = (
-        ImageBuild.query.filter(
-            ImageBuild.builder_id == image_build.builder_id,
-            ImageBuild.branch_used == image_build.branch_used,
-            ImageBuild.status == "success",
-            ImageBuild.created_at < image_build.created_at,
+    return commit_ranges_for_images([image_build])[image_build.id]
+
+
+def commit_ranges_for_images(image_builds):
+    """{image_build.id: commit_range_for_image(...)} for many builds in two
+    queries (previous commit + commits), not three per build: list pages
+    show dozens of them."""
+    ids = [image.id for image in image_builds]
+    if not ids:
+        return {}
+
+    previous = aliased(ImageBuild)
+    previous_sha = (
+        select(previous.commit_sha)
+        .where(
+            previous.builder_id == ImageBuild.builder_id,
+            previous.branch_used == ImageBuild.branch_used,
+            previous.status == "success",
+            previous.created_at < ImageBuild.created_at,
         )
-        .order_by(ImageBuild.created_at.desc())
-        .first()
+        .order_by(previous.created_at.desc())
+        .limit(1)
+        .correlate(ImageBuild)
+        .scalar_subquery()
     )
+    from_shas = dict(db.session.query(ImageBuild.id, previous_sha).filter(ImageBuild.id.in_(ids)))
+
+    commits = {image_id: [] for image_id in ids}
+    for commit in (
+        ImageBuildCommit.query.filter(ImageBuildCommit.image_build_id.in_(ids))
+        .order_by(ImageBuildCommit.committed_at)
+    ):
+        commits[commit.image_build_id].append(commit)
+
     return {
-        "from_sha": previous.commit_sha if previous else None,
-        "to_sha": image_build.commit_sha,
-        "commits": list(image_build.commits),
-        "files": image_build.changed_files,
+        image.id: {
+            "from_sha": from_shas.get(image.id),
+            "to_sha": image.commit_sha,
+            "commits": commits[image.id],
+            "files": image.changed_files,
+        }
+        for image in image_builds
     }

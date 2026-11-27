@@ -17,7 +17,8 @@
     <p class="py-4 text-sm">
       Delete "{{ item.label }}" from the sidebar? This can't be undone.
     </p>
-    {{ delete_impact(item.children|length ~ ' sub-item(s) will be deleted with it.' if item.children else None) }}
+    {% set item_children = children_by_parent.get(item.id, []) %}
+    {{ delete_impact(item_children|length ~ ' sub-item(s) will be deleted with it.' if item_children else None) }}
     <div class="modal-action">
       <button
         type="button"

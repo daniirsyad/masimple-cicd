@@ -1,8 +1,9 @@
 from flask import jsonify, render_template, request
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.blueprints.images import images_bp
 from app.models import BuildBatch, ImageBuild
-from app.services.build.history import commit_range_for_image
+from app.services.build.history import commit_ranges_for_images
 from app.services.build.worker import get_batch_progress, get_engine_status
 from app.utils.decorators import permission_required
 
@@ -45,23 +46,34 @@ def list_images():
         query = query.filter(BuildBatch.status == status)
 
     page = request.args.get("page", 1, type=int)
-    pagination = query.order_by(BuildBatch.created_at.desc()).paginate(
-        page=page, per_page=PER_PAGE, error_out=False
+    pagination = (
+        query.options(selectinload(BuildBatch.documentation), joinedload(BuildBatch.requester))
+        .order_by(BuildBatch.created_at.desc())
+        .paginate(page=page, per_page=PER_PAGE, error_out=False)
     )
 
-    human_sizes = {}
-    registry_links = {}
-    commit_ranges = {}
-    for batch in pagination.items:
-        for image in batch.image_builds:
-            human_sizes[image.id] = _human_size(image.image_size)
-            registry_links[image.id] = _registry_link(image)
-            commit_ranges[image.id] = commit_range_for_image(image)
+    # All of this page's images in one query (batch.image_builds is a
+    # dynamic relationship: one query per batch otherwise).
+    images = (
+        ImageBuild.query.filter(ImageBuild.batch_id.in_([batch.id for batch in pagination.items]))
+        .options(joinedload(ImageBuild.builder))
+        .order_by(ImageBuild.created_at)
+        .all()
+        if pagination.items
+        else []
+    )
+    images_by_batch = {batch.id: [] for batch in pagination.items}
+    for image in images:
+        images_by_batch[image.batch_id].append(image)
+    human_sizes = {image.id: _human_size(image.image_size) for image in images}
+    registry_links = {image.id: _registry_link(image) for image in images}
+    commit_ranges = commit_ranges_for_images(images)
 
     return render_template(
         "images/list.html",
         pagination=pagination,
         batches=pagination.items,
+        images_by_batch=images_by_batch,
         selected_status=status,
         status_choices=BATCH_STATUS_CHOICES,
         human_sizes=human_sizes,

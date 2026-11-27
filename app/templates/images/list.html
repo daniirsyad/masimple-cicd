@@ -87,7 +87,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
             </tr>
           </thead>
           <tbody>
-            {% for image in batch.image_builds %}
+            {% for image in images_by_batch[batch.id] %}
             <tr>
               <td>{{ image.builder_label }}</td>
               <td>{{ image.branch_used }}</td>
