@@ -28,6 +28,13 @@ Then ask me what to work on next rather than assuming.
 ## Current state
 
 - **1266 tests passing** (as of the last full run).
+- **This session's work, part 15** — list search reset on page change
+  (asked: "make the search reset after change the page"):
+  1. `page.js`'s `htmx:beforeSwap` clears every `list-search:*`
+     sessionStorage key when the response path differs from the request's
+     starting path, before the new page's scripts run. A save/deploy that
+     redirects back to the same page still keeps the query. JS only, no
+     tests touched.
 - **This session's work, part 14** — Detect failed on the production server
   with "unknown flag: --all": the image pins Helm 4 (v4.3.2), whose
   `helm list` has no `--all`; dev has Helm 3.22. `helm_release_info` now

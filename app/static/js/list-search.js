@@ -6,8 +6,8 @@
 // lowercase [data-search] text. A row shows when it contains every typed
 // word; a card hides when none of its rows show, unless its own
 // data-search-card text (the group name) matches, which shows the whole
-// group. The query is kept per page for the session, so it survives the
-// page re-rendering after a save or a deploy.
+// group. The query survives the page re-rendering after a save or a deploy;
+// going to another page clears it (page.js).
 onPageReady(() => {
   document.querySelectorAll("input[data-list-search]").forEach((input) => {
     const container = document.querySelector(input.dataset.listSearch);

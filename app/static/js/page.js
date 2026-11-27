@@ -54,6 +54,14 @@
     }
     controller.abort();
     controller = new AbortController();
+    // Going to another page starts with an empty list search (list-search.js);
+    // a save that redirects back here keeps it. Cleared before the new
+    // page's scripts run.
+    if (responseUrl.pathname !== pathBeforeRequest) {
+      Object.keys(sessionStorage)
+        .filter((key) => key.startsWith("list-search:"))
+        .forEach((key) => sessionStorage.removeItem(key));
+    }
   });
 
   document.addEventListener("htmx:afterSwap", (event) => {
