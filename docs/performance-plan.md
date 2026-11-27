@@ -118,8 +118,33 @@ that is deployed somewhere.
 - gunicorn `--threads 8` (was 4): 24 requests at once instead of 12. DB
   pool per process raised to 10 + 10 overflow to match.
 
-All steps are done. Next: measure production with the `Server-Timing`
-header (step 0) to see what's left there.
+All steps are done.
+
+## Production check (2026-11-27)
+
+Measured on production after steps 0–6 were deployed: curl for server
+time, and headless Chromium clicking the real sidebar for browser time.
+Server time was fine everywhere except Deployment Runs. The real cost was
+in the browser:
+
+| Click to | Server | Until painted, before | After the fix |
+|---|---|---|---|
+| Deployment Manifests | 230 ms | **5.9 s** (5.3 s of main thread blocked) | 0.7 s |
+| YAML Generator (after Manifests) | 10 ms | 480 ms | 230 ms |
+| Deployment Runs | 1000 ms | 1.1 s | not measured yet (needs deploy) |
+
+- **Manifests built 52 CodeMirror editors on load**, one per edit/view
+  modal (26,000 DOM nodes). Editors are now built when their modal first
+  opens (`YamlEditor.lazyYamlEditor`). Checked against production with
+  the new JS swapped in: editor appears with the manifest's YAML, no JS
+  errors.
+- **Every sidebar click got a 308 first**: menu URLs have no trailing slash
+  and blueprint index routes do (about 70 ms). `strict_slashes = False`
+  now serves both.
+- **Deployment Runs** loaded each run's executions twice with their logs
+  and rendered YAML, plus every manifest's YAML for the filter dropdown.
+  It now loads them once, without those columns. Dev data is too small to
+  show the gain, so measure it on production after deploy.
 
 ## Plan
 

@@ -215,7 +215,11 @@ def get_run_progress(run_id):
     """'X of Y done' — a run-level aggregate over its DeploymentExecutions'
     statuses, mirrors build.worker.get_batch_progress.
     """
-    executions = DeploymentExecution.query.filter_by(run_id=run_id).all()
+    return run_progress(DeploymentExecution.query.filter_by(run_id=run_id).all())
+
+
+def run_progress(executions):
+    """get_run_progress for executions already loaded (list pages)."""
     total = len(executions)
     finished = sum(1 for execution in executions if execution.status in ("success", "failed", "skipped"))
     succeeded = sum(1 for execution in executions if execution.status == "success")

@@ -27,7 +27,26 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1282 tests passing** (as of the last full run).
+- **1283 tests passing** (as of the last full run).
+- **This session's work, part 20** — production still slow on the
+  Deployment menu's pages (asked to check it on the live site as `tester`).
+  Measured with curl (`Server-Timing`) and Playwright-driven Chromium (the
+  cached npx Playwright under `~/.npm/_npx`); numbers in
+  `docs/performance-plan.md` "Production check":
+  1. Deployment Manifests took 5.9 s in the browser: 52 CodeMirror editors
+     built on load. `YamlEditor.lazyYamlEditor(textarea, options)` returns a
+     getter and builds the editor when its `<dialog>` first opens;
+     deployment_manifests.js uses it (`editorFor(id)`). 0.7 s with the new
+     JS against production data.
+  2. `app.url_map.strict_slashes = False` (set before blueprints register):
+     menu URLs like `/deployment-servers` no longer 308 to the `/` route.
+     `tests/test_proxy_headers.py` now checks https via `url_for(_external)`
+     on a fresh app, since the redirect it used is gone.
+  3. Deployment Runs (1 s server): executions loaded once
+     (`run_progress(executions)` in the deploy worker), `log`/
+     `rendered_yaml` deferred, manifest names only. Not measured on
+     production yet.
+  4. Full suite 1283 passed.
 - **This session's work, part 19** — performance plan step 6 (capacity
   and background work; asked: "go ahead with step 6"). The plan is now done:
   1. `pageInterval` in page.js pauses while `document.hidden` and ticks

@@ -19,13 +19,16 @@ onPageReady(() => {
   // textarea it wraps). Falls back to the plain textarea untouched if the
   // vendored script failed to load. Shared init lives in yaml_editor.js
   // (used here, by deployment_servers.js, and by yaml_generator.js). ---
-  const yamlEditors = {}; // textarea id -> CodeMirror instance
+  // Each editor is built when its modal first opens (lazyYamlEditor): this
+  // page has one per manifest's edit/view modal.
+  const editorGetters = {}; // textarea id -> () => CodeMirror instance or null
   document.querySelectorAll(".yaml-content-input").forEach((textarea) => {
     // A disabled <fieldset> = the read-only View modal for users without deployment_manifest.manage.
-    const cm = window.YamlEditor.initYamlEditor(textarea, { readOnly: !!textarea.closest("fieldset[disabled]") });
-    if (!cm) return;
-    yamlEditors[textarea.id] = cm;
+    editorGetters[textarea.id] = window.YamlEditor.lazyYamlEditor(textarea, {
+      readOnly: !!textarea.closest("fieldset[disabled]"),
+    });
   });
+  const editorFor = (textareaId) => editorGetters[textareaId]?.() || null;
 
   // --- Type switch: Kubernetes YAML vs. Helm chart. The Helm fields and
   // the "values" wording only show for Helm; the editor stays the same. ---
@@ -51,7 +54,7 @@ onPageReady(() => {
       const form = btn.closest("form");
       const status = form.querySelector(".helm-defaults-status");
       const field = (name) => form.querySelector(`[name$="${name}"]`)?.value.trim() || "";
-      const cm = yamlEditors[btn.dataset.yamlInputId];
+      const cm = editorFor(btn.dataset.yamlInputId);
       if (cm && cm.getValue().trim() && !confirm("Replace what's in the editor with the chart's default values?")) return;
 
       setBusy(btn, true);
@@ -96,7 +99,7 @@ onPageReady(() => {
   // (tag only) at the cursor, then a binding row for it.
   document.querySelectorAll(".yaml-insert-placeholder-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const cm = yamlEditors[btn.dataset.yamlInputId];
+      const cm = editorFor(btn.dataset.yamlInputId);
       const menu = btn.closest(".dropdown-content");
       const keyInput = menu.querySelector(".yaml-placeholder-key");
       const key = keyInput.value.trim();
@@ -235,7 +238,7 @@ onPageReady(() => {
   // The editor's live content: the textarea only catches up on change.
   function yamlOf(form) {
     const textarea = form.querySelector(".yaml-content-input");
-    const editor = textarea && yamlEditors[textarea.id];
+    const editor = textarea && editorFor(textarea.id);
     return editor ? editor.getValue() : textarea?.value || "";
   }
 
@@ -368,7 +371,7 @@ onPageReady(() => {
             return;
           }
           const textarea = form.querySelector(".yaml-content-input");
-          const editor = yamlEditors[textarea.id];
+          const editor = editorFor(textarea.id);
           if (editor) editor.setValue(data.yaml_content);
           else textarea.value = data.yaml_content;
           const seeds = {};

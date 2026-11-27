@@ -240,5 +240,28 @@
     return cm;
   }
 
-  window.YamlEditor = { initYamlEditor, refreshAfterVisible, currentCodeMirrorTheme };
+  // initYamlEditor, but for a textarea in a closed <dialog> only once the
+  // dialog first opens. Building an editor takes ~100 ms of main thread,
+  // and a list page with an edit modal per row (Deployment Manifests: 50+)
+  // froze for seconds building editors nobody had opened. Returns a getter:
+  // get() is the CodeMirror (made now if needed), or null without CodeMirror.
+  function lazyYamlEditor(textarea, options = {}) {
+    let cm = null;
+    const get = () => (cm = cm || initYamlEditor(textarea, options));
+    const dialog = textarea.closest("dialog");
+    if (!dialog || dialog.open) {
+      get();
+      return get;
+    }
+    // Runs before the opened dialog paints, so the plain textarea never shows.
+    const observer = new MutationObserver(() => {
+      if (!dialog.open) return;
+      observer.disconnect();
+      get();
+    });
+    observer.observe(dialog, { attributes: true, attributeFilter: ["open"] });
+    return get;
+  }
+
+  window.YamlEditor = { initYamlEditor, lazyYamlEditor, refreshAfterVisible, currentCodeMirrorTheme };
 })();

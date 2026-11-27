@@ -2,10 +2,11 @@ import uuid
 from datetime import datetime, timedelta
 
 from flask import jsonify, render_template, request
+from sqlalchemy.orm import defer, joinedload, load_only
 
 from app.blueprints.deployment_runs import deployment_runs_bp
 from app.models import DeploymentExecution, DeploymentManifest, DeploymentRun, DeploymentServer
-from app.services.deployment.worker import get_engine_status, get_run_progress
+from app.services.deployment.worker import get_engine_status, get_run_progress, run_progress
 from app.utils.decorators import permission_required
 
 PER_PAGE = 20
@@ -90,13 +91,22 @@ def index():
         page=page, per_page=PER_PAGE, error_out=False
     )
 
-    progress_by_run = {run.id: get_run_progress(run.id) for run in pagination.items}
-
+    # One query for the page's executions, without their logs and rendered
+    # YAML (large, and unused here), each with only its manifest's name.
     run_ids = [run.id for run in pagination.items]
     executions_by_run = {}
     if run_ids:
-        for execution in DeploymentExecution.query.filter(DeploymentExecution.run_id.in_(run_ids)).all():
+        for execution in (
+            DeploymentExecution.query.filter(DeploymentExecution.run_id.in_(run_ids))
+            .options(
+                defer(DeploymentExecution.log),
+                defer(DeploymentExecution.rendered_yaml),
+                joinedload(DeploymentExecution.manifest).load_only(DeploymentManifest.id, DeploymentManifest.name),
+            )
+            .all()
+        ):
             executions_by_run.setdefault(execution.run_id, []).append(execution)
+    progress_by_run = {run.id: run_progress(executions_by_run.get(run.id, [])) for run in pagination.items}
     run_names = {run.id: _run_display_name(run, executions_by_run.get(run.id, [])) for run in pagination.items}
 
     return render_template(
@@ -105,7 +115,9 @@ def index():
         runs=pagination.items,
         selected_status=status,
         status_choices=RUN_STATUS_CHOICES,
-        manifests=DeploymentManifest.query.order_by(DeploymentManifest.name).all(),
+        manifests=DeploymentManifest.query.options(load_only(DeploymentManifest.id, DeploymentManifest.name))
+        .order_by(DeploymentManifest.name)
+        .all(),
         servers=DeploymentServer.query.order_by(DeploymentServer.name).all(),
         selected_manifest_id=request.args.get("manifest_id") or "",
         selected_server_id=request.args.get("server_id") or "",

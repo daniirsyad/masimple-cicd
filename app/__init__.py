@@ -29,6 +29,11 @@ def create_app(config_name=None):
 
     app = Flask(__name__)
     app.config.from_object(config[config_name])
+    # Menu URLs are stored without the trailing slash (/deployment-servers)
+    # while blueprint index routes have one; strict slashes answered every
+    # sidebar click with a 308 first, one extra round trip. Set before any
+    # route is registered: each rule takes this when it's added.
+    app.url_map.strict_slashes = False
 
     proxies = app.config.get("TRUSTED_PROXY_COUNT", 0)
     if proxies:
