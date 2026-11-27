@@ -27,7 +27,23 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1276 tests passing** (as of the last full run).
+- **1281 tests passing** (as of the last full run).
+- **This session's work, part 18** — performance plan step 5 (pages that
+  waited on GitHub/kubectl before sending anything; asked: "go ahead with
+  step 5"):
+  1. `/github/` no longer calls GitHub: each connection's "Available to
+     register" (and its list error) is `git_sources/_available_repos.html`,
+     loaded by `hx-get` from the new `GET /github/connections/<id>/available`
+     (gitsource.manage).
+  2. `@loading_page_first(message)` in `app/utils/decorators.py` +
+     `partials/loading_page.html`: an htmx navigation gets the layout with a
+     spinner, which re-requests the page with `X-Render-Now` and swaps the
+     body. Full loads, `X-Render-Now` and a waiting flash render directly.
+     It goes under `@permission_required`. On the 8 cluster GET pages in
+     `deployment_pods`.
+  3. Tests: `TestLoadingPageFirst` (pods), GitHub listing tests moved to
+     the fragment + `test_page_does_not_call_github`. Full suite 1281
+     passed. Not checked in a real browser.
 - **This session's work, part 17** — performance plan step 4 (N+1 queries
   on list pages; asked: "go ahead with step 4"):
   1. Images: the page's images in one query (`images_by_batch`, since

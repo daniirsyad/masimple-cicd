@@ -58,17 +58,11 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
         create_form = GitSourceForm(prefix=CREATE_CONNECTION_PREFIX)
 
     sources = GitSource.query.filter_by(is_active=True).order_by(GitSource.name).all()
-    registered_full_names = {(repo.git_source_id, repo.full_name) for repo in Repository.query.all()}
 
     invalid_id, invalid_form = invalid_edit or (None, None)
 
     connections = []
     for source in sources:
-        available, list_error = _list_repos_for(source)
-        unregistered = [
-            repo for repo in available if (source.id, repo["full_name"]) not in registered_full_names
-        ]
-
         if source.id == invalid_id:
             edit_form = invalid_form
         else:
@@ -94,8 +88,6 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
         connections.append(
             {
                 "source": source,
-                "unregistered_repos": unregistered,
-                "list_error": list_error,
                 "repositories": repositories,
                 "delete_source_impact": delete_source_impact,
                 "remove_repo_impacts": remove_repo_impacts,
@@ -115,6 +107,23 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
 @permission_required("gitsource.manage")
 def index():
     return _render_index()
+
+
+@git_sources_bp.route("/connections/<uuid:source_id>/available")
+@permission_required("gitsource.manage")
+def available_repos(source_id):
+    """The connection's repos not registered yet, from a live GitHub call.
+    The index page loads this after it shows (hx-get), so a slow or broken
+    token delays only this list, not the page."""
+    source = GitSource.query.get_or_404(source_id)
+    available, list_error = _list_repos_for(source)
+    registered = {repo.full_name for repo in Repository.query.filter_by(git_source_id=source.id)}
+    entry = {
+        "source": source,
+        "unregistered_repos": [repo for repo in available if repo["full_name"] not in registered],
+        "list_error": list_error,
+    }
+    return render_template("git_sources/_available_repos.html", entry=entry)
 
 
 @git_sources_bp.route("/connections/create", methods=["POST"])

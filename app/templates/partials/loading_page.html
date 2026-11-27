@@ -1,0 +1,13 @@
+{% extends "base.html" %} {% block title %}Loading - MASIMPLE CICD{% endblock %} {% block content %}
+{# Sent first by @loading_page_first; fetches the real page and replaces the body with it. #}
+<div
+  class="flex items-center gap-2 py-10 text-sm text-base-content/60"
+  hx-get="{{ request.full_path }}"
+  hx-trigger="load"
+  hx-target="body"
+  hx-swap="innerHTML"
+  hx-headers='{"X-Render-Now": "1"}'
+>
+  <span class="loading loading-spinner loading-sm" aria-hidden="true"></span> {{ message }}
+</div>
+{% endblock %}

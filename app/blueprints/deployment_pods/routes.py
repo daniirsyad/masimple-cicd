@@ -27,7 +27,7 @@ from app.services.deployment.helpers import KUBE_CONNECTION_TYPE, provider_for_s
 from app.services.yaml_generator import ingress as ingress_generator
 from app.services.yaml_generator import network_policy as network_policy_generator
 from app.services.yaml_generator.render import to_yaml
-from app.utils.decorators import permission_required
+from app.utils.decorators import loading_page_first, permission_required
 from app.utils.error_logger import error_detail_link, log_error
 from app.utils.logger import log_activity
 
@@ -144,6 +144,7 @@ def index():
 
 @deployment_pods_bp.route("/<uuid:server_id>")
 @permission_required("deployment_pod.view")
+@loading_page_first("Reading the cluster...")
 def list_pods(server_id):
     server = _kube_server_or_404(server_id)
     namespace = request.args.get("namespace") or ""
@@ -264,6 +265,7 @@ def describe_pod(server_id, namespace, pod_name):
 
 @deployment_pods_bp.route("/<uuid:server_id>/resources/<kind>")
 @permission_required("deployment_pod.view")
+@loading_page_first("Reading the cluster...")
 def list_resources(server_id, kind):
     server = _kube_server_or_404(server_id)
     config = RESOURCE_KINDS.get(kind)
@@ -439,6 +441,7 @@ def _render_namespaces(server, create_form=None, open_modal=None, invalid_edit=N
 
 @deployment_pods_bp.route("/<uuid:server_id>/namespaces")
 @permission_required("deployment_pod.view")
+@loading_page_first("Reading the cluster...")
 def namespaces(server_id):
     server = _kube_server_or_404(server_id)
     return _render_namespaces(server)
@@ -662,6 +665,7 @@ def _render_secrets(
 
 @deployment_pods_bp.route("/<uuid:server_id>/secrets")
 @permission_required("deployment_pod.view")
+@loading_page_first("Reading the cluster...")
 def secrets(server_id):
     server = _kube_server_or_404(server_id)
     namespace_filter = request.args.get("namespace") or ""
@@ -911,6 +915,7 @@ def _render_configmaps(server, namespace_filter="", create_form=None, open_modal
 
 @deployment_pods_bp.route("/<uuid:server_id>/configmaps")
 @permission_required("deployment_pod.view")
+@loading_page_first("Reading the cluster...")
 def configmaps(server_id):
     server = _kube_server_or_404(server_id)
     namespace_filter = request.args.get("namespace") or ""
@@ -1149,6 +1154,7 @@ def _render_ingresses(
 
 @deployment_pods_bp.route("/<uuid:server_id>/ingresses")
 @permission_required("deployment_pod.view")
+@loading_page_first("Reading the cluster...")
 def ingresses(server_id):
     server = _kube_server_or_404(server_id)
     namespace_filter = request.args.get("namespace") or ""
@@ -1495,6 +1501,7 @@ def _render_network_policies(
 
 @deployment_pods_bp.route("/<uuid:server_id>/network-policies")
 @permission_required("deployment_pod.view")
+@loading_page_first("Reading the cluster...")
 def network_policies(server_id):
     server = _kube_server_or_404(server_id)
     namespace_filter = request.args.get("namespace") or ""
@@ -1708,6 +1715,7 @@ def _render_workloads(server, namespace_filter=""):
 
 @deployment_pods_bp.route("/<uuid:server_id>/workloads")
 @permission_required("deployment_pod.view")
+@loading_page_first("Reading the cluster...")
 def workloads(server_id):
     server = _kube_server_or_404(server_id)
     namespace_filter = request.args.get("namespace") or ""

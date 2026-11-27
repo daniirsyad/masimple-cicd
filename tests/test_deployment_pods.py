@@ -2030,3 +2030,39 @@ class TestRestartWorkload:
             f"/deployment-pods/{manage_api_server}/workloads/default/web/restart", data={}
         )
         assert response.status_code == 404
+
+
+class TestLoadingPageFirst:
+    """An htmx navigation gets a spinner page at once; the real page (with
+    kubectl) comes on its follow-up request."""
+
+    def test_htmx_navigation_gets_spinner_without_calling_kubectl(self, pod_client, kube_server, monkeypatch):
+        def fail(self, namespace=None):
+            raise AssertionError("kubectl must not run before the spinner page is sent")
+
+        monkeypatch.setattr(KubernetesProvider, "list_pods", fail)
+        response = pod_client.get(f"/deployment-pods/{kube_server}?namespace=web", headers={"HX-Request": "true"})
+        assert response.status_code == 200
+        assert b"Reading the cluster..." in response.data
+        assert f'hx-get="/deployment-pods/{kube_server}?namespace=web"'.encode() in response.data
+        assert b"X-Render-Now" in response.data
+
+    def test_follow_up_request_renders_the_real_page(self, pod_client, kube_server, monkeypatch):
+        monkeypatch.setattr(KubernetesProvider, "list_pods", lambda self, namespace=None: [])
+        response = pod_client.get(
+            f"/deployment-pods/{kube_server}", headers={"HX-Request": "true", "X-Render-Now": "1"}
+        )
+        assert response.status_code == 200
+        assert b"Reading the cluster..." not in response.data
+
+    def test_waiting_flash_renders_directly(self, pod_client, kube_server, monkeypatch):
+        monkeypatch.setattr(KubernetesProvider, "list_pods", lambda self, namespace=None: [])
+        with pod_client.session_transaction() as session:
+            session["_flashes"] = [("success", "Saved.")]
+        response = pod_client.get(f"/deployment-pods/{kube_server}", headers={"HX-Request": "true"})
+        assert b"Reading the cluster..." not in response.data
+        assert b"Saved." in response.data
+
+    def test_no_permission_is_still_403(self, noperm_client, kube_server):
+        response = noperm_client.get(f"/deployment-pods/{kube_server}", headers={"HX-Request": "true"})
+        assert response.status_code == 403

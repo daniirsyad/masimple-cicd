@@ -1,6 +1,6 @@
 from functools import wraps
 
-from flask import abort, current_app
+from flask import abort, current_app, render_template, request, session
 from flask_login import current_user
 
 
@@ -45,6 +45,30 @@ def role_required(name):
                 return current_app.login_manager.unauthorized()
             if not current_user.has_role(name):
                 abort(403, description=f"This requires the {name} role.")
+            return view_func(*args, **kwargs)
+
+        return wrapped
+
+    return decorator
+
+
+def loading_page_first(message):
+    """For pages that wait on something slow (kubectl) before they can
+    render: an htmx navigation gets the app layout with a spinner at once
+    (partials/loading_page.html), which then fetches the real page with
+    X-Render-Now and swaps it in. The sidebar and address bar change at
+    once instead of the old page sitting there until the cluster answers.
+
+    Full page loads (no HX-Request) render directly, and so does a request
+    with a flash message waiting, since the spinner page would use it up.
+    Put it under @permission_required, so a 403 still shows straight away.
+    """
+
+    def decorator(view_func):
+        @wraps(view_func)
+        def wrapped(*args, **kwargs):
+            if request.headers.get("HX-Request") and not request.headers.get("X-Render-Now") and not session.get("_flashes"):
+                return render_template("partials/loading_page.html", message=message)
             return view_func(*args, **kwargs)
 
         return wrapped

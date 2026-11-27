@@ -58,7 +58,7 @@ Findings, in order of how much they likely cost:
    (3× the `kubectl`/`helm` calls). Only Telegram and Discord use an
    advisory lock to run once.
 
-## Done so far (steps 0–4, 2026-11-27)
+## Done so far (steps 0–5, 2026-11-27)
 
 Same dev measurement after the change:
 
@@ -87,7 +87,24 @@ That saving shows only in the browser, so the table above leaves it out.
 These six pages' query counts no longer grow with the number of rows
 (`test_list_page_queries_do_not_grow_with_rows`). One per-row cost is
 left: Manifests' "update available" check still resolves each manifest
-that is deployed somewhere. Steps 5–6 are still open.
+that is deployed somewhere.
+
+### Step 5 (2026-11-27)
+
+- `/github/` renders from the DB only (dev: 1031 ms -> 12 ms). Each
+  connection's "Available to register" list loads after the page shows,
+  from `git_sources.available_repos` (`hx-get`, `hx-trigger="load"`).
+- The 8 cluster pages (pods, resources, namespaces, secrets, configmaps,
+  ingresses, network policies, workloads) use `@loading_page_first`. On an
+  htmx navigation it sends the layout with a "Reading the cluster..."
+  spinner at once, which fetches the real page (`X-Render-Now`) and swaps
+  it in. Chosen over splitting each page into fragments: those pages also
+  read namespaces for their forms from kubectl, so a per-table split would
+  have touched every one of them.
+- Not done: caching the GitHub repo list. With the page no longer waiting
+  on it, it wasn't needed.
+
+Step 6 is still open.
 
 ## Plan
 

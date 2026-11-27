@@ -186,6 +186,7 @@ class TestIndexRepoListing:
             )
             db.session.add(repo)
             db.session.commit()
+            source_id = source.id
 
         fake = FakeProvider(
             repos=[
@@ -195,7 +196,10 @@ class TestIndexRepoListing:
         )
         monkeypatch.setattr("app.blueprints.git_sources.routes._provider_for", lambda source: fake)
 
-        response = git_client.get("/github/")
+        # The page itself doesn't call GitHub; it loads the list afterwards.
+        page = git_client.get("/github/")
+        assert f'hx-get="/github/connections/{source_id}/available"'.encode() in page.data
+        response = git_client.get(f"/github/connections/{source_id}/available")
         assert response.status_code == 200
         # "already-registered" still shows up in the Registered table (and its
         # Remove-confirmation modal text) — it must NOT also have a Register
@@ -208,6 +212,7 @@ class TestIndexRepoListing:
             source = GitSource(name="broken-conn", provider_type="github", encrypted_token="x")
             db.session.add(source)
             db.session.commit()
+            source_id = source.id
 
         class BrokenProvider:
             def list_repos(self):
@@ -215,7 +220,8 @@ class TestIndexRepoListing:
 
         monkeypatch.setattr("app.blueprints.git_sources.routes._provider_for", lambda source: BrokenProvider())
 
-        response = git_client.get("/github/")
+        assert git_client.get("/github/").status_code == 200
+        response = git_client.get(f"/github/connections/{source_id}/available")
         assert response.status_code == 200
         assert b"bad credentials" in response.data
 
@@ -225,6 +231,18 @@ class TestIndexRepoListing:
             error_log = ErrorLog.query.filter_by(source="git_sources.list_repos").first()
             assert error_log is not None
             assert "bad credentials" in error_log.message
+
+
+    def test_page_does_not_call_github(self, git_client, app, monkeypatch):
+        with app.app_context():
+            db.session.add(GitSource(name="conn", provider_type="github", encrypted_token="x"))
+            db.session.commit()
+
+        def fail(source):
+            raise AssertionError("the page must not wait on GitHub")
+
+        monkeypatch.setattr("app.blueprints.git_sources.routes._provider_for", fail)
+        assert git_client.get("/github/").status_code == 200
 
 
 class TestRegisterRepo:
