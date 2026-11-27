@@ -27,7 +27,18 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1227 tests passing** (as of the last full run).
+- **1228 tests passing** (as of the last full run).
+- **This session's work, part 10** — mixed-content block behind an HTTPS
+  proxy (htmx request to `http://…/workflows/` blocked on the https site):
+  1. Flask saw plain http from the proxy, so absolute redirects (e.g. the
+     `/workflows` -> `/workflows/` slash redirect) said `http://`. Added
+     Werkzeug `ProxyFix` in `create_app`, hop count from
+     `TRUSTED_PROXY_COUNT` (config.py, default 1, documented in
+     `.env.example`; 0 = no proxy, so X-Forwarded-For can't be spoofed).
+  2. The proxy must send `X-Forwarded-Proto` (nginx:
+     `proxy_set_header X-Forwarded-Proto $scheme;`).
+  3. Test: `tests/test_proxy_headers.py` (fails with the count at 0).
+     Full suite 1228 passed.
 - **This session's work, part 9** — Menus page and Deployment Server modal
   redesign (asked via /frontend-design):
   1. Menus (`menus/list.html`): one card that reads like the sidebar. Each

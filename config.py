@@ -21,6 +21,13 @@ class Config:
     # recreation; nothing here assumes a particular mount is present.
     REPO_CLONE_ROOT = os.environ.get("REPO_CLONE_ROOT", os.path.join(basedir, "data", "repos"))
 
+    # How many reverse proxies (nginx, Traefik, Cloudflare...) sit in front of
+    # the app. Their X-Forwarded-Proto/Host/For headers are trusted, so behind
+    # an HTTPS proxy redirects and url_for() say https:// (else the browser
+    # blocks htmx's requests as mixed content) and logs show the real client
+    # IP. Set 0 if clients reach gunicorn directly, or they could fake their IP.
+    TRUSTED_PROXY_COUNT = int(os.environ.get("TRUSTED_PROXY_COUNT", "1"))
+
 
 class DevelopmentConfig(Config):
     DEBUG = True

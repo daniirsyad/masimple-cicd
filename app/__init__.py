@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from flask import Flask, flash, got_request_exception, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user
 from werkzeug.exceptions import Forbidden
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 load_dotenv()
 
@@ -25,6 +26,10 @@ def create_app(config_name=None):
 
     app = Flask(__name__)
     app.config.from_object(config[config_name])
+
+    proxies = app.config.get("TRUSTED_PROXY_COUNT", 0)
+    if proxies:
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxies, x_proto=proxies, x_host=proxies)
 
     db.init_app(app)
     migrate.init_app(app, db)
