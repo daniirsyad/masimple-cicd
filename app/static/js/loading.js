@@ -63,10 +63,23 @@
     return button && !button.hasAttribute("data-no-busy") ? button : null;
   }
 
+  function requestDone() {
+    pending = Math.max(0, pending - 1);
+    if (pending === 0) {
+      clearTimeout(barTimer);
+      barTimer = null;
+      document.documentElement.classList.remove("page-loading");
+    }
+  }
+
   // beforeSend, not beforeRequest: htmx has already read the form's values
   // by now, so disabling a named button doesn't drop its name/value.
-  // Also where the bar's request count goes up: from here on htmx always
-  // fires afterRequest (success, error, abort, timeout), so it comes back down.
+  // Also where the bar's request count goes up. It comes back down on the
+  // request's own loadend (fires for success, error, abort and timeout), not
+  // on htmx:afterRequest: htmx fires that on the element that made the
+  // request, and if a page change has removed it (the GitHub repo list or a
+  // cluster page's loading page, then the user clicks away), the event never
+  // reaches document and the bar stayed on for good.
   document.addEventListener("htmx:beforeSend", (event) => {
     const button = submitButtonFor(event.detail.elt);
     if (button) {
@@ -74,6 +87,7 @@
       event.detail.elt.dataset.busyButtonPending = "";
     }
     pending += 1;
+    event.detail.xhr.addEventListener("loadend", requestDone, { once: true });
     if (barTimer === null) {
       barTimer = setTimeout(() => document.documentElement.classList.add("page-loading"), SHOW_BAR_AFTER_MS);
     }
@@ -91,12 +105,6 @@
         window.setBusy(submitters.get(form), false);
         form.querySelectorAll('[aria-busy="true"]').forEach((button) => window.setBusy(button, false));
       }
-    }
-    pending = Math.max(0, pending - 1);
-    if (pending === 0) {
-      clearTimeout(barTimer);
-      barTimer = null;
-      document.documentElement.classList.remove("page-loading");
     }
   });
 })();

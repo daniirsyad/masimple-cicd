@@ -28,6 +28,23 @@ Then ask me what to work on next rather than assuming.
 ## Current state
 
 - **1283 tests passing** (as of the last full run).
+- **This session's work, part 21** — the loading bar sometimes stayed on
+  (asked: "the loading bar is sometime always showing"). Reproduced on
+  production in headless Chromium:
+  1. Click away while an htmx request is in flight (GitHub's repo list, a
+     cluster page's loading page, or any slow page) and the bar stuck:
+     htmx fires `afterRequest` on the requesting element, and once a page
+     change has removed it, that event never reaches document. loading.js
+     now counts a request done on its xhr's `loadend`.
+  2. Same clicks also showed the wrong page: the late response replaced the
+     page clicked to (Pods content under `/users`). page.js `beforeSwap`
+     drops stale page swaps: only the newest page request may swap; a
+     loading page's `X-Render-Now` follow-up isn't a click, so it swaps only
+     while its loading page (`requestConfig.elt`) is still in the document.
+     Note: in `beforeSwap`, `detail.elt` is the target (body); the requester
+     is `detail.requestConfig.elt`.
+  3. Checked against production with the fixed JS swapped in: 5 click-away
+     and normal cases all end on the right page with the bar off.
 - **This session's work, part 20** — production still slow on the
   Deployment menu's pages (asked to check it on the live site as `tester`).
   Measured with curl (`Server-Timing`) and Playwright-driven Chromium (the

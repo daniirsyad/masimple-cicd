@@ -45,12 +45,29 @@
 
   const isPageSwap = (event) => event.detail.target === document.body;
 
-  document.addEventListener("htmx:beforeRequest", () => {
+  // A late response must not replace the page someone has since moved to
+  // (click a slow page, then another before it answers). Only the newest
+  // page request may swap. A loading page's follow-up (X-Render-Now, from
+  // partials/loading_page.html) isn't a click, so it doesn't count as newer;
+  // it may swap only while its loading page is still the one showing.
+  let latestPageRequest = null;
+  const isFollowUp = (config) => !!config?.headers?.["X-Render-Now"];
+  const isStale = (detail) =>
+    isFollowUp(detail.requestConfig)
+      ? !detail.requestConfig.elt?.isConnected
+      : detail.xhr !== latestPageRequest;
+
+  document.addEventListener("htmx:beforeRequest", (event) => {
     pathBeforeRequest = location.pathname;
+    if (isPageSwap(event) && !isFollowUp(event.detail.requestConfig)) latestPageRequest = event.detail.xhr;
   });
 
   document.addEventListener("htmx:beforeSwap", (event) => {
     if (!isPageSwap(event) || !event.detail.shouldSwap) return;
+    if (isStale(event.detail)) {
+      event.detail.shouldSwap = false;
+      return;
+    }
     // An expired session redirects to the login page, which has its own
     // layout: load it for real instead of putting it inside this one.
     const responseUrl = new URL(event.detail.xhr.responseURL || location.href);
