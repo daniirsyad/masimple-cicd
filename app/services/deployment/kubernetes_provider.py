@@ -23,6 +23,12 @@ POD_LOG_TAIL_LINES = 500
 
 KUBECTL_PATH = os.environ.get("KUBECTL_PATH", "kubectl")
 TEST_CONNECTION_TIMEOUT_SECONDS = 10
+# The background live-status check (worker._refresh_live_status). Longer than
+# the Test connection button's limit: nobody is waiting on it, and a busy API
+# server or a manifest with many resources can take more than 10s. kubectl is
+# told the same limit (--request-timeout) so a slow cluster fails with
+# kubectl's own message; the hard kill just after is only a backstop.
+LIVE_STATUS_TIMEOUT_SECONDS = 30
 APPLY_TIMEOUT_SECONDS = 120
 
 # The only three kinds `kubectl rollout status`/`rollout restart` actually
@@ -373,7 +379,8 @@ class KubernetesProvider(DeploymentProvider):
     def get_live_status(self, manifest_yaml):
         try:
             process = self._run_kubectl(
-                ["get", "-f", "-", "-o", "name"], input_text=manifest_yaml, timeout=TEST_CONNECTION_TIMEOUT_SECONDS
+                ["get", "-f", "-", "-o", "name", f"--request-timeout={LIVE_STATUS_TIMEOUT_SECONDS}s"],
+                input_text=manifest_yaml, timeout=LIVE_STATUS_TIMEOUT_SECONDS + 5,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(f"Could not check live status: {exc}") from None
@@ -934,7 +941,7 @@ class KubernetesProvider(DeploymentProvider):
         try:
             with helm_session(self.kubeconfig) as (run, _home):
                 process = run(["status", release, "--namespace", namespace, "-o", "json"],
-                              timeout=TEST_CONNECTION_TIMEOUT_SECONDS)
+                              timeout=LIVE_STATUS_TIMEOUT_SECONDS)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(f"Could not check Helm release status: {exc}") from None
 

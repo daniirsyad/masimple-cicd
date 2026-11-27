@@ -539,3 +539,21 @@ class TestCustomAPIProviderIgnoresWaitTimeout:
         result = provider.apply(CONFIGMAP_ONLY_YAML, wait_timeout_seconds=300)
 
         assert result.success is True
+
+
+class TestLiveStatusTimeout:
+    """The background live-status check gets its own, longer limit than the
+    Test connection button, passed to kubectl too so a slow cluster fails
+    with kubectl's message instead of being killed at 10s."""
+
+    def test_get_live_status_uses_the_live_status_limit(self, monkeypatch):
+        seen = {}
+
+        def fake_run(args, **kwargs):
+            seen["args"], seen["timeout"] = args, kwargs["timeout"]
+            return subprocess.CompletedProcess(args, 0, stdout="deployment.apps/web\n", stderr="")
+
+        monkeypatch.setattr(kp_module.subprocess, "run", fake_run)
+        assert KubernetesProvider("kubeconfig").get_live_status("kind: Deployment\n") == "live"
+        assert f"--request-timeout={kp_module.LIVE_STATUS_TIMEOUT_SECONDS}s" in seen["args"]
+        assert seen["timeout"] > kp_module.LIVE_STATUS_TIMEOUT_SECONDS > kp_module.TEST_CONNECTION_TIMEOUT_SECONDS

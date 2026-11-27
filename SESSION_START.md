@@ -27,7 +27,16 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1260 tests passing** (as of the last full run).
+- **1261 tests passing** (as of the last full run).
+- **This session's work, part 13** — live-status check timing out
+  (`kubectl get -f - -o name` killed after 10s in `_refresh_live_status`):
+  1. The background poller reused the Test connection button's 10s limit.
+     New `LIVE_STATUS_TIMEOUT_SECONDS = 30` in kubernetes_provider.py for
+     `get_live_status` (also passed as `--request-timeout`, hard kill 5s
+     later) and `helm_live_status`. Cause on the user's cluster not
+     confirmed (slow API server vs. network); if it still times out, the
+     cluster is unreachable from the container, not just slow.
+  2. Test: `TestLiveStatusTimeout`. Full suite 1261 passed.
 - **This session's work, part 12** — Helm chart upload accepts a .zip
   (asked: "can I upload zip?" then "add zip support"):
   1. `helm.load_chart_upload(data)` (used by the form save and "Load chart
