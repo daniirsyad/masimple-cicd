@@ -5,7 +5,8 @@
 // - Page scripts (in <body>, re-run by htmx after every swap): wrap init in
 //   onPageReady(fn). Stop timers with onPageLeave(() => clearInterval(id));
 //   pass { signal: pageSignal() } to window/document addEventListener and
-//   to polling fetch() calls. pageInterval(fn, ms) = setInterval that stops.
+//   to polling fetch() calls. pageInterval(fn, ms) = setInterval that stops
+//   when the page is left and pauses while the tab is hidden.
 // - Head scripts (loaded once, e.g. sidebar.js): onEveryPage(fn) runs fn on
 //   the first load and right after every swap, before the browser paints.
 // - refreshPage(): re-fetch the current page in place, keeping the scroll.
@@ -22,8 +23,14 @@
   window.onPageReady = onPageReady;
   window.pageSignal = () => controller.signal;
   window.onPageLeave = (fn) => controller.signal.addEventListener("abort", fn, { once: true });
+  // A hidden tab skips its polls (they'd only take server threads), and
+  // runs one at once when it's shown again.
   window.pageInterval = (fn, ms) => {
-    const id = setInterval(fn, ms);
+    const tick = () => {
+      if (!document.hidden) fn();
+    };
+    const id = setInterval(tick, ms);
+    document.addEventListener("visibilitychange", tick, { signal: controller.signal });
     window.onPageLeave(() => clearInterval(id));
     return id;
   };

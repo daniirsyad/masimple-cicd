@@ -47,4 +47,4 @@ echo "Starting application..."
 # GIL while blocked, same as any other blocking read. --timeout is bumped
 # well past the default 30s so a quiet-but-open log stream isn't mistaken
 # for a hung worker.
-exec gunicorn --bind 0.0.0.0:8000 --workers 3 --worker-class gthread --threads 4 --timeout 120 run:app
+exec gunicorn --bind 0.0.0.0:8000 --workers 3 --worker-class gthread --threads 8 --timeout 120 run:app

@@ -18,6 +18,12 @@ class Config:
     # hx-boost re-checked every page <script> with the server.
     SEND_FILE_MAX_AGE_DEFAULT = 31536000
 
+    # Per gunicorn process: 8 request threads (entrypoint.sh) plus the
+    # background worker threads, each of which can hold a connection.
+    # SQLAlchemy's default (5 + 10 overflow) would leave requests waiting for
+    # one. 3 processes x 20 stays well under Postgres' default 100.
+    SQLALCHEMY_ENGINE_OPTIONS = {"pool_size": 10, "max_overflow": 10}
+
     # Persistent clones of registered repos live here, one subdirectory per
     # Repository id (see "Repo registration & persistent clones"). Kept
     # outside app/static so it's never served publicly. Defaults to a path

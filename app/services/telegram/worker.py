@@ -53,6 +53,7 @@ from app.services.telegram.helpers import review_keyboard
 from app.services.workflow.worker import approve_awaiting_step, enqueue_workflow_run, reject_awaiting_step
 from app.utils.crypto import decrypt
 from app.utils.error_logger import log_error
+from app.utils.leader import become_leader
 from app.utils.logger import log_activity
 from app.utils.runtime import is_werkzeug_reloader_parent
 from app.utils.system_config import get_system_config
@@ -106,46 +107,6 @@ _commands_registered = False
 # Arbitrary but stable — just needs to not collide with any other advisory
 # lock this app might someday take.
 TELEGRAM_POLL_LEADER_LOCK_KEY = 917_442_101
-
-# Keeps the leader's advisory-lock connection alive for the process's
-# lifetime — see _become_poll_leader.
-_leader_lock_connection = None
-
-
-def _become_poll_leader(app):
-    """Blocks until this process holds a Postgres advisory lock making it
-    the sole Telegram getUpdates poller app-wide.
-
-    Unlike the build/deploy/workflow workers, which are fine with several
-    gunicorn worker processes concurrently polling the same DB-backed queue
-    (each claim is a `SELECT ... FOR UPDATE SKIP LOCKED`, so only one wins
-    per row), Telegram's getUpdates is a *global* single-consumer long-poll:
-    issuing it from more than one process at once gets rejected with a 409
-    ("terminated by other getUpdates request"). gunicorn runs multiple
-    worker *processes* (see entrypoint.sh), each with its own Python
-    interpreter, so the per-process `_worker_started` guard above isn't
-    enough — every worker process still starts its own telegram-bot thread.
-
-    Takes the lock on a dedicated connection, detached from the SQLAlchemy
-    pool so it's never recycled back in or counted against pool_size, and
-    kept open (via the module-level `_leader_lock_connection` reference) for
-    the rest of the process's life. `pg_advisory_lock` is session-scoped,
-    not transaction-scoped, so it survives the `commit()` below — if this
-    process dies, Postgres releases the lock automatically and whichever
-    other worker process is blocked here next becomes leader.
-    """
-    global _leader_lock_connection
-
-    with app.app_context():
-        raw_conn = db.engine.raw_connection()
-        raw_conn.detach()
-        cursor = raw_conn.cursor()
-        cursor.execute("SELECT pg_advisory_lock(%s)", (TELEGRAM_POLL_LEADER_LOCK_KEY,))
-        cursor.close()
-        raw_conn.commit()
-
-    _leader_lock_connection = raw_conn
-
 
 def _resolve_user(chat_id):
     return User.query.filter_by(telegram_chat_id=str(chat_id)).first()
@@ -950,11 +911,11 @@ def _tick(app):
 
 def _run(app):
     """Thread entry point: block until this process is the sole Telegram
-    poll leader, then start polling. See _become_poll_leader for why this
+    poll leader, then start polling. See app/utils/leader.py for why this
     (unlike the build/deploy/workflow workers) can't just let every gunicorn
     worker process poll concurrently.
     """
-    _become_poll_leader(app)
+    become_leader(app, TELEGRAM_POLL_LEADER_LOCK_KEY)
     _poll_loop(app)
 
 

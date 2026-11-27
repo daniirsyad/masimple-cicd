@@ -22,6 +22,7 @@ from app.services.discord.helpers import notify_deploy_finished as discord_notif
 from app.services.discord.helpers import notify_deploy_started as discord_notify_deploy_started
 from app.services.telegram.helpers import notify_deploy_finished, notify_deploy_started
 from app.utils.error_logger import log_error
+from app.utils.leader import become_leader
 from app.utils.runtime import is_werkzeug_reloader_parent
 from app.utils.system_config import get_system_config
 
@@ -632,7 +633,13 @@ def _refresh_live_status(app):
         db.session.remove()
 
 
+# Advisory lock: one live-status poller app-wide, not one per gunicorn
+# worker process (app/utils/leader.py). Distinct from the bots' 917_442_10x.
+STATUS_POLL_LEADER_LOCK_KEY = 917_442_103
+
+
 def _status_poll_loop(app):
+    become_leader(app, STATUS_POLL_LEADER_LOCK_KEY)
     while True:
         try:
             _refresh_live_status(app)

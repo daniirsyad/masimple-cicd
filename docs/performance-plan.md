@@ -58,7 +58,7 @@ Findings, in order of how much they likely cost:
    (3× the `kubectl`/`helm` calls). Only Telegram and Discord use an
    advisory lock to run once.
 
-## Done so far (steps 0–5, 2026-11-27)
+## Done (steps 0–6, 2026-11-27)
 
 Same dev measurement after the change:
 
@@ -104,7 +104,22 @@ that is deployed somewhere.
 - Not done: caching the GitHub repo list. With the page no longer waiting
   on it, it wasn't needed.
 
-Step 6 is still open.
+### Step 6 (2026-11-27)
+
+- `pageInterval` (page.js) skips its tick while the tab is hidden and runs
+  one at once when it's shown again. That covers the Builders, Images,
+  Deployment Runs and Workflows polls.
+- The live-status poller waits for an advisory lock (`become_leader` in
+  `app/utils/leader.py`, now shared with the Telegram and Discord workers,
+  which had their own copies), so it runs in one gunicorn process, not 3.
+  The build, deploy and workflow workers were left as they are: they
+  already claim jobs with `FOR UPDATE SKIP LOCKED`, which is safe across
+  processes.
+- gunicorn `--threads 8` (was 4): 24 requests at once instead of 12. DB
+  pool per process raised to 10 + 10 overflow to match.
+
+All steps are done. Next: measure production with the `Server-Timing`
+header (step 0) to see what's left there.
 
 ## Plan
 

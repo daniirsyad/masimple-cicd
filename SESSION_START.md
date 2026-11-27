@@ -27,7 +27,21 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1281 tests passing** (as of the last full run).
+- **1282 tests passing** (as of the last full run).
+- **This session's work, part 19** — performance plan step 6 (capacity
+  and background work; asked: "go ahead with step 6"). The plan is now done:
+  1. `pageInterval` in page.js pauses while `document.hidden` and ticks
+     once on `visibilitychange` when shown again.
+  2. `app/utils/leader.py` `become_leader(app, key)`: the Postgres
+     advisory-lock leader pattern, moved out of the Telegram and Discord
+     workers (their `_become_poll_leader` copies are gone; keys 917_442_101 and
+     917_442_102 unchanged). The live-status poller now takes
+     917_442_103 first, so it runs in one gunicorn process instead of 3.
+     Build/deploy/workflow workers unchanged (`SKIP LOCKED` claims).
+  3. gunicorn `--threads 8` (entrypoint.sh, was 4);
+     `SQLALCHEMY_ENGINE_OPTIONS` pool 10 + 10 overflow per process.
+  4. Tests: `tests/test_leader.py`. Full suite 1282 passed. The JS change
+     wasn't tried in a browser.
 - **This session's work, part 18** — performance plan step 5 (pages that
   waited on GitHub/kubectl before sending anything; asked: "go ahead with
   step 5"):
@@ -1924,7 +1938,7 @@ Then ask me what to work on next rather than assuming.
   gateway IP `<DOCKER_BRIDGE_GATEWAY_IP>` directly, not the `db` Docker Compose hostname —
   no `sed` swap needed from inside the sandbox.)
 - CSS changes need a rebuild to actually show up: `npm run build:css`.
-- **gunicorn runs `--worker-class gthread --threads 4 --timeout 120`**
+- **gunicorn runs `--worker-class gthread --threads 8 --timeout 120`**
   (`entrypoint.sh`), not plain sync workers — changed to support the pod-logs
   SSE stream. Keep this in mind before adding any other long-lived-connection
   feature: worker/thread capacity is a real, finite budget (3 workers × 4

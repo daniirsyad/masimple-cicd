@@ -56,6 +56,7 @@ from app.services.discord.helpers import review_components, status_components
 from app.services.workflow.worker import approve_awaiting_step, enqueue_workflow_run, reject_awaiting_step
 from app.utils.crypto import decrypt
 from app.utils.error_logger import log_error
+from app.utils.leader import become_leader
 from app.utils.logger import log_activity
 from app.utils.runtime import is_werkzeug_reloader_parent
 from app.utils.system_config import get_system_config
@@ -114,12 +115,9 @@ HELP_TEXT = (
 _worker_started = False
 _worker_lock = threading.Lock()
 
-# Arbitrary but stable, and distinct from Telegram's own
-# TELEGRAM_POLL_LEADER_LOCK_KEY (917_442_101) — see
-# app/services/telegram/worker.py's _become_poll_leader for the full
-# rationale (only one gunicorn worker process may hold the live connection).
+# Distinct from Telegram's 917_442_101: only one gunicorn worker process
+# may hold the live Gateway connection (see app/utils/leader.py).
 DISCORD_POLL_LEADER_LOCK_KEY = 917_442_102
-_leader_lock_connection = None
 
 # Bounded pool for the 4 build-prefill interactions only (build/bconfirm/
 # gbuild/gbconfirm) — see this module's own docstring for why these can't
@@ -127,25 +125,6 @@ _leader_lock_connection = None
 # threading.Thread per interaction, so a burst of build taps can't grow
 # threads unboundedly.
 _build_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="discord-build")
-
-
-def _become_poll_leader(app):
-    """Same Postgres advisory-lock pattern as Telegram's own
-    _become_poll_leader — only one gunicorn worker process should hold the
-    live Gateway connection, same reasoning as Telegram's getUpdates
-    (a second concurrent connection with the same token conflicts).
-    """
-    global _leader_lock_connection
-
-    with app.app_context():
-        raw_conn = db.engine.raw_connection()
-        raw_conn.detach()
-        cursor = raw_conn.cursor()
-        cursor.execute("SELECT pg_advisory_lock(%s)", (DISCORD_POLL_LEADER_LOCK_KEY,))
-        cursor.close()
-        raw_conn.commit()
-
-    _leader_lock_connection = raw_conn
 
 
 def _try(fn, *args, **kwargs):
@@ -910,7 +889,7 @@ def _run(app):
     """Thread entry point: block until this process is the sole Discord
     Gateway leader, then supervise the live connection.
     """
-    _become_poll_leader(app)
+    become_leader(app, DISCORD_POLL_LEADER_LOCK_KEY)
     _supervise(app)
 
 
