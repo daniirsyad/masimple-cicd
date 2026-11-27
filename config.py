@@ -12,6 +12,12 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     WTF_CSRF_ENABLED = True
 
+    # Browsers keep static files for a year without asking again: every
+    # url_for('static') carries ?v=<file mtime> (app/__init__.py), so a
+    # changed file gets a new URL. Without this, each page change under
+    # hx-boost re-checked every page <script> with the server.
+    SEND_FILE_MAX_AGE_DEFAULT = 31536000
+
     # Persistent clones of registered repos live here, one subdirectory per
     # Repository id (see "Repo registration & persistent clones"). Kept
     # outside app/static so it's never served publicly. Defaults to a path

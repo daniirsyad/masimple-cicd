@@ -27,7 +27,27 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1266 tests passing** (as of the last full run).
+- **1270 tests passing** (as of the last full run).
+- **This session's work, part 16** — page-to-page navigation felt slow
+  (asked: check performance, plan it, then "go ahead with steps 0-3" of
+  `docs/performance-plan.md`, which has the measurements and steps 4–6):
+  1. Step 0: every response has a `Server-Timing` header (server ms + SQL
+     query count, counted by an engine `before_cursor_execute` listener in
+     `create_app()`), visible in DevTools.
+  2. Step 1: `SEND_FILE_MAX_AGE_DEFAULT` = 1 year, and a `url_defaults` hook
+     adds `?v=<mtime>` to every `url_for('static')`. Before, static files were
+     `no-cache`, so hx-boost re-checked each page `<script>` on every page
+     change.
+  3. Step 2: `_head_revision()` is `functools.cache`d (it parsed all 39
+     migration files on each call); `is_setup_complete()` is one query on
+     its own engine connection (version + any user), run once per request.
+  4. Step 3: `app/utils/request_cache.py` `per_request(key, fn)` (emptied in
+     a first-registered `before_request`, since tests share one app
+     context; computes every time outside a request). It's used for setup
+     status, `get_system_config()` and the review badge. One `Menu` query for
+     sidebar + navbar. The review badge joins `run`/`workflow`. An almost
+     empty page went from 15 to 8 queries, `/images/` from 222 to 129.
+  5. Tests: `tests/test_page_performance.py`. Full suite 1270 passed.
 - **This session's work, part 15** — list search reset on page change
   (asked: "make the search reset after change the page"):
   1. `page.js`'s `htmx:beforeSwap` clears every `list-search:*`

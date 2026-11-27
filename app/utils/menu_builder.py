@@ -40,9 +40,11 @@ def _to_dict(menu, active_url, children=None):
     }
 
 
-def build_sidebar_menu(user):
+def build_sidebar_menu(user, menus=None):
     """Build the nested (max 1-level) sidebar tree, filtered by the user's permissions."""
-    all_menus = Menu.query.filter_by(show_in_sidebar=True).order_by(Menu.order).all()
+    if menus is None:
+        menus = Menu.query.order_by(Menu.order).all()
+    all_menus = [m for m in menus if m.show_in_sidebar]
     active_url = _active_url(all_menus)
 
     children_by_parent = {}
@@ -68,16 +70,19 @@ def build_sidebar_menu(user):
     return tree
 
 
-def build_navbar_menu(user):
+def build_navbar_menu(user, menus=None):
     """Flat list of menu items flagged for the navbar, filtered by the user's permissions."""
-    all_menus = Menu.query.filter_by(show_in_navbar=True).order_by(Menu.order).all()
+    if menus is None:
+        menus = Menu.query.order_by(Menu.order).all()
+    all_menus = [m for m in menus if m.show_in_navbar]
     active_url = _active_url(all_menus)
     return [_to_dict(menu, active_url) for menu in all_menus if _visible(menu, user)]
 
 
 def menu_builder(user):
     """Returns the sidebar/navbar menu context used by base.html and its partials."""
+    menus = Menu.query.order_by(Menu.order).all()  # one query for both
     return {
-        "sidebar_menu": build_sidebar_menu(user),
-        "navbar_menu": build_navbar_menu(user),
+        "sidebar_menu": build_sidebar_menu(user, menus),
+        "navbar_menu": build_navbar_menu(user, menus),
     }

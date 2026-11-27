@@ -12,6 +12,8 @@ import threading
 import time
 from datetime import datetime
 
+from sqlalchemy.orm import joinedload
+
 from app.extensions import db
 from app.models import BuildBatch, DeploymentRun, Object, Version, WorkflowRun, WorkflowStep, WorkflowStepRun
 from app.services.build.prefill import compute_build_prefill
@@ -46,6 +48,7 @@ def awaiting_review_step_runs_for(user):
     return [
         step_run
         for step_run in WorkflowStepRun.query.filter_by(status="awaiting_review")
+        .options(joinedload(WorkflowStepRun.run).joinedload(WorkflowRun.workflow))
         .order_by(WorkflowStepRun.created_at.desc())
         .all()
         if step_run.run.is_accessible_to(user)

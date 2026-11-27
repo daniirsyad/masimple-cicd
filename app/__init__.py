@@ -1,9 +1,11 @@
 import os
+import time
 import uuid
 from datetime import timedelta
 
 from dotenv import load_dotenv
-from flask import Flask, flash, got_request_exception, jsonify, redirect, render_template, request, url_for
+from sqlalchemy import event
+from flask import Flask, flash, g, got_request_exception, has_request_context, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user
 from werkzeug.exceptions import Forbidden
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -15,6 +17,7 @@ from app.extensions import csrf, db, login_manager, migrate  # noqa: E402
 from app.utils.crypto import CredentialEncryptionError  # noqa: E402
 from app.utils.error_logger import log_error  # noqa: E402
 from app.utils.menu_builder import menu_builder  # noqa: E402
+from app.utils.request_cache import per_request  # noqa: E402
 from app.utils.setup_status import is_setup_complete  # noqa: E402
 from app.utils.system_config import get_system_config  # noqa: E402
 from app.utils.status_words import DEPLOY_ACTION_WORDS, status_word  # noqa: E402
@@ -32,6 +35,12 @@ def create_app(config_name=None):
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxies, x_proto=proxies, x_host=proxies)
 
     db.init_app(app)
+    with app.app_context():
+        # Counts each request's SQL queries for the Server-Timing header.
+        @event.listens_for(db.engine, "before_cursor_execute")
+        def _count_query(*_args):
+            if has_request_context() and "query_count" in g:
+                g.query_count += 1
     migrate.init_app(app, db)
     csrf.init_app(app)
 
@@ -61,7 +70,7 @@ def create_app(config_name=None):
         # setup wizard's own template doesn't use these, but Flask calls
         # every context processor on every render regardless, so this still
         # needs to short-circuit rather than let the query raise.
-        if not app.testing and not is_setup_complete():
+        if not app.testing and not per_request("setup_complete", is_setup_complete):
             return {"sidebar_menu": [], "navbar_menu": [], "system_config": None, "awaiting_review_count": 0}
         context = menu_builder(current_user)
         context["system_config"] = get_system_config()
@@ -71,13 +80,43 @@ def create_app(config_name=None):
         # import at module load time.
         from app.services.workflow.worker import awaiting_review_step_runs_for
 
-        context["awaiting_review_count"] = len(awaiting_review_step_runs_for(current_user))
+        context["awaiting_review_count"] = per_request(
+            "awaiting_review_count", lambda: len(awaiting_review_step_runs_for(current_user))
+        )
         return context
 
     app.jinja_env.filters["localtime"] = format_local
     app.jinja_env.filters["timeago"] = time_ago
     app.jinja_env.filters["status_word"] = status_word
     app.jinja_env.globals["DEPLOY_ACTION_WORDS"] = DEPLOY_ACTION_WORDS
+
+    @app.before_request
+    def _start_request():
+        # Registered first, so it runs before every other hook. See
+        # app/utils/request_cache.py for why the cache needs emptying here.
+        g.pop("_per_request", None)
+        g.request_started = time.perf_counter()
+        g.query_count = 0
+
+    @app.after_request
+    def _server_timing(response):
+        # Shows in the browser's DevTools (Network > Timing): server time and
+        # SQL query count per request, so slow pages can be told apart from
+        # a slow network.
+        if "request_started" in g:
+            ms = (time.perf_counter() - g.request_started) * 1000
+            response.headers["Server-Timing"] = f'app;dur={ms:.1f}, db;desc="{g.get("query_count", 0)} queries"'
+        return response
+
+    @app.url_defaults
+    def _version_static_urls(endpoint, values):
+        # ?v=<mtime> on every static URL, so the year-long browser cache
+        # (SEND_FILE_MAX_AGE_DEFAULT) still picks up a changed file at once.
+        if endpoint == "static" and "filename" in values and "v" not in values:
+            try:
+                values["v"] = int(os.stat(os.path.join(app.static_folder, values["filename"])).st_mtime)
+            except OSError:
+                pass
 
     @app.before_request
     def _require_setup():
@@ -89,7 +128,7 @@ def create_app(config_name=None):
         endpoint = request.endpoint or ""
         if endpoint in ("static",) or endpoint.startswith("setup."):
             return
-        if not is_setup_complete():
+        if not per_request("setup_complete", is_setup_complete):
             return redirect(url_for("setup.index"))
 
     @app.before_request

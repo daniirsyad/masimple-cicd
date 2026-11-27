@@ -1,5 +1,6 @@
 from app.extensions import db
 from app.models import SystemConfig
+from app.utils.request_cache import per_request
 
 
 def get_system_config():
@@ -8,6 +9,10 @@ def get_system_config():
     test suite calls db.create_all() with no seed scripts at all), so every
     caller needs a real row back rather than handling `None`.
     """
+    return per_request("system_config", _load_system_config)
+
+
+def _load_system_config():
     config = SystemConfig.query.first()
     if config is None:
         config = SystemConfig()
