@@ -1,5 +1,6 @@
-// Shared CodeMirror YAML-editor init, used by deployment_manifests.js,
-// deployment_servers.js, and yaml_generator.js — extracted out of two
+// Shared CodeMirror YAML-editor init, used by every YAML editor
+// (deployment_manifests.js, deployment_servers.js, deployment_pods.js,
+// yaml_generator.js); load it with partials/_yaml_editor_scripts.html — extracted out of two
 // independently duplicated per-page copies to fix a cursor-position bug
 // that existed in both (see initYamlEditor's lineWrapping comment and
 // refreshAfterVisible below) and to give the YAML generator page's preview
@@ -86,8 +87,82 @@
     }).observe(wrapper);
   }
 
+  // Every editor sits in a .yaml-editor-wrapper (border, height; added here
+  // if the page didn't) with the same status bar under it: key hints, the
+  // cursor's line/column and a full screen toggle.
+  function ensureWrapper(textarea) {
+    const existing = textarea.closest(".yaml-editor-wrapper");
+    if (existing) return existing;
+    const wrapper = document.createElement("div");
+    wrapper.className = "yaml-editor-wrapper min-w-0 overflow-hidden rounded-lg border border-base-300";
+    textarea.before(wrapper);
+    wrapper.append(textarea);
+    return wrapper;
+  }
+
+  function kbd(text) {
+    const el = document.createElement("kbd");
+    el.className = "kbd kbd-xs";
+    el.textContent = text;
+    return el;
+  }
+
+  function hint(...parts) {
+    const el = document.createElement("span");
+    parts.forEach((part, i) => el.append(i ? " " : "", part));
+    return el;
+  }
+
+  function addStatusBar(cm, wrapper, readOnly) {
+    const bar = document.createElement("div");
+    bar.className =
+      "yaml-editor-statusbar flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-base-300 bg-base-200 px-3 py-1 text-xs text-base-content/60";
+
+    const hints = document.createElement("span");
+    hints.className = "flex flex-wrap items-center gap-x-3 gap-y-1";
+    if (!readOnly) {
+      hints.append(hint(kbd("Tab"), kbd("Shift+Tab"), "indent"), hint(kbd("Ctrl+/"), "comment"));
+    }
+    if (CodeMirror.fold) hints.append(hint("Fold sections with the arrows by the line numbers"));
+
+    const right = document.createElement("span");
+    right.className = "flex items-center gap-3";
+    const pos = document.createElement("span");
+    pos.className = "yaml-cursor-pos tabular-nums";
+    pos.textContent = "Line 1, column 1";
+    cm.on("cursorActivity", () => {
+      const cursor = cm.getCursor();
+      pos.textContent = `Line ${cursor.line + 1}, column ${cursor.ch + 1}`;
+    });
+    right.append(pos);
+
+    // The browser's own full screen (Esc leaves it), so it also works from
+    // inside a <dialog>, whose transformed modal-box would trap a
+    // position: fixed overlay.
+    if (document.fullscreenEnabled) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "yaml-fullscreen-btn btn btn-ghost btn-xs";
+      const label = () => (document.fullscreenElement === wrapper ? "Exit full screen" : "Full screen");
+      button.textContent = label();
+      button.addEventListener("click", () => {
+        if (document.fullscreenElement === wrapper) document.exitFullscreen();
+        else wrapper.requestFullscreen().then(() => cm.focus());
+      });
+      wrapper.addEventListener("fullscreenchange", () => {
+        button.textContent = label();
+        button.title = document.fullscreenElement === wrapper ? "Or press Esc" : "";
+      });
+      right.append(button);
+    }
+
+    bar.append(hints, right);
+    wrapper.append(bar);
+  }
+
   function initYamlEditor(textarea, options = {}) {
     if (typeof CodeMirror === "undefined") return null;
+    const wrapper = ensureWrapper(textarea);
 
     const cm = CodeMirror.fromTextArea(textarea, {
       mode: "yaml",
@@ -117,8 +192,8 @@
       },
       theme: currentCodeMirrorTheme(),
       readOnly: options.readOnly || false,
-      // Addons are optional per page (only deployment_manifests loads them);
-      // without them these options are ignored / the gutter is left out.
+      // Addons come from partials/_yaml_editor_scripts.html; without them
+      // these options are ignored / the gutter is left out.
       styleActiveLine: true,
       foldGutter: !!CodeMirror.fold,
       gutters: CodeMirror.fold ? ["CodeMirror-linenumbers", "CodeMirror-foldgutter"] : ["CodeMirror-linenumbers"],
@@ -161,6 +236,7 @@
     watchForRealSize(cm);
 
     registerForThemeSync(cm);
+    addStatusBar(cm, wrapper, options.readOnly);
     return cm;
   }
 

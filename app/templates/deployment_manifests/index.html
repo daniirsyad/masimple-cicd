@@ -394,14 +394,6 @@ MASIMPLE CICD{% endblock %}
   </div>
   <div class="yaml-editor-wrapper yaml-editor-tall min-w-0 overflow-hidden rounded-lg border border-base-300">
     {{ form.yaml_content(class="yaml-content-input textarea textarea-bordered textarea-sm w-full font-mono", rows="12") }}
-    <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-base-300 bg-base-200 px-3 py-1 text-xs text-base-content/60">
-      <span class="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span><kbd class="kbd kbd-xs">Tab</kbd> <kbd class="kbd kbd-xs">Shift+Tab</kbd> indent</span>
-        <span><kbd class="kbd kbd-xs">Ctrl+/</kbd> comment</span>
-        <span>Click the arrows by the line numbers to fold a section</span>
-      </span>
-      <span class="yaml-cursor-pos tabular-nums" data-yaml-input-id="{{ form.yaml_content.id }}">Line 1, column 1</span>
-    </div>
   </div>
   {% for error in form.yaml_content.errors %}
   <p class="text-error text-sm">{{ error }}</p>
@@ -640,15 +632,8 @@ MASIMPLE CICD{% endblock %}
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
 
-<script src="{{ url_for('static', filename='vendor/codemirror/codemirror.min.js') }}"></script>
-<script src="{{ url_for('static', filename='vendor/codemirror/yaml.min.js') }}"></script>
-<script src="{{ url_for('static', filename='vendor/codemirror/addon/active-line.js') }}"></script>
-<script src="{{ url_for('static', filename='vendor/codemirror/addon/comment.js') }}"></script>
-<script src="{{ url_for('static', filename='vendor/codemirror/addon/foldcode.js') }}"></script>
-<script src="{{ url_for('static', filename='vendor/codemirror/addon/foldgutter.js') }}"></script>
-<script src="{{ url_for('static', filename='vendor/codemirror/addon/indent-fold.js') }}"></script>
+{% include "partials/_yaml_editor_scripts.html" %}
 <script src="{{ url_for('static', filename='vendor/sortablejs/Sortable.min.js') }}"></script>
-<script src="{{ url_for('static', filename='js/yaml_editor.js') }}"></script>
 <script src="{{ url_for('static', filename='js/deployment_manifests.js') }}"></script>
 <script src="{{ url_for('static', filename='js/list-search.js') }}"></script>
 {% endblock %}

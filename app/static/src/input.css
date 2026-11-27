@@ -85,7 +85,7 @@
     stroke: currentColor;
   }
 
-  /* CodeMirror (deployment_manifests/index.html's YAML editor) ships no
+  /* CodeMirror (every YAML editor, js/yaml_editor.js) ships no
      border/rounding of its own — wrapped in a plain .yaml-editor-wrapper div
      styled with ordinary border-base-300/rounded-lg utilities instead of
      hand-picking daisyUI's underlying color tokens here, so it automatically
@@ -99,6 +99,34 @@
   /* Manifest modals only: the editor is the main thing being edited there. */
   .yaml-editor-tall .CodeMirror {
     height: 60vh;
+  }
+  /* Menus page: an empty group's sub-item list is zero-height, and turns
+     into a drop zone while a sub-item is dragged (menu-reorder.js). */
+  #menu-tree.is-dragging-child .menu-children:not(:has(li)) {
+    min-height: 2.5rem;
+    margin: 0.25rem 0.75rem 0.5rem 1.75rem;
+    border: 2px dashed oklch(var(--bc) / 0.2);
+    border-radius: var(--rounded-box, 1rem);
+  }
+  #menu-tree.is-dragging-child .menu-children:not(:has(li))::before {
+    content: "Drop here to put it under this group";
+    display: block;
+    padding: 0.55rem 0.75rem;
+    font-size: 0.75rem;
+    color: oklch(var(--bc) / 0.5);
+  }
+  /* Full screen (yaml_editor.js): the editor fills the screen above its status bar. */
+  .yaml-editor-wrapper:fullscreen {
+    display: flex;
+    flex-direction: column;
+    border-radius: 0;
+    background: oklch(var(--b1));
+  }
+  .yaml-editor-wrapper:fullscreen .CodeMirror {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+    font-size: 0.875rem;
   }
   /* Colors from daisyUI's theme variables so light and dark both match. */
   .yaml-editor-wrapper .CodeMirror .CodeMirror-activeline-background {

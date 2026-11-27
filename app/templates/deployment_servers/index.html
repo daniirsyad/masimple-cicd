@@ -81,65 +81,81 @@ MASIMPLE CICD{% endblock %}
   </div>
 </div>
 
-{% macro connection_fields(form) %}
-<div>
-  {{ form.connection_type.label(class="label text-sm") }}
-  {{ form.connection_type(class="connection-type-select select select-bordered select-sm w-full") }}
-</div>
-
-<div class="connection-fields-kube flex flex-col gap-3">
-  {{ form.kubeconfig.label(class="label text-sm") }}
-  <div class="yaml-editor-wrapper overflow-hidden rounded-lg border border-base-300">
-    {{ form.kubeconfig(class="yaml-content-input textarea textarea-bordered textarea-sm w-full font-mono", rows="6", placeholder="paste kubeconfig YAML — leave blank on edit to keep the stored one") }}
-  </div>
-  {% for error in form.kubeconfig.errors %}
-  <p class="text-error text-sm">{{ error }}</p>
-  {% endfor %}
-</div>
-
-<div class="connection-fields-api flex flex-col gap-3">
-  <div>
-    {{ form.api_url.label(class="label text-sm") }}
-    {{ form.api_url(class="input input-bordered input-sm w-full") }}
-    {% for error in form.api_url.errors %}
-    <p class="text-error text-sm">{{ error }}</p>
-    {% endfor %}
-  </div>
-  <div>
-    {{ form.api_token.label(class="label text-sm") }}
-    {{ form.api_token(class="input input-bordered input-sm w-full", placeholder="leave blank on edit to keep the stored token") }}
-    {% for error in form.api_token.errors %}
-    <p class="text-error text-sm">{{ error }}</p>
-    {% endfor %}
-  </div>
-</div>
-
-<div>
-  {{ form.allowed_role_ids.label(class="label text-sm") }}
+{% macro connection_fields(form, editing=False) %}
+{% set conn_help = {
+  'kube': ('Kubernetes cluster', 'Paste a kubeconfig. You can open the cluster, run Helm and see pods.'),
+  'api': ('Custom agent', 'Your own agent receives each manifest at an API URL, with a token.'),
+} %}
+<fieldset>
+  <legend class="label text-sm">How to connect</legend>
   <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-    {% for subfield in form.allowed_role_ids %}
-    <label class="flex items-center gap-2 text-sm">
-      {{ subfield(class="checkbox checkbox-sm") }} {{ subfield.label.text }}
+    {% for value, _ in form.connection_type.choices %}
+    <label class="flex cursor-pointer gap-3 rounded-box border border-base-300 p-3 transition-colors hover:border-base-content/30 has-[:checked]:border-primary has-[:checked]:bg-primary/5 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-primary">
+      <input type="radio" class="connection-type-radio radio radio-primary radio-sm mt-0.5" name="{{ form.connection_type.name }}" value="{{ value }}" {{ 'checked' if (form.connection_type.data or 'kube') == value else '' }} />
+      <span>
+        <span class="block text-sm font-semibold">{{ conn_help[value][0] }}</span>
+        <span class="mt-0.5 block text-xs text-base-content/60">{{ conn_help[value][1] }}</span>
+      </span>
     </label>
     {% endfor %}
   </div>
+  {% for error in form.connection_type.errors %}<p class="text-error text-sm">{{ error }}</p>{% endfor %}
+</fieldset>
+
+<div class="connection-fields-kube">
+  {{ form.kubeconfig.label(class="label text-sm", text="Kubeconfig") }}
+  {{ form.kubeconfig(class="yaml-content-input textarea textarea-bordered textarea-sm w-full font-mono", rows="6") }}
+  <p class="mt-1 text-xs text-base-content/60">
+    {% if editing %}Leave empty to keep the saved kubeconfig. {% endif %}Stored encrypted; it is never shown again.
+  </p>
+  {% for error in form.kubeconfig.errors %}<p class="text-error text-sm">{{ error }}</p>{% endfor %}
 </div>
+
+<div class="connection-fields-api grid grid-cols-1 gap-4 sm:grid-cols-2">
+  <div>
+    {{ form.api_url.label(class="label text-sm", text="Agent URL") }}
+    {{ form.api_url(class="input input-bordered input-sm w-full", placeholder="https://agent.example.com") }}
+    {% for error in form.api_url.errors %}<p class="text-error text-sm">{{ error }}</p>{% endfor %}
+  </div>
+  <div>
+    {{ form.api_token.label(class="label text-sm", text="Agent token") }}
+    {{ form.api_token(class="input input-bordered input-sm w-full", autocomplete="new-password", placeholder="Leave empty to keep the saved token" if editing else "") }}
+    {% for error in form.api_token.errors %}<p class="text-error text-sm">{{ error }}</p>{% endfor %}
+  </div>
+</div>
+
+<fieldset>
+  <legend class="label text-sm">Who can deploy here</legend>
+  <div class="flex flex-wrap gap-2">
+    {% for subfield in form.allowed_role_ids %}
+    <label class="flex cursor-pointer items-center gap-2 rounded-full border border-base-300 py-1 pl-2 pr-3 text-sm has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+      {{ subfield(class="checkbox checkbox-primary checkbox-sm") }} {{ subfield.label.text }}
+    </label>
+    {% else %}
+    <p class="text-sm text-base-content/60">No roles yet.</p>
+    {% endfor %}
+  </div>
+  <p class="mt-1.5 text-xs text-base-content/60">
+    People in the checked roles can see this server and deploy to it. With none checked, only people who manage servers can.
+  </p>
+</fieldset>
 {% endmacro %}
 
 {% if current_user.has_permission("deployment_server.manage") %}
 <dialog id="create-server-modal" class="modal">
-  <div class="modal-box w-11/12 max-w-lg">
-    <h3 class="text-lg font-bold">New Deployment Server</h3>
+  <div class="modal-box w-11/12 max-w-2xl">
+    <h3 class="text-lg font-bold">New server</h3>
+    <p class="mt-1 text-sm text-base-content/60">A place manifests deploy to.</p>
     <form
       method="post"
       action="{{ url_for('deployment_servers.create') }}"
       novalidate
-      class="deployment-server-form mt-4 flex flex-col gap-3"
+      class="deployment-server-form mt-4 flex flex-col gap-5"
     >
       {{ create_form.hidden_tag() }}
       <div>
         {{ create_form.name.label(class="label text-sm") }}
-        {{ create_form.name(class="input input-bordered input-sm w-full") }}
+        {{ create_form.name(class="input input-bordered input-sm w-full", placeholder="e.g. staging-cluster") }}
         {% for error in create_form.name.errors %}
         <p class="text-error text-sm">{{ error }}</p>
         {% endfor %}
@@ -156,24 +172,24 @@ MASIMPLE CICD{% endblock %}
 
 {% for server in servers %}
 <dialog id="edit-server-modal-{{ server.id }}" class="modal">
-  <div class="modal-box w-11/12 max-w-lg">
-    <h3 class="text-lg font-bold">Edit Server: {{ server.name }}</h3>
+  <div class="modal-box w-11/12 max-w-2xl">
+    <h3 class="text-lg font-bold">Edit {{ server.name }}</h3>
     {% set form = edit_forms[server.id] %}
     <form
       method="post"
       action="{{ url_for('deployment_servers.edit', server_id=server.id) }}"
       novalidate
-      class="deployment-server-form mt-4 flex flex-col gap-3"
+      class="deployment-server-form mt-4 flex flex-col gap-5"
     >
       {{ form.hidden_tag() }}
       <div>
         {{ form.name.label(class="label text-sm") }}
-        {{ form.name(class="input input-bordered input-sm w-full") }}
+        {{ form.name(class="input input-bordered input-sm w-full", placeholder="e.g. staging-cluster") }}
         {% for error in form.name.errors %}
         <p class="text-error text-sm">{{ error }}</p>
         {% endfor %}
       </div>
-      {{ connection_fields(form) }}
+      {{ connection_fields(form, editing=True) }}
       <div class="modal-action">
         <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
         {{ form.submit(class="btn btn-primary btn-sm") }}
@@ -203,8 +219,6 @@ MASIMPLE CICD{% endblock %}
 {% endfor %}
 {% endif %}
 
-<script src="{{ url_for('static', filename='vendor/codemirror/codemirror.min.js') }}"></script>
-<script src="{{ url_for('static', filename='vendor/codemirror/yaml.min.js') }}"></script>
-<script src="{{ url_for('static', filename='js/yaml_editor.js') }}"></script>
+{% include "partials/_yaml_editor_scripts.html" %}
 <script src="{{ url_for('static', filename='js/deployment_servers.js') }}"></script>
 {% endblock %}

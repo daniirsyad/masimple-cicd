@@ -319,8 +319,6 @@
 {% endfor %}
 {% endif %}
 
-<script src="{{ url_for('static', filename='vendor/codemirror/codemirror.min.js') }}"></script>
-<script src="{{ url_for('static', filename='vendor/codemirror/yaml.min.js') }}"></script>
-<script src="{{ url_for('static', filename='js/yaml_editor.js') }}"></script>
+{% include "partials/_yaml_editor_scripts.html" %}
 <script src="{{ url_for('static', filename='js/deployment_pods.js') }}"></script>
 {% endblock %}

@@ -14,12 +14,12 @@ def _top_level_choices(exclude_id=None):
     query = Menu.query.filter_by(parent_id=None).order_by(Menu.order)
     if exclude_id:
         query = query.filter(Menu.id != exclude_id)
-    return [("", "— None (top-level) —")] + [(str(menu.id), menu.label) for menu in query.all()]
+    return [("", "Top level")] + [(str(menu.id), menu.label) for menu in query.all()]
 
 
 def _permission_choices():
     codes = [permission.code for permission in Permission.query.order_by(Permission.code).all()]
-    return [("", "— None —")] + [(code, code) for code in codes]
+    return [("", "Everyone")] + [(code, f"People with {code}") for code in codes]
 
 
 def _next_order(parent_id):

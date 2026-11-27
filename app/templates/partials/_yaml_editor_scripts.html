@@ -1,0 +1,10 @@
+{# CodeMirror and every addon the shared YAML editor (js/yaml_editor.js) uses,
+   so each page's editor works the same. Include once per page that has one. #}
+<script src="{{ url_for('static', filename='vendor/codemirror/codemirror.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/yaml.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/addon/active-line.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/addon/comment.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/addon/foldcode.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/addon/foldgutter.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/addon/indent-fold.js') }}"></script>
+<script src="{{ url_for('static', filename='js/yaml_editor.js') }}"></script>

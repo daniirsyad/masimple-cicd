@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% from "partials/_macros.html" import delete_impact %} {% block title %}Menus -
+{% extends "base.html" %} {% from "partials/_macros.html" import delete_impact, entry_actions %} {% from "menus/_form.html" import menu_form %} {% block title %}Menus -
 MASIMPLE CICD{% endblock %} {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Menus</h1>
@@ -13,199 +13,77 @@ MASIMPLE CICD{% endblock %} {% block content %}
   {% endif %}
 </div>
 
-{% if current_user.has_permission("menu.edit") %}
+{% set can_edit = current_user.has_permission("menu.edit") %}
 <p class="mt-2 text-sm text-base-content/60">
-  Drag items by the handle to reorder them. Sub-items can be dragged between
-  groups; a menu with its own sub-items must be edited to change whether it is
-  top-level (max nesting depth is 1).
+  What the sidebar shows, in its order.{% if can_edit %} Drag the handle to reorder; drag a sub-item onto
+  another group to move it there.{% endif %}
 </p>
-{% endif %}
+<div id="reorder-status" class="mt-2 text-sm" aria-live="polite"></div>
 
-<div
-  id="menu-tree"
-  class="mt-4 flex flex-col gap-3"
-  data-reorder-url="{{ url_for('menus.reorder_menus') }}"
-  data-csrf="{{ csrf_token() }}"
->
-  {% for item in top_level %}
-  <div class="card bg-base-100 shadow-sm" data-menu-id="{{ item.id }}">
-    <div class="card-body gap-2 p-4">
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <div class="flex items-center gap-2">
-          {% if current_user.has_permission("menu.edit") %}
-          <span
-            class="drag-handle cursor-move text-base-content/40"
-            title="Drag to reorder"
-            >&#10021;</span
-          >
-          {% endif %}
-          <span class="font-semibold">{{ item.label }}</span>
-          {% if item.url %}<span class="text-xs text-base-content/50"
-            >{{ item.url }}</span
-          >{% endif %} {% if item.permission_code %}<span
-            class="badge badge-ghost badge-sm"
-            >{{ item.permission_code }}</span
-          >{% endif %} {% if item.show_in_navbar %}<span
-            class="badge badge-outline badge-sm"
-            >Navbar</span
-          >{% endif %} {% if not item.show_in_sidebar %}<span
-            class="badge badge-outline badge-sm"
-            >Hidden</span
-          >{% endif %}
-        </div>
-        {% if current_user.has_permission("menu.edit") %}
-        <div class="flex gap-2">
-          <button
-            type="button"
-            class="btn btn-sm"
-            onclick="document.getElementById('edit-modal-{{ item.id }}').showModal()"
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            class="btn btn-sm btn-error"
-            onclick="document.getElementById('delete-modal-{{ item.id }}').showModal()"
-          >
-            Delete
-          </button>
-        </div>
-        {% endif %}
-      </div>
-
-      <ul
-        class="menu-children ml-6 flex min-h-8 flex-col gap-1 rounded-box bg-base-200/50 p-2"
-        data-parent-id="{{ item.id }}"
-      >
-        {% for child in children_by_parent.get(item.id, []) %}
-        <li
-          class="flex items-center justify-between gap-2 rounded-box bg-base-100 px-3 py-2 shadow-sm"
-          data-menu-id="{{ child.id }}"
-        >
-          <div class="flex items-center gap-2">
-            {% if current_user.has_permission("menu.edit") %}
-            <span
-              class="drag-handle cursor-move text-base-content/40"
-              title="Drag to reorder"
-              >&#10021;</span
-            >
-            {% endif %}
-            <span>{{ child.label }}</span>
-            {% if child.url %}<span class="text-xs text-base-content/50"
-              >{{ child.url }}</span
-            >{% endif %} {% if child.permission_code %}<span
-              class="badge badge-ghost badge-sm"
-              >{{ child.permission_code }}</span
-            >{% endif %} {% if child.show_in_navbar %}<span
-              class="badge badge-outline badge-sm"
-              >Navbar</span
-            >{% endif %} {% if not child.show_in_sidebar %}<span
-              class="badge badge-outline badge-sm"
-              >Hidden</span
-            >{% endif %}
-          </div>
-          {% if current_user.has_permission("menu.edit") %}
-          <div class="flex gap-2">
-            <button
-              type="button"
-              class="btn btn-sm"
-              onclick="document.getElementById('edit-modal-{{ child.id }}').showModal()"
-            >
-              Edit
-            </button>
-            <button
-              type="button"
-              class="btn btn-sm btn-error"
-              onclick="document.getElementById('delete-modal-{{ child.id }}').showModal()"
-            >
-              Delete
-            </button>
-          </div>
-          {% endif %}
-        </li>
-        {% endfor %}
-      </ul>
+{% macro menu_row(item, child_count=0, is_child=False) %}
+<div class="flex items-center gap-3 px-3 py-2.5">
+  {% if can_edit %}
+  <span class="drag-handle cursor-grab text-base-content/30 hover:text-base-content/70" title="Drag to reorder" aria-hidden="true">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4">
+      <circle cx="7" cy="5" r="1.4" /><circle cx="13" cy="5" r="1.4" /><circle cx="7" cy="10" r="1.4" />
+      <circle cx="13" cy="10" r="1.4" /><circle cx="7" cy="15" r="1.4" /><circle cx="13" cy="15" r="1.4" />
+    </svg>
+  </span>
+  {% endif %}
+  <span class="sidebar-icon grid h-8 w-8 shrink-0 place-items-center rounded-lg {{ 'bg-base-200' if item.icon else 'border border-dashed border-base-300' }} [&>svg]:h-4 [&>svg]:w-4">
+    {{ item.icon | safe if item.icon else '' }}
+  </span>
+  <div class="min-w-0 flex-1">
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span class="{{ 'font-medium' if is_child else 'text-[0.9375rem] font-semibold' }}">{{ item.label }}</span>
+      {% if not item.show_in_sidebar %}<span class="badge badge-ghost badge-sm">Hidden from sidebar</span>{% endif %}
+      {% if item.show_in_navbar %}<span class="badge badge-outline badge-sm">Also in top bar</span>{% endif %}
+    </div>
+    <div class="mt-0.5 text-xs text-base-content/60 sm:truncate">
+      {%- if item.url %}Opens <span class="font-mono">{{ item.url }}</span>
+      {%- elif is_child %}Opens nothing yet: add a URL
+      {%- elif child_count %}Group of {{ child_count }} sub-item{{ '' if child_count == 1 else 's' }}
+      {%- else %}Empty group, so the sidebar leaves it out{% endif -%}
+      , {{ 'for people with ' ~ item.permission_code if item.permission_code else 'for everyone' }}
     </div>
   </div>
-  {% else %}
-  <p>No menu items found.</p>
-  {% endfor %}
+  {% if can_edit %}
+  <div class="flex shrink-0 items-center gap-1">
+    {{ entry_actions(item.label, "edit-modal-" ~ item.id, "delete-modal-" ~ item.id) }}
+  </div>
+  {% endif %}
 </div>
+{% endmacro %}
 
-<div id="reorder-status" class="mt-2 text-sm"></div>
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div
+    id="menu-tree"
+    class="divide-y divide-base-200 py-1"
+    data-reorder-url="{{ url_for('menus.reorder_menus') }}"
+    data-csrf="{{ csrf_token() }}"
+  >
+    {% for item in top_level %}
+    {% set children = children_by_parent.get(item.id, []) %}
+    <section data-menu-id="{{ item.id }}">
+      {{ menu_row(item, children|length) }}
+      <ul class="menu-children ml-7 border-l-2 border-base-200 pl-2 {{ 'pb-2' if children else '' }}" data-parent-id="{{ item.id }}">
+        {% for child in children %}
+        <li class="rounded-lg hover:bg-base-200/50" data-menu-id="{{ child.id }}">{{ menu_row(child, is_child=True) }}</li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% else %}
+    <p class="p-4 text-sm text-base-content/60">No menu items yet. The sidebar is empty until you add one.</p>
+    {% endfor %}
+  </div>
+</div>
 
 {% if current_user.has_permission("menu.edit") %}
 <dialog id="create-modal" class="modal">
   <div class="modal-box w-11/12 max-w-lg">
     <h3 class="text-lg font-bold">New Menu Item</h3>
 
-    <form
-      method="post"
-      action="{{ url_for('menus.create_menu') }}"
-      novalidate
-      class="mt-4 flex flex-col gap-3"
-    >
-      {{ create_form.hidden_tag() }}
-
-      <div>
-        {{ create_form.label.label(class="label text-sm") }} {{
-        create_form.label(class="input input-bordered input-sm w-full") }} {%
-        for error in create_form.label.errors %}
-        <p class="text-error text-sm">{{ error }}</p>
-        {% endfor %}
-      </div>
-
-      <div>
-        {{ create_form.icon.label(class="label text-sm") }} {{
-        create_form.icon(class="textarea textarea-bordered textarea-sm w-full
-        font-mono", rows=3) }}
-        <p class="mt-1 text-xs text-base-content/60">
-          Paste inline SVG markup, e.g.
-          <code>&lt;svg viewBox="0 0 24 24"&gt;...&lt;/svg&gt;</code>. Shown
-          next to the label in the sidebar. Use
-          <code>fill="currentColor"</code> (not a hardcoded color) so the icon
-          follows the sidebar's text color in both light and dark mode.
-        </p>
-      </div>
-
-      <div>
-        {{ create_form.url.label(class="label text-sm") }} {{
-        create_form.url(class="input input-bordered input-sm w-full") }}
-      </div>
-
-      <div>
-        {{ create_form.parent_id.label(class="label text-sm") }} {{
-        create_form.parent_id(class="select select-bordered select-sm w-full")
-        }}
-      </div>
-
-      <div>
-        {{ create_form.permission_code.label(class="label text-sm") }} {{
-        create_form.permission_code(class="select select-bordered select-sm
-        w-full") }}
-      </div>
-
-      <label class="flex items-center gap-2 text-sm">
-        {{ create_form.show_in_navbar(class="checkbox checkbox-sm") }} {{
-        create_form.show_in_navbar.label.text }}
-      </label>
-
-      <label class="flex items-center gap-2 text-sm">
-        {{ create_form.show_in_sidebar(class="checkbox checkbox-sm") }} {{
-        create_form.show_in_sidebar.label.text }}
-      </label>
-
-      <div class="modal-action">
-        <button
-          type="button"
-          class="btn btn-sm"
-          onclick="this.closest('dialog').close()"
-        >
-          Cancel
-        </button>
-        {{ create_form.submit(class="btn btn-primary btn-sm") }}
-      </div>
-    </form>
+    {{ menu_form(create_form, url_for('menus.create_menu')) }}
   </div>
   <form method="dialog" class="modal-backdrop">
     <button>close</button>

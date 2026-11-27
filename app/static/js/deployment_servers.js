@@ -9,13 +9,13 @@ onPageReady(() => {
   // --- Show only the credential fields relevant to the chosen connection
   // type (kube vs api), per form (create + each edit form). ---
   document.querySelectorAll(".deployment-server-form").forEach((form) => {
-    const select = form.querySelector(".connection-type-select");
+    const radios = form.querySelectorAll(".connection-type-radio");
     const kubeFields = form.querySelector(".connection-fields-kube");
     const apiFields = form.querySelector(".connection-fields-api");
-    if (!select) return;
+    if (!radios.length) return;
 
     function syncVisibility() {
-      const isKube = select.value === "kube";
+      const isKube = form.querySelector(".connection-type-radio:checked")?.value !== "api";
       kubeFields.classList.toggle("hidden", !isKube);
       apiFields.classList.toggle("hidden", isKube);
       // No manual refresh call needed here — yaml_editor.js's
@@ -25,7 +25,7 @@ onPageReady(() => {
       // shown), the same fix that covers the <dialog>-open case.
     }
 
-    select.addEventListener("change", syncVisibility);
+    radios.forEach((radio) => radio.addEventListener("change", syncVisibility));
     syncVisibility();
   });
 });

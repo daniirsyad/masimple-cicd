@@ -25,14 +25,6 @@ onPageReady(() => {
     const cm = window.YamlEditor.initYamlEditor(textarea, { readOnly: !!textarea.closest("fieldset[disabled]") });
     if (!cm) return;
     yamlEditors[textarea.id] = cm;
-
-    const pos = document.querySelector(`.yaml-cursor-pos[data-yaml-input-id="${textarea.id}"]`);
-    if (pos) {
-      cm.on("cursorActivity", () => {
-        const cursor = cm.getCursor();
-        pos.textContent = `Line ${cursor.line + 1}, column ${cursor.ch + 1}`;
-      });
-    }
   });
 
   // --- Type switch: Kubernetes YAML vs. Helm chart. The Helm fields and

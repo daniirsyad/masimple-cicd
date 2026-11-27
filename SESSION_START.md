@@ -28,6 +28,37 @@ Then ask me what to work on next rather than assuming.
 ## Current state
 
 - **1227 tests passing** (as of the last full run).
+- **This session's work, part 9** — Menus page and Deployment Server modal
+  redesign (asked via /frontend-design):
+  1. Menus (`menus/list.html`): one card that reads like the sidebar. Each
+     row shows the real icon, label and a plain sentence ("Opens /builders,
+     for people with builder.view"; "Empty group, so the sidebar leaves it
+     out"), ghost Edit + ⋯ Delete (`entry_actions`), sub-items on a tree
+     line. Empty groups' drop zones only show while a sub-item is dragged
+     (`#menu-tree.is-dragging-child`, set by `menu-reorder.js`).
+  2. Menu create/edit share `menus/_form.html` (`menu_form` macro): live
+     sidebar preview (label + SVG, scripts/on* stripped), "Opens", "Sits
+     under", "Who can see it" (choices now "Top level" / "Everyone" /
+     "People with x"), Sidebar/Top bar toggles.
+  3. Server modal: wider; connection type is two radio cards
+     (`.connection-type-radio`, `deployment_servers.js` reads the checked
+     one), Agent URL/token side by side, "Who can deploy here" role chips
+     with a plain hint, edit-only "leave empty to keep" hints.
+  4. Editor fold hint shortened. Checked in a headless browser (preview,
+     create, drag reorder, api/kube switch, save). Full suite 1227 passed.
+- **This session's work, part 8** — every YAML editor the same, with full
+  screen (asked: "make all the yaml text editor same as ... Deployment
+  manifest ... possible to full screen"):
+  1. `partials/_yaml_editor_scripts.html` loads CodeMirror, all five addons
+     and `yaml_editor.js`; Manifests, Servers, Ingresses, Network Policies
+     and the YAML Generator include it instead of their own script tags.
+  2. `initYamlEditor()` now wraps the textarea in `.yaml-editor-wrapper` if
+     the page didn't and adds the status bar (key hints, hidden when
+     read-only; fold hint; "Line x, column y"; Full screen). The manifest
+     page's hand-written footer and cursor code were removed.
+  3. Full screen uses the browser Fullscreen API on the wrapper (works from
+     inside a `<dialog>`, Esc leaves it); `:fullscreen` CSS in `input.css`.
+     Checked in a headless browser. Full suite 1227 passed.
 - **This session's work, part 7** — sidebar group closing on sub-pages
   (asked: "the menu collapse after moving the page" from Builders):
   1. Menu "active" was an exact path match, so `/builders/archived`,
