@@ -128,8 +128,8 @@ Then ask me what to work on next rather than assuming.
      migration files on each call); `is_setup_complete()` is one query on
      its own engine connection (version + any user), run once per request.
   4. Step 3: `app/utils/request_cache.py` `per_request(key, fn)` (emptied in
-     a first-registered `before_request`, since tests share one app
-     context; computes every time outside a request). It's used for setup
+     a first-registered `before_request`, since a request inside an
+     already-open app context reuses its `g`; computes every time outside a request). It's used for setup
      status, `get_system_config()` and the review badge. One `Menu` query for
      sidebar + navbar. The review badge joins `run`/`workflow`. An almost
      empty page went from 15 to 8 queries, `/images/` from 222 to 129.
