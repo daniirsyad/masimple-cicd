@@ -34,7 +34,7 @@ class DeploymentManifestForm(FlaskForm):
     )
     # Upload source: a new .tgz, and/or which already-uploaded version to
     # deploy (choices set per manifest in routes; checked there, with the DB).
-    helm_chart_file = FileField("Chart file (.tgz)")
+    helm_chart_file = FileField("Chart file (.tgz or .zip)")
     helm_chart_upload_version = SelectField("Chart version to deploy", choices=[], validate_choice=False)
     helm_chart_repo = StringField("Chart repository", validators=[Optional(), Length(max=500)])
     helm_chart_name = StringField("Chart name", validators=[Optional(), Length(max=200)])

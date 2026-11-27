@@ -384,6 +384,46 @@ class KubernetesProvider(DeploymentProvider):
             return "missing"
         raise RuntimeError(process.stderr.strip() or "kubectl get failed.")
 
+    def get_live_objects(self, manifest_yaml):
+        """The live objects for the resources named in `manifest_yaml` that
+        exist on the cluster (missing ones are just left out). Read-only."""
+        try:
+            process = self._run_kubectl(
+                ["get", "-f", "-", "-o", "json", "--ignore-not-found"],
+                input_text=manifest_yaml, timeout=POD_LIST_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"Could not read from the cluster: {exc}") from None
+        if process.returncode != 0:
+            raise RuntimeError(process.stderr.strip() or "kubectl get failed.")
+        if not process.stdout.strip():
+            return []
+        # kubectl prints a List for several objects but a bare object for one,
+        # and one JSON document per input file chunk in some versions.
+        objects = []
+        decoder = json.JSONDecoder()
+        text, position = process.stdout, 0
+        while position < len(text):
+            while position < len(text) and text[position].isspace():
+                position += 1
+            if position >= len(text):
+                break
+            parsed, position = decoder.raw_decode(text, position)
+            objects.extend(parsed.get("items", []) if parsed.get("kind") == "List" else [parsed])
+        return objects
+
+    def diff(self, manifest_yaml):
+        """What `kubectl apply` of `manifest_yaml` would change: "" when
+        nothing would. A server-side dry run; changes nothing."""
+        try:
+            process = self._run_kubectl(["diff", "-f", "-"], input_text=manifest_yaml, timeout=POD_LIST_TIMEOUT_SECONDS)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"Could not compare with the cluster: {exc}") from None
+        # Exit 0 = no differences, 1 = differences, anything else = an error.
+        if process.returncode > 1:
+            raise RuntimeError(process.stderr.strip() or "kubectl diff failed.")
+        return process.stdout
+
     def list_pods(self, namespace=None):
         """[{name, namespace, phase, ready, restarts, node, created_at}, ...]
         — namespace=None lists across every namespace (--all-namespaces).
@@ -903,6 +943,30 @@ class KubernetesProvider(DeploymentProvider):
         if "not found" in process.stderr.lower():
             return "missing"
         raise RuntimeError(process.stderr.strip() or "helm status failed.")
+
+    def helm_release_info(self, release, namespace):
+        """None if the release isn't installed, else {"status": "deployed"|...,
+        "chart": "name-1.2.3", "values": {user-supplied values}}. Read-only."""
+        try:
+            with helm_session(self.kubeconfig) as (run, _home):
+                listing = run(["list", "--namespace", namespace, "--all", "--filter", f"^{release}$", "-o", "json"],
+                              timeout=TEST_CONNECTION_TIMEOUT_SECONDS)
+                if listing.returncode != 0:
+                    raise RuntimeError(listing.stderr.strip() or "helm list failed.")
+                matches = [r for r in json.loads(listing.stdout or "[]") if r.get("name") == release]
+                if not matches:
+                    return None
+                values = run(["get", "values", release, "--namespace", namespace, "-o", "json"],
+                             timeout=TEST_CONNECTION_TIMEOUT_SECONDS)
+                if values.returncode != 0:
+                    raise RuntimeError(values.stderr.strip() or "helm get values failed.")
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"Could not read Helm release: {exc}") from None
+        return {
+            "status": matches[0].get("status"),
+            "chart": matches[0].get("chart") or "",
+            "values": json.loads(values.stdout or "null") or {},
+        }
 
     def helm_restart(self, release, namespace, wait_timeout_seconds=None):
         """A rolling restart of the release's Deployments/StatefulSets/

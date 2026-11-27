@@ -94,3 +94,14 @@ class DeploymentProvider(ABC):
 
     def helm_restart(self, release, namespace, wait_timeout_seconds=None):
         raise NotImplementedError("Helm charts can only be deployed to a Kubernetes (kubeconfig) server.")
+
+    # Read-only lookups for "Detect on servers" (app/services/deployment/detect.py).
+    # Only a cluster can say what's running; a custom agent can't.
+    def get_live_objects(self, manifest_yaml):
+        raise NotImplementedError("Only Kubernetes (kubeconfig) servers can report what's running.")
+
+    def diff(self, manifest_yaml):
+        raise NotImplementedError("Only Kubernetes (kubeconfig) servers can report what's running.")
+
+    def helm_release_info(self, release, namespace):
+        raise NotImplementedError("Only Kubernetes (kubeconfig) servers can report what's running.")

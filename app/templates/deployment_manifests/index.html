@@ -62,6 +62,7 @@ MASIMPLE CICD{% endblock %}
 {% set can_manage = current_user.has_permission("deployment_manifest.manage") %}
 {% set show_restart = can_stop and current_user.has_permission("deployment.restart") %}
 {% set show_stop = can_stop and current_user.has_permission("deployment.stop") %}
+{% set show_detect = can_deploy and current_user.has_permission("deployment.deploy") %}
 {% set rail = 'entry-rail-warning' if not manifest.target_servers else ('entry-rail-success' if can_stop else '') %}
 <tr
   class="manifest-row entry-row {{ rail }}"
@@ -147,8 +148,15 @@ MASIMPLE CICD{% endblock %}
       >
         {{ 'Edit' if can_manage else 'View' }}
       </button>
-      {% if show_restart or show_stop or can_manage %}
+      {% if show_restart or show_stop or show_detect or can_manage %}
       {% call more_menu(manifest.name) %}
+      {% if show_detect %}
+      <li>
+        <button type="button" class="detect-one-btn" data-manifest-id="{{ manifest.id }}" data-manifest-name="{{ manifest.name }}">
+          Detect on servers
+        </button>
+      </li>
+      {% endif %}
       {% if show_restart %}
       <li>
         <button type="button" class="restart-one-btn" data-manifest-id="{{ manifest.id }}" data-manifest-name="{{ manifest.name }}">
@@ -204,6 +212,9 @@ MASIMPLE CICD{% endblock %}
       <div class="flex flex-wrap gap-2">
         {% if group.can_deploy and current_user.has_permission("deployment.deploy") %}
         <button type="button" class="deploy-group-btn btn btn-primary btn-sm">Deploy Group</button>
+        {% endif %}
+        {% if group.can_deploy and current_user.has_permission("deployment.deploy") %}
+        <button type="button" class="detect-group-btn btn btn-ghost btn-sm" title="Check whether these apps are already running on their servers">Detect</button>
         {% endif %}
         {% if group.has_update and current_user.has_permission("deployment.update") %}
         <button type="button" class="update-group-btn btn btn-info btn-sm">Update Group</button>
@@ -345,12 +356,13 @@ MASIMPLE CICD{% endblock %}
 
   <div class="{{ upload_class }} sm:col-span-2">
     {{ form.helm_chart_file.label(class="label text-sm") }}
-    {{ form.helm_chart_file(class="helm-chart-file-input file-input file-input-bordered file-input-sm w-full", accept=".tgz,.tar.gz,application/gzip") }}
+    {{ form.helm_chart_file(class="helm-chart-file-input file-input file-input-bordered file-input-sm w-full", accept=".tgz,.tar.gz,.zip,application/gzip,application/zip") }}
     {% for error in form.helm_chart_file.errors %}
     <p class="text-error text-sm">{{ error }}</p>
     {% endfor %}
     <p class="mt-1 text-xs text-base-content/60">
-      Make it with <code>helm package &lt;chart-folder&gt;</code>. If the chart has dependencies, run
+      Make a .tgz with <code>helm package &lt;chart-folder&gt;</code>, or zip the chart's folder (the one with
+      Chart.yaml); a .zip is turned into a .tgz when it's uploaded. If the chart has dependencies, run
       <code>helm dependency update</code> first so they're packaged inside. Up to 10 MB.
     </p>
   </div>
@@ -384,13 +396,38 @@ MASIMPLE CICD{% endblock %}
     </button>
     <button
       type="button"
-      class="yaml-insert-placeholder-btn btn btn-ghost btn-xs mb-1 font-mono"
+      class="find-images-btn btn btn-ghost btn-xs mb-1"
       data-yaml-input-id="{{ form.yaml_content.id }}"
-      title="Insert at the cursor"
+      title="List the images in the YAML and turn them into version placeholders"
     >
-      + {{ '{{SYS:VERSION}}' }}
+      Find images
     </button>
+    <div class="dropdown dropdown-end">
+      <div tabindex="0" role="button" class="btn btn-ghost btn-xs mb-1" title="Insert a version placeholder at the cursor">+ version</div>
+      <div tabindex="0" class="dropdown-content z-30 mt-1 w-80 rounded-box border border-base-300 bg-base-100 p-3 shadow-lg">
+        <label class="text-xs font-medium">
+          Name <span class="font-normal text-base-content/60">(one per image; empty for a single image)</span>
+          <input type="text" class="yaml-placeholder-key input input-bordered input-xs mt-1 w-full font-mono" placeholder="e.g. api" autocomplete="off" />
+        </label>
+        <p class="yaml-placeholder-key-error mt-1 hidden text-xs text-error">Use letters, numbers, dots, dashes or underscores.</p>
+        <div class="mt-2 flex gap-2">
+          <button type="button" class="yaml-insert-placeholder-btn btn btn-primary btn-xs" data-kind="VERSION" data-yaml-input-id="{{ form.yaml_content.id }}">Full image</button>
+          <button type="button" class="yaml-insert-placeholder-btn btn btn-xs" data-kind="TAG" data-yaml-input-id="{{ form.yaml_content.id }}">Tag only</button>
+        </div>
+        <p class="mt-2 text-xs text-base-content/60">
+          Full image becomes <span class="font-mono">registry/app:DEV.1.2.3</span>; tag only becomes
+          <span class="font-mono">DEV.1.2.3</span>, for a chart's <span class="font-mono">image.tag</span>.
+        </p>
+      </div>
+    </div>
     </span>
+  </div>
+  <div class="find-images-panel mb-2 hidden rounded-box border border-base-300 bg-base-200/50 p-3 text-sm" data-yaml-input-id="{{ form.yaml_content.id }}">
+    <div class="find-images-list flex flex-col gap-2"></div>
+    <div class="mt-3 flex flex-wrap items-center justify-end gap-2">
+      <button type="button" class="find-images-cancel btn btn-ghost btn-xs">Close</button>
+      <button type="button" class="find-images-apply btn btn-primary btn-xs">Use as version placeholders</button>
+    </div>
   </div>
   <div class="yaml-editor-wrapper yaml-editor-tall min-w-0 overflow-hidden rounded-lg border border-base-300">
     {{ form.yaml_content(class="yaml-content-input textarea textarea-bordered textarea-sm w-full font-mono", rows="12") }}
@@ -399,9 +436,11 @@ MASIMPLE CICD{% endblock %}
   <p class="text-error text-sm">{{ error }}</p>
   {% endfor %}
   <p class="mt-1 text-xs text-base-content/60">
-    Use <code>{{ '{{SYS:VERSION}}' }}</code> or <code>{{ '{{SYS:VERSION:key}}' }}</code> for each image tag that
-    should resolve against a Builder's latest (or a pinned) successful build<span class="helm-only {{ '' if is_helm else 'hidden' }}">,
-    e.g. <code>image.tag: {{ '{{SYS:VERSION}}' }}</code>. Only the values you change need to be here; the
+    <code>{{ '{{SYS:VERSION}}' }}</code> becomes a Builder's latest (or pinned) image, e.g.
+    <code>image: {{ '{{SYS:VERSION}}' }}</code>; <code>{{ '{{SYS:TAG}}' }}</code> becomes only its tag. With several
+    images, name each one (<code>{{ '{{SYS:TAG:api}}' }}</code>, <code>{{ '{{SYS:TAG:web}}' }}</code>) and bind each
+    name to its Builder below<span class="helm-only {{ '' if is_helm else 'hidden' }}">, e.g.
+    <code>api.image.tag: {{ '{{SYS:TAG:api}}' }}</code>. Only the values you change need to be here; the
     chart's defaults cover the rest</span>.
   </p>
 </div>
@@ -564,6 +603,28 @@ MASIMPLE CICD{% endblock %}
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
+
+{% if current_user.has_permission("deployment.deploy") %}
+<dialog id="detect-trigger-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-3xl">
+    <h3 class="text-lg font-bold">Detect on servers</h3>
+    <p class="mt-1 text-sm text-base-content/60">
+      Checks whether each app is already running on its servers, without changing anything there. Tick the
+      ones to mark as deployed, so Update, Restart and Stop work on them.
+    </p>
+    <div id="detect-trigger-content" class="mt-4 flex flex-col gap-3 text-sm"></div>
+    <form method="post" action="{{ url_for('deployment_manifests.detect') }}" id="detect-trigger-form" class="mt-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+      <div id="detect-trigger-pairs"></div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
+        <button type="submit" id="detect-trigger-submit" class="btn btn-primary btn-sm" disabled>Mark as deployed</button>
+      </div>
+    </form>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{% endif %}
 
 <dialog id="stop-trigger-modal" class="modal">
   <div class="modal-box w-11/12 max-w-lg">

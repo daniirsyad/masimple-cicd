@@ -92,12 +92,22 @@ onPageReady(() => {
     });
   });
 
+  // "+ version": {{SYS:VERSION[:name]}} (full image) or {{SYS:TAG[:name]}}
+  // (tag only) at the cursor, then a binding row for it.
   document.querySelectorAll(".yaml-insert-placeholder-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const cm = yamlEditors[btn.dataset.yamlInputId];
-      if (!cm) return;
-      cm.replaceSelection("{{SYS:VERSION}}");
+      const menu = btn.closest(".dropdown-content");
+      const keyInput = menu.querySelector(".yaml-placeholder-key");
+      const key = keyInput.value.trim();
+      const invalid = key !== "" && !/^[A-Za-z0-9_.-]+$/.test(key);
+      menu.querySelector(".yaml-placeholder-key-error").classList.toggle("hidden", !invalid);
+      if (!cm || invalid) return;
+      cm.replaceSelection(`{{SYS:${btn.dataset.kind}${key ? `:${key}` : ""}}}`);
+      keyInput.value = "";
+      document.activeElement?.blur(); // closes the dropdown
       cm.focus();
+      scanPlaceholders(btn.closest("form"));
     });
   });
 
@@ -171,7 +181,9 @@ onPageReady(() => {
     const row = template.content.firstElementChild.cloneNode(true);
     row.dataset.key = key;
     row.querySelector(".binding-key-input").value = key;
-    row.querySelector(".binding-key-label").textContent = key === "default" ? "{{SYS:VERSION}}" : `{{SYS:VERSION:${key}}}`;
+    row.querySelector(".binding-key-label").textContent = key === "default" ? "(unnamed)" : key;
+    row.querySelector(".binding-key-label").title =
+      key === "default" ? "{{SYS:VERSION}} / {{SYS:TAG}}" : `{{SYS:VERSION:${key}}} / {{SYS:TAG:${key}}}`;
 
     const builderSelect = row.querySelector(".binding-builder-select");
     const pinnedSelect = row.querySelector(".binding-pinned-select");
@@ -220,26 +232,156 @@ onPageReady(() => {
     syncBindingRows(container, keys, seedByKey);
   });
 
+  // The editor's live content: the textarea only catches up on change.
+  function yamlOf(form) {
+    const textarea = form.querySelector(".yaml-content-input");
+    const editor = textarea && yamlEditors[textarea.id];
+    return editor ? editor.getValue() : textarea?.value || "";
+  }
+
+  // One binding row per placeholder name in the YAML. seedByKey preselects
+  // a Builder on rows it adds.
+  function scanPlaceholders(form, seedByKey) {
+    const container = form?.querySelector(".bindings-rows");
+    if (!container) return Promise.resolve();
+    return fetch("/deployment-manifests/api/placeholder-keys", {
+      method: "POST",
+      headers: { "X-CSRFToken": csrfToken, "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ yaml_content: yamlOf(form) }),
+    })
+      .then((r) => r.json())
+      .then((data) => syncBindingRows(container, data.keys || [], seedByKey))
+      .catch(() => {});
+  }
+
   document.querySelectorAll(".scan-placeholders-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const form = btn.closest("form");
-      const container = form.querySelector(".bindings-rows");
-      if (!container) return;
+    btn.addEventListener("click", () => scanPlaceholders(btn.closest("form")));
+  });
 
-      // The CodeMirror-editor's live content, not the underlying textarea's
-      // .value — that only reflects the editor once .save() runs (on
-      // submit), so reading it here would scan stale/pre-edit YAML.
-      const editor = yamlEditors[btn.dataset.yamlInputId];
-      const yamlContent = editor ? editor.getValue() : document.getElementById(btn.dataset.yamlInputId)?.value || "";
+  // --- Find images: list each image in the YAML with a name and a Builder,
+  // then turn the ticked ones into placeholders (the server edits the
+  // text by position, so comments and layout stay as they were). ---
+  // From the binding row <template>: its content isn't part of the page, so
+  // a page-wide querySelectorAll can't see it.
+  const builderOptions = Array.from(
+    document.getElementById("binding-row-template")?.content.querySelectorAll(".binding-builder-select option") || []
+  )
+    .filter((option) => option.value)
+    .map((option) => ({ id: option.value, name: option.textContent.trim() }));
 
-      fetch("/deployment-manifests/api/placeholder-keys", {
+  function findImagesRow(image) {
+    const row = document.createElement("div");
+    row.className = "find-images-row grid grid-cols-1 items-center gap-2 rounded-lg bg-base-100 p-2 sm:grid-cols-[auto_1fr_8rem_10rem]";
+    row.dataset.id = image.id;
+
+    const use = document.createElement("input");
+    use.type = "checkbox";
+    use.className = "find-images-use checkbox checkbox-primary checkbox-sm";
+    use.checked = true;
+    use.setAttribute("aria-label", `Use ${image.path}`);
+
+    const where = document.createElement("div");
+    where.className = "min-w-0";
+    const path = document.createElement("div");
+    path.className = "truncate font-mono text-xs font-medium";
+    path.textContent = image.path;
+    const value = document.createElement("div");
+    value.className = "truncate text-xs text-base-content/60";
+    value.textContent = `${image.kind === "tag" ? "Tag only" : "Full image"}, now ${image.value === "" ? "empty" : image.value}`;
+    where.append(path, value);
+
+    const key = document.createElement("input");
+    key.type = "text";
+    key.className = "find-images-key input input-bordered input-xs w-full font-mono";
+    key.value = image.key;
+    key.setAttribute("aria-label", "Placeholder name");
+
+    const builder = document.createElement("select");
+    builder.className = "find-images-builder select select-bordered select-xs w-full";
+    builder.setAttribute("aria-label", "Builder");
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "Pick a Builder later";
+    builder.append(none);
+    builderOptions.forEach(({ id, name }) => {
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = name;
+      option.selected = id === image.builder_id;
+      builder.append(option);
+    });
+
+    row.append(use, where, key, builder);
+    return row;
+  }
+
+  document.querySelectorAll(".find-images-btn").forEach((btn) => {
+    const form = btn.closest("form");
+    const panel = form.querySelector(".find-images-panel");
+    const list = panel.querySelector(".find-images-list");
+    const applyBtn = panel.querySelector(".find-images-apply");
+    const post = (url, params) =>
+      fetch(url, {
         method: "POST",
         headers: { "X-CSRFToken": csrfToken, "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ yaml_content: yamlContent }),
-      })
-        .then((r) => r.json())
-        .then((data) => syncBindingRows(container, data.keys || []))
-        .catch(() => {});
+        body: new URLSearchParams(params),
+      }).then((r) => r.json());
+
+    btn.addEventListener("click", () => {
+      panel.classList.remove("hidden");
+      applyBtn.classList.add("hidden");
+      showLoading(list, "Looking for images...");
+      post("/deployment-manifests/api/find-images", { yaml_content: yamlOf(form) })
+        .then((data) => {
+          list.replaceChildren();
+          if (data.error) list.textContent = data.error;
+          else if (!data.images.length) list.textContent = "No images left to turn into placeholders: every image: and image.tag already has one, or there are none.";
+          else {
+            const intro = document.createElement("p");
+            intro.className = "text-xs text-base-content/60";
+            intro.textContent = "Each ticked image gets a placeholder with this name, bound to the Builder you pick. For a chart's image.tag, image.repository is set to that Builder's image too.";
+            list.append(intro, ...data.images.map(findImagesRow));
+            applyBtn.classList.remove("hidden");
+          }
+        })
+        .catch(() => {
+          list.textContent = "Couldn't read the YAML. Try again.";
+        });
+    });
+
+    panel.querySelector(".find-images-cancel").addEventListener("click", () => panel.classList.add("hidden"));
+
+    applyBtn.addEventListener("click", () => {
+      const choices = Array.from(list.querySelectorAll(".find-images-row"))
+        .filter((row) => row.querySelector(".find-images-use").checked)
+        .map((row) => ({
+          id: Number(row.dataset.id),
+          key: row.querySelector(".find-images-key").value.trim(),
+          builder_id: row.querySelector(".find-images-builder").value,
+        }));
+      if (!choices.length) return;
+      setBusy(applyBtn, true);
+      post("/deployment-manifests/api/apply-images", { yaml_content: yamlOf(form), choices: JSON.stringify(choices) })
+        .then((data) => {
+          if (data.error) {
+            list.textContent = data.error;
+            return;
+          }
+          const textarea = form.querySelector(".yaml-content-input");
+          const editor = yamlEditors[textarea.id];
+          if (editor) editor.setValue(data.yaml_content);
+          else textarea.value = data.yaml_content;
+          const seeds = {};
+          data.bindings.forEach((binding) => {
+            if (binding.builder_id) seeds[binding.key] = { builder_id: binding.builder_id, pinned_image_build_id: "" };
+          });
+          panel.classList.add("hidden");
+          return scanPlaceholders(form, seeds);
+        })
+        .catch(() => {
+          list.textContent = "Couldn't change the YAML. Try again.";
+        })
+        .finally(() => setBusy(applyBtn, false));
     });
   });
 
@@ -469,6 +611,135 @@ onPageReady(() => {
       willText: "Will restart on",
     })
   );
+
+  // --- Detect on servers: a read-only check of what's already running,
+  // then tick the servers to mark as deployed. Everything from the cluster
+  // goes in as text, never HTML. ---
+  const DETECT_STATES = {
+    found: ["status-dot-success", "Found"],
+    partial: ["status-dot-warning", "Partly found, so it can't be marked"],
+    missing: ["", "Not found"],
+    already: ["status-dot-success", "Already deployed by MASIMPLE CICD"],
+    unhealthy: ["status-dot-warning", "Found, but not healthy"],
+    unsupported: ["", "Can't check"],
+    error: ["status-dot-error", "Couldn't check"],
+  };
+  const VERSION_STATES = {
+    outside: "not a build of its Builder; Update replaces it",
+    mixed: "different values in different places",
+    "chart default": "not set, so the chart's default is used",
+    unreadable: "couldn't read it",
+  };
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  // Yellow text is hard to read on white: a dot carries the warning instead.
+  function warn(...parts) {
+    const line = el("div", "flex items-baseline gap-1.5");
+    const dot = el("span", "status-dot status-dot-warning shrink-0 translate-y-[-1px]");
+    const text = el("span");
+    text.append(...parts);
+    line.append(dot, text);
+    return line;
+  }
+
+  function detectServerBlock(manifestId, server, onToggle) {
+    const block = el("div", "flex flex-col gap-1 border-t border-base-200 pt-2 first:border-t-0 first:pt-0");
+    const [dotClass, word] = DETECT_STATES[server.state] || ["", server.state];
+    const head = el("label", "flex items-center gap-2");
+    if (server.state === "found") {
+      const box = el("input", "checkbox checkbox-primary checkbox-sm");
+      box.type = "checkbox";
+      box.name = "pairs";
+      box.value = `${manifestId}:${server.server_id}`;
+      box.checked = true;
+      box.setAttribute("form", "detect-trigger-form");
+      box.addEventListener("change", onToggle);
+      head.append(box);
+    } else {
+      head.append(el("span", `status-dot ${dotClass}`));
+    }
+    head.append(el("span", "font-medium", server.server_name), el("span", "text-base-content/60", word));
+    block.append(head);
+
+    const details = el("div", "flex flex-col gap-1 pl-6 text-xs text-base-content/70");
+    if (server.message) details.append(el("div", "", server.message));
+    if (server.found.length && server.state !== "already") details.append(el("div", "", `Running: ${server.found.join(", ")}`));
+    if (server.missing.length) details.append(warn(`Missing: ${server.missing.join(", ")}`));
+    server.versions.forEach((version) => {
+      const name = el("span", "font-mono", version.key === "default" ? "version" : version.key);
+      if (version.state === "build") {
+        const line = el("div", "pl-3");
+        line.append(name, `: ${version.label}`);
+        details.append(line);
+      } else {
+        const parts = [name, ": "];
+        if (version.value) parts.push(el("span", "font-mono", version.value), " ");
+        parts.push(`(${VERSION_STATES[version.state] || version.state})`);
+        details.append(warn(...parts));
+      }
+    });
+    if (server.chart_note) details.append(warn(server.chart_note));
+    if (server.diff_note) details.append(el("div", "", server.diff_note));
+    if (server.diff === "") details.append(el("div", "", "Update would change nothing."));
+    if (server.diff) {
+      const more = el("details", "");
+      more.append(el("summary", "cursor-pointer", "What Update would change"));
+      more.append(el("pre", "mt-1 max-h-64 overflow-auto rounded bg-base-200 p-2 font-mono text-[0.7rem] leading-snug", server.diff));
+      details.append(more);
+    }
+    if (details.childNodes.length) block.append(details);
+    return block;
+  }
+
+  function setupDetectModal() {
+    const modal = document.getElementById("detect-trigger-modal");
+    if (!modal) return null;
+    const contentEl = document.getElementById("detect-trigger-content");
+    const submitBtn = document.getElementById("detect-trigger-submit");
+    const syncSubmit = () => {
+      submitBtn.disabled = !modal.querySelector('input[name="pairs"]:checked');
+    };
+
+    return (manifestIds) => {
+      showLoading(contentEl, "Checking the servers. This reads from each one and can take a few seconds...");
+      submitBtn.disabled = true;
+      modal.showModal();
+
+      const body = new URLSearchParams();
+      manifestIds.forEach((id) => body.append("manifest_ids", id));
+      fetch("/deployment-manifests/api/detect-preview", {
+        method: "POST",
+        headers: { "X-CSRFToken": csrfToken, "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      })
+        .then((r) => {
+          if (!r.ok) throw new Error();
+          return r.json();
+        })
+        .then((data) => {
+          contentEl.replaceChildren();
+          (data.results || []).forEach((entry) => {
+            const card = el("div", "flex flex-col gap-2 rounded-box border border-base-300 p-3");
+            card.append(el("div", "font-semibold", entry.name));
+            if (!entry.servers.length) card.append(el("div", "text-xs text-base-content/60", "No target servers."));
+            entry.servers.forEach((server) => card.append(detectServerBlock(entry.manifest_id, server, syncSubmit)));
+            contentEl.append(card);
+          });
+          syncSubmit();
+        })
+        .catch(() => {
+          contentEl.textContent = "Couldn't check the servers. Try again.";
+        });
+    };
+  }
+
+  wireOneAndGroupButtons(".detect-one-btn", ".detect-group-btn", setupDetectModal());
 
   // --- Drag-and-drop manifest ordering within a group — same Sortable
   // pattern as menu-reorder.js, one flat list per group (no nesting). ---

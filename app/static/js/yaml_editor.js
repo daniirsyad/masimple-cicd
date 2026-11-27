@@ -206,11 +206,11 @@
       }
     });
 
-    // Highlight {{SYS:VERSION}} / {{SYS:VERSION:key}} (the resolver's
+    // Highlight {{SYS:VERSION[:key]}} / {{SYS:TAG[:key]}} (the resolver's
     // placeholder syntax) so they stand out from ordinary YAML values.
     cm.addOverlay({
       token(stream) {
-        if (stream.match(/\{\{SYS:VERSION(?::[\w.-]+)?\}\}/)) return "sys-placeholder";
+        if (stream.match(/\{\{SYS:(?:VERSION|TAG)(?::[\w.-]+)?\}\}/)) return "sys-placeholder";
         while (stream.next() != null && !stream.match(/\{\{SYS:/, false)) {}
         return null;
       },

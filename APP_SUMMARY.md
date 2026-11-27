@@ -62,6 +62,8 @@ MASIMPLE CICD is an internal Flask web app with four halves:
    servers, define YAML manifests with placeholders that resolve against an
    Image Builder Builder's latest (or a pinned) successful build, then
    deploy/update/stop/restart them (individually or as an ordered group),
+   detect apps that were deployed outside MASIMPLE CICD and adopt them
+   (read-only check, then marked as deployed with their running versions),
    view deploy history, and browse/manage live cluster state for any
    registered Kubernetes server: full add/edit/delete for Namespaces,
    Secrets, ConfigMaps, Ingress, and Network Policies (the last two via a
@@ -104,7 +106,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
 | AWS SDK | `boto3` — ECR `RegistryProvider` only (SigV4-signed calls, doesn't fit the generic Docker Registry v2 bearer-token flow the other registry providers share) |
 | YAML generation | `PyYAML` — YAML Generator page only; everywhere else in this app deliberately avoids it in favor of dict→`json.dumps()` (JSON is valid YAML) since that output only ever feeds `kubectl apply -f -`, never a human — see `app/services/yaml_generator/render.py` |
-| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 1228 tests |
+| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 1260 tests |
 | Telegram integration | `requests` against the Bot API (`app/services/telegram/`) — both directions now: outbound `sendMessage` (security notifications, forgot-password links, workflow/build/deploy start-finish pushes) **and** inbound, via a long-polling `getUpdates` background thread (no webhook/public HTTPS needed) handling `/run`, `/status`, `/review`, `/build`, `/deploy`, `/update`, `/stop`, `/restart` bot commands and their inline-keyboard callbacks |
 | Discord integration | `requests` (REST) + `websocket-client` (Gateway) against the Discord API (`app/services/discord/`) — same notifications/commands as Telegram above (`/help` instead of `/start`), reached via a persistent Gateway WebSocket + native slash commands/Button/Select Menu components instead of long-polling + inline keyboards; group-resolution/action-table logic shared with Telegram via `app/services/bot_shared.py` |
 
@@ -334,14 +336,14 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   version is part of the resolved version string ("helm chart" key), so a
   chart bump shows as an available update. The form's "Load chart defaults"
   runs `helm show values`. `helm_chart_source` is `"repo"` or `"upload"`:
-  an uploaded `.tgz` (`HelmChartUpload`: manifest_id, chart name/version
+  an uploaded `.tgz`, or a `.zip` repackaged into one on upload (`HelmChartUpload`: manifest_id, chart name/version
   read from its Chart.yaml, filename, sha256, size, bytes in Postgres, max
   10 MB, unique per manifest+version). Every version is kept; the manifest
   deploys the one matching its `helm_chart_version`, so rolling back is
   picking an older version and pressing Update. Dependencies must be
   packaged inside the archive.
-- `DeploymentManifest` — a YAML template with `{{SYS:VERSION}}` /
-  `{{SYS:VERSION:key}}` placeholders, one or more `target_servers`
+- `DeploymentManifest` — a YAML template with `{{SYS:VERSION[:key]}}`
+  (full image ref) / `{{SYS:TAG[:key]}}` (tag only) placeholders, one or more `target_servers`
   (many-to-many `DeploymentServer`), an optional `group_name` (manifests
   sharing one deploy/stop/restart together, ordered via drag-and-drop —
   `order` int, ascending for deploy/update, descending for stop/restart),

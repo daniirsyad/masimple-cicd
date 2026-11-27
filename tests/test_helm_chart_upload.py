@@ -101,24 +101,25 @@ def _edit(client, manifest_id, server_id, chart_bytes=None, **overrides):
 
 class TestUploadThroughTheForm:
     def test_create_stores_the_chart_and_deploys_its_version(self, perm_client, app, server_id):
-        response = _create(perm_client(*MANAGE), server_id, make_chart("web", "1.0.0"))
+        chart = make_chart("web", "1.0.0")  # built once: gzip stamps the current time into it
+        response = _create(perm_client(*MANAGE), server_id, chart)
         assert "Manifest &#39;web&#39; created." in response.get_data(as_text=True)
         with app.app_context():
             manifest = DeploymentManifest.query.filter_by(name="web").one()
             assert (manifest.helm_chart_source, manifest.helm_chart_name, manifest.helm_chart_version) == ("upload", "web", "1.0.0")
             assert manifest.helm_chart_repo is None
             upload = manifest.selected_chart_upload
-            assert upload.filename == "web-1.0.0.tgz" and upload.data == make_chart("web", "1.0.0")
+            assert upload.filename == "web-1.0.0.tgz" and upload.data == chart
 
     def test_create_without_a_file_is_rejected(self, perm_client, app, server_id):
         response = _create(perm_client(*MANAGE), server_id, None)
-        assert "Choose a chart file (.tgz) to upload." in response.get_data(as_text=True)
+        assert "Choose a chart file (.tgz or .zip) to upload." in response.get_data(as_text=True)
         with app.app_context():
             assert DeploymentManifest.query.count() == 0
 
     def test_a_bad_file_is_rejected_with_the_reason(self, perm_client, app, server_id):
         response = _create(perm_client(*MANAGE), server_id, b"not a chart")
-        assert "isn&#39;t a .tgz file" in response.get_data(as_text=True)
+        assert "isn&#39;t a .tgz or .zip file" in response.get_data(as_text=True)
 
     def test_new_versions_are_added_and_an_older_one_can_be_picked(self, perm_client, app, server_id):
         client = perm_client(*MANAGE)
@@ -165,14 +166,15 @@ class TestUploadThroughTheForm:
 class TestDefaultValuesFromAnUpload:
     def test_from_a_picked_file(self, perm_client, monkeypatch):
         seen = {}
+        chart = make_chart("web", "3.0.0")
         monkeypatch.setattr(manifest_routes, "show_values", lambda chart: seen.setdefault("chart", chart) and "a: 1\n")
         response = perm_client(*MANAGE).post(
             "/deployment-manifests/api/helm-default-values",
-            data={"source": "upload", "chart_file": (io.BytesIO(make_chart("web", "3.0.0")), "web.tgz")},
+            data={"source": "upload", "chart_file": (io.BytesIO(chart), "web.tgz")},
             content_type="multipart/form-data",
         )
         assert response.json["ok"] is True
-        assert seen["chart"].archive == make_chart("web", "3.0.0") and seen["chart"].label() == "web@3.0.0"
+        assert seen["chart"].archive == chart and seen["chart"].label() == "web@3.0.0"
 
     def test_from_a_stored_version(self, perm_client, app, server_id, monkeypatch):
         client = perm_client(*MANAGE)
@@ -247,3 +249,101 @@ def test_provider_installs_from_the_archive_file_without_version_flag(monkeypatc
     args, written = calls[0]
     assert result.success and written == b"tgz-bytes"
     assert args[4].endswith("chart.tgz") and "--version" not in args and "repo" not in args
+
+
+def make_zip(files, junk=True):
+    """A .zip as people make one by hand; `files` maps path -> text."""
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path, text in files.items():
+            archive.writestr(path, text)
+        if junk:
+            archive.writestr("__MACOSX/web/._Chart.yaml", "junk")
+            archive.writestr("web/.DS_Store", "junk")
+    return buffer.getvalue()
+
+
+WEB_CHART = {
+    "web/Chart.yaml": "apiVersion: v2\nname: web\nversion: 1.0.0\n",
+    "web/values.yaml": "replicaCount: 1\n",
+    "web/templates/deployment.yaml": "kind: Deployment\n",
+}
+
+
+class TestZipUpload:
+    def _members(self, tgz):
+        with tarfile.open(fileobj=io.BytesIO(tgz), mode="r:gz") as archive:
+            return sorted(archive.getnames())
+
+    def test_a_zipped_chart_folder_becomes_a_chart_tgz(self):
+        from app.services.deployment.helm import load_chart_upload
+
+        tgz, info = load_chart_upload(make_zip(WEB_CHART))
+        assert (info["name"], info["version"]) == ("web", "1.0.0")
+        assert self._members(tgz) == ["web/Chart.yaml", "web/templates/deployment.yaml", "web/values.yaml"]
+
+    def test_a_zip_of_the_folder_contents_gets_a_folder_named_after_the_chart(self):
+        from app.services.deployment.helm import load_chart_upload
+
+        flat = {path.removeprefix("web/"): text for path, text in WEB_CHART.items()}
+        tgz, _info = load_chart_upload(make_zip(flat, junk=False))
+        assert self._members(tgz) == ["web/Chart.yaml", "web/templates/deployment.yaml", "web/values.yaml"]
+
+    def test_only_the_chart_folder_is_kept_with_its_subcharts(self):
+        from app.services.deployment.helm import load_chart_upload
+
+        files = {f"repo/{path}": text for path, text in WEB_CHART.items()}
+        files["repo/README.md"] = "not part of the chart"
+        files["repo/web/charts/redis/Chart.yaml"] = "apiVersion: v2\nname: redis\nversion: 1.0.0\n"
+        tgz, _info = load_chart_upload(make_zip(files))
+        assert "web/charts/redis/Chart.yaml" in self._members(tgz)
+        assert not any("README" in name for name in self._members(tgz))
+
+    def test_the_same_zip_always_gives_the_same_tgz(self):
+        from app.services.deployment.helm import load_chart_upload
+
+        assert load_chart_upload(make_zip(WEB_CHART))[1]["sha256"] == load_chart_upload(make_zip(WEB_CHART))[1]["sha256"]
+
+    @pytest.mark.parametrize(
+        "files, message",
+        [
+            ({"web/values.yaml": "a: 1\n"}, "No Chart.yaml"),
+            ({"a/Chart.yaml": "name: a\nversion: 1\n", "b/Chart.yaml": "name: b\nversion: 1\n"}, "more than one chart"),
+            ({"../evil/Chart.yaml": "name: a\nversion: 1\n"}, "unsafe path"),
+        ],
+    )
+    def test_bad_zips_are_rejected_with_the_reason(self, files, message):
+        from app.services.deployment.helm import load_chart_upload
+
+        with pytest.raises(ChartArchiveError, match=message):
+            load_chart_upload(make_zip(files, junk=False))
+
+    def test_a_zip_bomb_is_rejected(self, monkeypatch):
+        from app.services.deployment import helm
+
+        monkeypatch.setattr(helm, "MAX_ZIP_UNPACKED_BYTES", 1000)
+        with pytest.raises(ChartArchiveError, match="unpacks to more than"):
+            helm.load_chart_upload(make_zip({**WEB_CHART, "web/big.txt": "x" * 5000}))
+
+    def test_uploading_a_zip_through_the_form_stores_the_tgz(self, perm_client, app, server_id):
+        client = perm_client(*MANAGE)
+        client.post(
+            "/deployment-manifests/create",
+            data=_form("create-manifest-", server_id, make_zip(WEB_CHART), filename="web.zip"),
+            content_type="multipart/form-data", follow_redirects=True,
+        )
+        with app.app_context():
+            upload = DeploymentManifest.query.filter_by(name="web").one().selected_chart_upload
+            assert upload.filename == "web.zip"
+            assert read_chart_archive(upload.data)["version"] == "1.0.0"
+
+        # The same zip again (same version, same contents) is accepted, not
+        # refused as "already uploaded with different contents".
+        with app.app_context():
+            manifest_id = DeploymentManifest.query.filter_by(name="web").one().id
+        response = _edit(client, manifest_id, server_id, make_zip(WEB_CHART))
+        assert "different contents" not in response.get_data(as_text=True)
+        with app.app_context():
+            assert HelmChartUpload.query.count() == 1

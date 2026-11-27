@@ -1,4 +1,7 @@
+import json
 import uuid
+
+import yaml
 
 from flask import abort, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user
@@ -24,10 +27,14 @@ from app.services.deployment.helm import (
     HelmError,
     decode_credentials,
     encode_credentials,
-    read_chart_archive,
+    load_chart_upload,
     show_values,
 )
+from app.services.deployment.detect import detect as detect_on_server
+from app.services.deployment.detect import mark_detected
+from app.services.deployment.detect import public as public_detect_result
 from app.services.deployment.helpers import KUBE_CONNECTION_TYPE
+from app.services.deployment.image_slots import apply_image_slots, find_image_slots
 from app.services.deployment.resolver import UnresolvedPlaceholderError, find_placeholder_keys, resolve_manifest
 from app.services.deployment.worker import (
     enqueue_deployment_run,
@@ -178,9 +185,8 @@ def _check_chart_upload(form, manifest):
     version must be picked. Returns True if there were errors."""
     file = form.helm_chart_file.data
     if file and getattr(file, "filename", ""):
-        data = file.read()
         try:
-            info = read_chart_archive(data)
+            data, info = load_chart_upload(file.read())
         except ChartArchiveError as exc:
             form.helm_chart_file.errors = [*form.helm_chart_file.errors, str(exc)]
             return True
@@ -197,7 +203,7 @@ def _check_chart_upload(form, manifest):
 
     chosen = form.helm_chart_upload_version.data
     if manifest is None or not chosen or manifest.helm_chart_uploads.filter_by(chart_version=chosen).first() is None:
-        form.helm_chart_file.errors = [*form.helm_chart_file.errors, "Choose a chart file (.tgz) to upload."]
+        form.helm_chart_file.errors = [*form.helm_chart_file.errors, "Choose a chart file (.tgz or .zip) to upload."]
         return True
     return False
 
@@ -512,6 +518,32 @@ def placeholder_keys():
     return jsonify({"keys": find_placeholder_keys(yaml_content)})
 
 
+@deployment_manifests_bp.route("/api/find-images", methods=["POST"])
+@permission_required("deployment_manifest.manage")
+def find_images():
+    """The images in the YAML that could become version placeholders."""
+    try:
+        slots = find_image_slots(request.form.get("yaml_content", ""))
+    except yaml.YAMLError as exc:
+        return jsonify({"images": [], "error": f"The YAML can't be read: {exc}"})
+    public_fields = ("id", "path", "kind", "value", "key", "builder_id")
+    return jsonify({"images": [{field: slot[field] for field in public_fields} for slot in slots], "error": None})
+
+
+@deployment_manifests_bp.route("/api/apply-images", methods=["POST"])
+@permission_required("deployment_manifest.manage")
+def apply_images():
+    """Turns the chosen images into placeholders. Returns the new YAML (the
+    form saves it like any edit) and the bindings to add."""
+    try:
+        choices = json.loads(request.form.get("choices", "[]"))
+        choices = [choice for choice in choices if isinstance(choice, dict)] if isinstance(choices, list) else []
+        yaml_content, bindings = apply_image_slots(request.form.get("yaml_content", ""), choices)
+    except (ValueError, yaml.YAMLError) as exc:
+        return jsonify({"error": f"Couldn't change the YAML: {exc}"}), 400
+    return jsonify({"yaml_content": yaml_content, "bindings": bindings})
+
+
 @deployment_manifests_bp.route("/api/helm-default-values", methods=["POST"])
 @permission_required("deployment_manifest.manage")
 def helm_default_values():
@@ -546,9 +578,8 @@ def _uploaded_chart_default_values(manifest_id):
     or from one of the manifest's already-uploaded versions."""
     file = request.files.get("chart_file")
     if file and file.filename:
-        data = file.read()
         try:
-            info = read_chart_archive(data)
+            data, info = load_chart_upload(file.read())
         except ChartArchiveError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         chart = HelmChart(repo="", name=info["name"], version=info["version"], archive=data)
@@ -559,7 +590,7 @@ def _uploaded_chart_default_values(manifest_id):
             if manifest is not None else None
         )
         if upload is None:
-            return jsonify({"ok": False, "error": "Choose a chart file (.tgz) first."}), 400
+            return jsonify({"ok": False, "error": "Choose a chart file (.tgz or .zip) first."}), 400
         chart = HelmChart(repo="", name=upload.chart_name, version=upload.chart_version, archive=upload.data)
     try:
         return jsonify({"ok": True, "values": show_values(chart)})
@@ -970,3 +1001,63 @@ def restart():
         no_manifest_message="Select at least one Manifest to restart.",
         nothing_message="Nothing currently deployed for the selected manifest(s) to restart.",
     )
+
+
+@deployment_manifests_bp.route("/api/detect-preview", methods=["POST"])
+@permission_required("deployment.deploy")
+def detect_preview():
+    """Read-only: for each selected manifest and each of its target servers,
+    whether the app is already running there and on which versions."""
+    manifests = _load_manifests_from_form()
+    _enforce_trigger_access(manifests)
+    results = [
+        {
+            "manifest_id": str(manifest.id),
+            "name": manifest.name,
+            "servers": [public_detect_result(detect_on_server(manifest, server)) for server in manifest.target_servers],
+        }
+        for manifest in manifests
+    ]
+    return jsonify({"results": results})
+
+
+@deployment_manifests_bp.route("/detect", methods=["POST"])
+@permission_required("deployment.deploy")
+def detect():
+    """Marks the ticked (manifest, server) pairs as deployed, after checking
+    each again. Changes nothing on the servers."""
+    pairs = []
+    for raw in request.form.getlist("pairs"):
+        manifest_id, _sep, server_id = raw.partition(":")
+        manifest = DeploymentManifest.query.get(_parse_uuid(manifest_id)) if _parse_uuid(manifest_id) else None
+        server_uuid = _parse_uuid(server_id)
+        server = next((s for s in manifest.target_servers if s.id == server_uuid), None) if manifest else None
+        if manifest is None or server is None:
+            abort(400)
+        pairs.append((manifest, server))
+    if not pairs:
+        flash("Tick at least one server to mark as deployed.", "error")
+        return redirect(url_for("deployment_manifests.index"))
+    _enforce_trigger_access(list({manifest for manifest, _server in pairs}))
+
+    run, marked, skipped = mark_detected(pairs, current_user)
+    if run is not None:
+        names = ", ".join(f"{manifest.name} on {server.name}" for manifest, server, _result in marked)
+        log_activity(
+            action="DETECT_DEPLOYMENT",
+            target_type="deployment_run",
+            target_id=str(run.id),
+            description=f"Marked as deployed after detecting it running: {names}",
+        )
+        flash(f"Marked as deployed: {names}.", "success")
+    if skipped:
+        reasons = {
+            "missing": "not found", "partial": "only partly found", "already": "already deployed",
+            "unhealthy": "release isn't deployed", "unsupported": "can't be checked", "error": "couldn't be checked",
+        }
+        names = ", ".join(
+            f"{manifest.name} on {server.name} ({reasons.get(result['state'], result['state'])})"
+            for manifest, server, result in skipped
+        )
+        flash(f"Not marked: {names}.", "error")
+    return redirect(url_for("deployment_manifests.index"))

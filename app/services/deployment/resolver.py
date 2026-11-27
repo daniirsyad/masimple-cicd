@@ -5,9 +5,31 @@ from app.models import ImageBuild
 DEFAULT_PLACEHOLDER_KEY = "default"
 HELM_CHART_VERSION_KEY = "helm chart"
 
-# {{SYS:VERSION}} (group 1 unmatched -> DEFAULT_PLACEHOLDER_KEY) or
-# {{SYS:VERSION:some_key}} (group 1 -> "some_key").
-PLACEHOLDER_PATTERN = re.compile(r"\{\{SYS:VERSION(?::([A-Za-z0-9_.-]+))?\}\}")
+# {{SYS:VERSION}} / {{SYS:VERSION:some_key}}: the bound build's full image
+# reference (registry/repo:tag). {{SYS:TAG}} / {{SYS:TAG:some_key}}: only its
+# tag, for Helm charts that split image.repository and image.tag. Both use
+# the same binding per key. Group "kind" is VERSION or TAG; group "key" is
+# unmatched for the default key.
+PLACEHOLDER_PATTERN = re.compile(r"\{\{SYS:(?P<kind>VERSION|TAG)(?::(?P<key>[A-Za-z0-9_.-]+))?\}\}")
+
+
+def placeholder_key(match):
+    return match.group("key") or DEFAULT_PLACEHOLDER_KEY
+
+
+def split_image_ref(image_ref):
+    """("registry:5000/org/app", "DEV.1.2.3") from "registry:5000/org/app:DEV.1.2.3".
+    The tag is after the last ":" only if that comes after the last "/"
+    (a registry port isn't a tag); no tag gives ("...", "")."""
+    head, sep, tag = image_ref.rpartition(":")
+    if not sep or "/" in tag:
+        return image_ref, ""
+    return head, tag
+
+
+def placeholder_value(kind, image_ref):
+    """What a placeholder of this kind becomes for a build's image reference."""
+    return split_image_ref(image_ref)[1] if kind == "TAG" else image_ref
 
 
 class UnresolvedPlaceholderError(RuntimeError):
@@ -25,7 +47,7 @@ def find_placeholder_keys(yaml_content):
     keys = []
     seen = set()
     for match in PLACEHOLDER_PATTERN.finditer(yaml_content):
-        key = match.group(1) or DEFAULT_PLACEHOLDER_KEY
+        key = placeholder_key(match)
         if key not in seen:
             seen.add(key)
             keys.append(key)
@@ -41,8 +63,9 @@ def _latest_successful_build(builder_id):
 
 
 def resolve_manifest(manifest):
-    """Renders manifest.yaml_content with every {{SYS:VERSION}} /
-    {{SYS:VERSION:key}} placeholder substituted for a real image tag,
+    """Renders manifest.yaml_content with every {{SYS:VERSION[:key]}}
+    placeholder substituted for a real image reference ({{SYS:TAG[:key]}}
+    for just its tag),
     resolved against the manifest's DeploymentManifestVersionBinding rows.
 
     Must be called at execution time (inside the deploy worker), never at
@@ -62,9 +85,9 @@ def resolve_manifest(manifest):
     resolved_versions = {}
 
     def _substitute(match):
-        key = match.group(1) or DEFAULT_PLACEHOLDER_KEY
+        key = placeholder_key(match)
         if key in resolved_versions:
-            return resolved_versions[key]
+            return placeholder_value(match.group("kind"), resolved_versions[key])
 
         binding = bindings_by_key.get(key)
         if binding is None:
@@ -84,7 +107,7 @@ def resolve_manifest(manifest):
             )
 
         resolved_versions[key] = image_build.image_tag
-        return image_build.image_tag
+        return placeholder_value(match.group("kind"), image_build.image_tag)
 
     rendered_yaml = PLACEHOLDER_PATTERN.sub(_substitute, manifest.yaml_content)
     if manifest.is_helm:

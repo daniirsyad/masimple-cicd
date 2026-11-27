@@ -98,6 +98,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
           >
             {{ run.status|status_word }}
           </span>
+          {% if run.action in DEPLOY_ACTION_WORDS %}<span class="badge badge-outline badge-sm" title="{{ 'Found already running; marked as deployed without changing the server' if run.action == 'detect' else '' }}">{{ DEPLOY_ACTION_WORDS[run.action] }}</span>{% endif %}
           {% if progress %}
           <span class="text-xs text-base-content/60">{{ progress.finished }} of {{ progress.total }} done</span>
           {% endif %}

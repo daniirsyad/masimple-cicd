@@ -27,7 +27,49 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1228 tests passing** (as of the last full run).
+- **1260 tests passing** (as of the last full run).
+- **This session's work, part 12** — Helm chart upload accepts a .zip
+  (asked: "can I upload zip?" then "add zip support"):
+  1. `helm.load_chart_upload(data)` (used by the form save and "Load chart
+     defaults") passes a .tgz through and runs a .zip through
+     `zip_to_chart_tgz()`: keeps the folder of the shallowest Chart.yaml
+     (with its charts/ subcharts), drops `__MACOSX/`, `.DS_Store`,
+     `Thumbs.db`, renames the top folder to the chart name, refuses unsafe
+     paths, several charts, >5000 files or >50 MB unpacked (read is capped,
+     not trusting the zip's sizes). Output is deterministic (gzip mtime 0,
+     fixed tar times/modes, sorted), so re-uploading the same zip matches the
+     stored checksum. `.helmignore` isn't applied.
+  2. Form label/hint/`accept` mention .zip. Checked with real Helm 3.22
+     (`helm template` renders a converted zip).
+  3. Tests: `TestZipUpload` in `tests/test_helm_chart_upload.py`; also fixed
+     two flaky comparisons there (a second `make_chart()` call stamps a new
+     gzip time). Full suite 1260 passed.
+- **This session's work, part 11** — Detect apps deployed outside MASIMPLE
+  CICD, and several versions in one Helm values file (asked: detect apps
+  deployed to the cluster before being added; "multiple version in the
+  value" for Helm):
+  1. `{{SYS:TAG[:key]}}` placeholder (tag only), same bindings as
+     `{{SYS:VERSION[:key]}}` (full image ref). The old Helm hint
+     (`image.tag: {{SYS:VERSION}}`) put a full image ref into `tag`; the
+     hint now shows `{{SYS:TAG:api}}`. Several keys in Helm values already
+     worked (same resolver); now tested.
+  2. `app/services/deployment/detect.py` + routes `/api/detect-preview`,
+     `/detect` (deployment.deploy): read-only check per target server
+     (found / partial / missing / unhealthy / already / unsupported /
+     error), each key's running value (known build / outside / mixed /
+     chart default), `kubectl diff` or a Helm values comparison as "What
+     Update would change". Confirm re-checks and records a `detect` run.
+     Provider: `get_live_objects`, `diff`, `helm_release_info` (all
+     read-only; base class raises NotImplementedError for agents).
+  3. UI: "Detect on servers" in a manifest's ⋯ menu, "Detect" group
+     button, `#detect-trigger-modal`; run pages label Stop / Restart /
+     Detected (`DEPLOY_ACTION_WORDS`).
+  4. Form: "+ version" menu (name, full image or tag only; adds the binding
+     row), "Find images" panel (`image_slots.py`, `/api/find-images`,
+     `/api/apply-images`, deployment_manifest.manage) which also sets a
+     chart's `image.repository` to the Builder's image.
+  5. Tests: `tests/test_deployment_detect.py` (23). Checked in a headless
+     browser with a faked cluster. Full suite 1251 passed.
 - **This session's work, part 10** — mixed-content block behind an HTTPS
   proxy (htmx request to `http://…/workflows/` blocked on the https site):
   1. Flask saw plain http from the proxy, so absolute redirects (e.g. the

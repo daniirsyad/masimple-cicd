@@ -10,6 +10,7 @@ The cluster-side operations (upgrade --install, uninstall, status, restart)
 live on KubernetesProvider; this module holds what they share and the one
 call that needs no cluster (show values).
 """
+import gzip
 import hashlib
 import io
 import json
@@ -18,6 +19,7 @@ import re
 import subprocess
 import tarfile
 import tempfile
+import zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
@@ -41,6 +43,11 @@ NAMESPACE_MAX = 63
 # Uploaded chart archives live in Postgres (HelmChartUpload.data).
 MAX_CHART_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_CHART_YAML_BYTES = 1024 * 1024
+# A .zip upload is unpacked in memory to repackage it; caps against zip bombs.
+MAX_ZIP_UNPACKED_BYTES = 50 * 1024 * 1024
+MAX_ZIP_FILES = 5000
+_ZIP_MAGIC = (b"PK\x03\x04", b"PK\x05\x06")
+_ZIP_JUNK_NAMES = {".DS_Store", "Thumbs.db"}
 
 
 class HelmError(RuntimeError):
@@ -224,7 +231,9 @@ def read_chart_archive(data):
                 raise ChartArchiveError("Chart.yaml is too large.")
             chart_yaml = yaml.safe_load(archive.extractfile(chart_files[0]).read()) or {}
     except (tarfile.TarError, OSError, EOFError):
-        raise ChartArchiveError("This isn't a .tgz file. Create one with `helm package <chart-folder>`.") from None
+        raise ChartArchiveError(
+            "This isn't a .tgz or .zip file. Create one with `helm package <chart-folder>`."
+        ) from None
     except yaml.YAMLError:
         raise ChartArchiveError("The chart's Chart.yaml isn't valid YAML.") from None
 
@@ -249,3 +258,85 @@ def read_chart_archive(data):
         "version": str(chart_yaml["version"]),
         "sha256": hashlib.sha256(data).hexdigest(),
     }
+
+
+def zip_to_chart_tgz(data):
+    """A .zip of a chart folder (or of its contents) repackaged in memory as
+    the .tgz `helm package` would make: one top folder named after the chart.
+    Only the chart is kept: the folder of the shallowest Chart.yaml (subcharts
+    in charts/ come along), minus macOS/Windows clutter. The output is the
+    same bytes for the same zip (fixed times and owners), so uploading it again
+    matches the stored version's checksum. Raises ChartArchiveError.
+    ponytail: .helmignore isn't applied; everything under the chart folder is kept."""
+    if len(data) > MAX_CHART_UPLOAD_BYTES:
+        raise ChartArchiveError(f"The chart is larger than {MAX_CHART_UPLOAD_BYTES // (1024 * 1024)} MB.")
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise ChartArchiveError("This .zip file is damaged or incomplete.") from None
+
+    with archive:
+        entries = {}
+        for info in archive.infolist():
+            name = info.filename.replace("\\", "/")
+            parts = name.split("/")
+            if info.is_dir() or name.startswith("__MACOSX/") or parts[-1] in _ZIP_JUNK_NAMES:
+                continue
+            if name.startswith("/") or ".." in parts:
+                raise ChartArchiveError(f"The .zip has an unsafe path: {info.filename}")
+            entries[name] = info
+        if len(entries) > MAX_ZIP_FILES:
+            raise ChartArchiveError(f"The .zip has more than {MAX_ZIP_FILES} files.")
+        if sum(info.file_size for info in entries.values()) > MAX_ZIP_UNPACKED_BYTES:
+            raise ChartArchiveError(f"The .zip unpacks to more than {MAX_ZIP_UNPACKED_BYTES // (1024 * 1024)} MB.")
+
+        roots = {name[: -len("Chart.yaml")] for name in entries if name.split("/")[-1] == "Chart.yaml"}
+        if not roots:
+            raise ChartArchiveError("No Chart.yaml in the .zip. Zip the chart's folder, the one with Chart.yaml in it.")
+        depth = min(root.count("/") for root in roots)
+        top = sorted(root for root in roots if root.count("/") == depth)
+        if len(top) > 1:
+            folders = ", ".join(root.rstrip("/") or "(top level)" for root in top)
+            raise ChartArchiveError(f"The .zip holds more than one chart ({folders}). Zip one chart at a time.")
+        root = top[0]
+
+        unpacked = 0
+
+        def read(info):
+            nonlocal unpacked
+            # Read no more than the cap allows, whatever the zip claims a file's size is.
+            with archive.open(info) as member:
+                content = member.read(MAX_ZIP_UNPACKED_BYTES - unpacked + 1)
+            unpacked += len(content)
+            if unpacked > MAX_ZIP_UNPACKED_BYTES:
+                raise ChartArchiveError(f"The .zip unpacks to more than {MAX_ZIP_UNPACKED_BYTES // (1024 * 1024)} MB.")
+            return content
+
+        try:
+            chart_yaml = yaml.safe_load(read(entries[root + "Chart.yaml"])) or {}
+        except yaml.YAMLError:
+            raise ChartArchiveError("The chart's Chart.yaml isn't valid YAML.") from None
+        if not isinstance(chart_yaml, dict) or not chart_yaml.get("name"):
+            raise ChartArchiveError("The chart's Chart.yaml needs a name and a version.")
+        folder = re.sub(r"[^A-Za-z0-9._-]", "-", str(chart_yaml["name"])) or "chart"
+
+        buffer = io.BytesIO()
+        with gzip.GzipFile(fileobj=buffer, mode="wb", mtime=0) as gz, tarfile.open(fileobj=gz, mode="w") as tar:
+            for name in sorted(n for n in entries if n.startswith(root)):
+                try:
+                    content = read(entries[name])
+                except (zipfile.BadZipFile, OSError, EOFError):
+                    raise ChartArchiveError(f"Couldn't read {name} from the .zip; it may be damaged.") from None
+                member = tarfile.TarInfo(f"{folder}/{name[len(root):]}")
+                member.size, member.mode, member.mtime = len(content), 0o644, 0
+                tar.addfile(member, io.BytesIO(content))
+    return buffer.getvalue()
+
+
+def load_chart_upload(data):
+    """(chart .tgz bytes, {"name", "version", "sha256"}) for an uploaded file:
+    a .tgz as it is, a .zip repackaged first (zip_to_chart_tgz). What gets
+    stored and deployed is always the .tgz. Raises ChartArchiveError."""
+    if data[:4] in _ZIP_MAGIC:
+        data = zip_to_chart_tgz(data)
+    return data, read_chart_archive(data)

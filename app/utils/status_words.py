@@ -15,3 +15,8 @@ STATUS_WORDS = {
 def status_word(status):
     """Jinja filter: `{{ run.status|status_word }}`; unknown codes pass through."""
     return STATUS_WORDS.get(status, status)
+
+
+# A deployment run's action, labelled next to its status on the run pages.
+# A plain deploy (and an Update, which is one) gets no label.
+DEPLOY_ACTION_WORDS = {"stop": "Stop", "restart": "Restart", "detect": "Detected"}
