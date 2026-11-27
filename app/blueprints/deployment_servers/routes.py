@@ -7,7 +7,9 @@ from app.blueprints.deployment_servers import deployment_servers_bp
 from app.blueprints.deployment_servers.forms import DeploymentServerForm
 from app.extensions import db
 from app.models import DeploymentExecution, DeploymentServer, Role
+from app.models.deployment_manifest import deployment_manifest_servers
 from app.services.deployment.helpers import API_CONNECTION_TYPE, KUBE_CONNECTION_TYPE, encode_api_credentials, provider_for_server
+from app.services.deployment.worker import fail_queued_executions
 from app.utils.crypto import encrypt
 from app.utils.decorators import permission_required
 from app.utils.error_logger import error_detail_link, log_error
@@ -50,18 +52,20 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
 
     servers = DeploymentServer.query.filter_by(is_active=True).order_by(DeploymentServer.name).all()
 
-    # Same guards delete() itself checks before rejecting the request —
-    # computed here so the button can be disabled up front.
-    delete_reasons = {}
+    # What deleting each one would affect, shown in its delete confirm.
+    delete_impacts = {}
     for server in servers:
+        parts = []
         manifest_count = server.manifests.count()
-        execution_count = DeploymentExecution.query.filter_by(server_id=server.id).count()
         if manifest_count:
-            delete_reasons[server.id] = f"{manifest_count} manifest(s) still target it."
-        elif execution_count:
-            delete_reasons[server.id] = f"Has {execution_count} recorded deployment(s)."
-        else:
-            delete_reasons[server.id] = None
+            parts.append(f"{manifest_count} manifest(s) target it and will lose this target.")
+        execution_count = DeploymentExecution.query.filter_by(server_id=server.id).count()
+        if execution_count:
+            parts.append(
+                f"{execution_count} past deployment(s) keep its name. Anything already deployed on it keeps "
+                "running, and this app can no longer stop it."
+            )
+        delete_impacts[server.id] = " ".join(parts) or None
 
     invalid_id, invalid_form = invalid_edit or (None, None)
     edit_forms = {}
@@ -82,7 +86,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
     return render_template(
         "deployment_servers/index.html",
         servers=servers,
-        delete_reasons=delete_reasons,
+        delete_impacts=delete_impacts,
         create_form=create_form,
         edit_forms=edit_forms,
         open_modal=open_modal,
@@ -178,21 +182,15 @@ def edit(server_id):
 def delete(server_id):
     server = DeploymentServer.query.get_or_404(server_id)
 
-    manifest_count = server.manifests.count()
-    if manifest_count:
-        flash(
-            f"Cannot delete '{server.name}' — {manifest_count} manifest(s) still target it.", "error"
-        )
-        return redirect(url_for("deployment_servers.index"))
-
-    execution_count = DeploymentExecution.query.filter_by(server_id=server.id).count()
-    if execution_count:
-        flash(
-            f"Cannot delete '{server.name}' — it has {execution_count} recorded deployment(s).", "error"
-        )
-        return redirect(url_for("deployment_servers.index"))
-
     name = server.name
+    fail_queued_executions(
+        DeploymentExecution.server_id == server.id, f"Server '{name}' was deleted before this deployment ran."
+    )
+    # Manifests stay, minus this target; deploy history keeps the name.
+    db.session.execute(deployment_manifest_servers.delete().where(deployment_manifest_servers.c.server_id == server.id))
+    DeploymentExecution.query.filter_by(server_id=server.id).update(
+        {"server_id": None, "server_name": name}, synchronize_session=False
+    )
     server_id_str = str(server.id)
     db.session.delete(server)
     db.session.commit()
@@ -214,39 +212,39 @@ def archived():
     return _render_archived()
 
 
-@deployment_servers_bp.route("/<uuid:server_id>/disable", methods=["POST"])
+@deployment_servers_bp.route("/<uuid:server_id>/archive", methods=["POST"])
 @permission_required("deployment_server.manage")
-def disable(server_id):
+def archive(server_id):
     server = DeploymentServer.query.get_or_404(server_id)
     server.is_active = False
     db.session.commit()
 
     log_activity(
-        action="DISABLE_DEPLOYMENT_SERVER",
+        action="ARCHIVE_DEPLOYMENT_SERVER",
         target_type="deployment_server",
         target_id=str(server.id),
-        description=f"Disabled deployment server '{server.name}'",
+        description=f"Archived deployment server '{server.name}'",
     )
 
-    flash(f"'{server.name}' disabled — moved to Archived.", "info")
+    flash(f"'{server.name}' archived.", "info")
     return redirect(url_for("deployment_servers.index"))
 
 
-@deployment_servers_bp.route("/<uuid:server_id>/enable", methods=["POST"])
+@deployment_servers_bp.route("/<uuid:server_id>/restore", methods=["POST"])
 @permission_required("deployment_server.manage")
-def enable(server_id):
+def restore(server_id):
     server = DeploymentServer.query.get_or_404(server_id)
     server.is_active = True
     db.session.commit()
 
     log_activity(
-        action="ENABLE_DEPLOYMENT_SERVER",
+        action="RESTORE_DEPLOYMENT_SERVER",
         target_type="deployment_server",
         target_id=str(server.id),
-        description=f"Re-enabled deployment server '{server.name}'",
+        description=f"Restored deployment server '{server.name}'",
     )
 
-    flash(f"'{server.name}' re-enabled.", "success")
+    flash(f"'{server.name}' restored.", "success")
     return redirect(url_for("deployment_servers.archived"))
 
 

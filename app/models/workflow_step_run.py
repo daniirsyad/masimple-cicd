@@ -21,7 +21,8 @@ class WorkflowStepRun(db.Model):
 
     id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     workflow_run_id = db.Column(UUID(as_uuid=True), db.ForeignKey("workflow_runs.id"), nullable=False)
-    workflow_step_id = db.Column(UUID(as_uuid=True), db.ForeignKey("workflow_steps.id"), nullable=False)
+    # Null once the step (or its workflow) is deleted; step_order/step_type stay.
+    workflow_step_id = db.Column(UUID(as_uuid=True), db.ForeignKey("workflow_steps.id"), nullable=True)
     step_order = db.Column(db.Integer, nullable=False)
     step_type = db.Column(db.String, nullable=False)
     # "running" / "success" / "failed" — no "queued": a WorkflowStepRun row

@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% from "partials/_macros.html" import list_search %} {% block title %}Workflows -
+{% extends "base.html" %} {% from "partials/_macros.html" import list_search, rail_class, status_line %} {% block title %}Workflows -
 MASIMPLE CICD{% endblock %} {% block content %}
 
 <div id="workflows-index-page" data-status-url="{{ url_for('workflows.statuses') }}"></div>
@@ -33,71 +33,63 @@ MASIMPLE CICD{% endblock %} {% block content %}
 <div id="workflow-lists" class="card mt-4 bg-base-100 shadow-sm" data-search-card="">
   <div class="card-body p-4">
     {% if workflows %}
-    <div class="overflow-x-auto">
-      <table class="table table-sm">
+    <div>
+      <table class="table entry-table">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Description</th>
-            <th>Enabled</th>
-            <th>Steps</th>
-            <th>Access</th>
-            <th>Last Run</th>
-            <th></th>
+            <th>Workflow</th>
+            <th class="w-1">Last run</th>
+            <th class="w-1"><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
         <tbody>
           {% for workflow in workflows %}
-          <tr data-search="{{ [workflow.name, workflow.description]|select|join(' ')|lower }}">
-            <td>
-              <a class="link link-primary" href="{{ url_for('workflows.view_workflow', workflow_id=workflow.id) }}"
+          {% set step_count = workflow.steps.count() %}
+          {% set last_run = latest_runs.get(workflow.id) %}
+          <tr
+            class="entry-row {{ 'entry-rail-warning' if not step_count else (rail_class(last_run.status) if last_run else '') }}"
+            data-search="{{ [workflow.name, workflow.description]|select|join(' ')|lower }}"
+          >
+            <td class="min-w-0">
+              <a class="link-hover text-[0.9375rem] font-semibold" href="{{ url_for('workflows.view_workflow', workflow_id=workflow.id) }}"
                 >{{ workflow.name }}</a
               >
-            </td>
-            <td class="max-w-xs truncate text-xs text-base-content/70">{{ workflow.description or "—" }}</td>
-            <td>
-              {% if workflow.is_active %}
-              <span class="badge badge-success badge-sm">Active</span>
-              {% else %}
-              <span class="badge badge-ghost badge-sm">Inactive</span>
+              {% if workflow.description %}
+              <div class="mt-0.5 line-clamp-2 text-xs text-base-content/60">{{ workflow.description }}</div>
               {% endif %}
-            </td>
-            <td>{{ workflow.steps.count() }}</td>
-            <td>
-              {% if workflow.allowed_roles %} {% for role in workflow.allowed_roles %}
-              <span class="badge badge-ghost badge-sm">{{ role.name }}</span>
-              {% endfor %} {% else %}
-              <span class="text-xs text-base-content/60">workflow.manage users only</span>
-              {% endif %}
-            </td>
-            <td class="text-xs text-base-content/70">
-              {% set last_run = latest_runs.get(workflow.id) %} {% if last_run %}
-              <div class="flex items-center gap-2">
-                <span
-                  class="badge badge-sm {{ 'badge-success' if last_run.status == 'success' else 'badge-error' if last_run.status in ('failed', 'completed_with_failures') else 'badge-info' }}"
-                  >{{ last_run.status }}</span
-                >
-                <a class="link" href="{{ url_for('workflows.view_run', run_id=last_run.id) }}"
-                  >{{ last_run.created_at|localtime }}</a
-                >
+              <div class="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-base-content/60">
+                {% if step_count %}<span>{{ step_count }} step{{ '' if step_count == 1 else 's' }}</span
+                >{% else %}<span class="text-warning">No steps yet. Open it to add one.</span>{% endif %}
+                {% if not workflow.is_active %}<span class="text-warning">Paused, so it can't be run</span>{% endif %}
+                <span>{{ workflow.allowed_roles|map(attribute='name')|join(', ') ~ ' can run it' if workflow.allowed_roles else 'Admins only' }}</span>
               </div>
-              {% else %} — {% endif %}
+            </td>
+            <td class="whitespace-nowrap">
+              {% if last_run %}
+              {% set kind = 'success' if last_run.status == 'success' else ('busy' if last_run.status in ('running', 'queued') else ('warning' if last_run.status == 'awaiting_review' else 'error')) %}
+              {% call status_line(kind, last_run.status|status_word, last_run.created_at) %}
+              — <a class="link" href="{{ url_for('workflows.view_run', run_id=last_run.id) }}">see the run</a>
+              {% endcall %}
+              {% else %}
+              {{ status_line("none", "Never run") }}
+              {% endif %}
             </td>
             <td>
-              <div class="flex gap-2">
+              <div class="flex items-center justify-end gap-1">
                 {% if current_user.has_permission("workflow.run") %}
                 <form method="POST" action="{{ url_for('workflows.run_workflow', workflow_id=workflow.id) }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
                   <button
                     type="submit"
                     class="btn btn-sm btn-primary"
-                    {{ 'disabled' if (not workflow.is_active or workflow.steps.count() == 0) else '' }}
+                    {{ 'disabled' if (not workflow.is_active or step_count == 0) else '' }}
+                    title="{{ 'It is paused. Edit it to make it active.' if not workflow.is_active else ('Add a step first.' if step_count == 0 else 'Run ' ~ workflow.name) }}"
                   >
                     Run
                   </button>
                 </form>
                 {% endif %}
-                <a class="btn btn-sm" href="{{ url_for('workflows.view_workflow', workflow_id=workflow.id) }}">Open</a>
+                <a class="btn btn-ghost btn-sm" href="{{ url_for('workflows.view_workflow', workflow_id=workflow.id) }}">Open</a>
               </div>
             </td>
           </tr>

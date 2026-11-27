@@ -159,6 +159,21 @@ def enqueue_deployment_run(manifests, triggered_by, group_name=None, action="dep
     return run, execution_count
 
 
+def fail_queued_executions(condition, reason):
+    """Fails every still-queued DeploymentExecution matching `condition`:
+    called by the manifest/server delete routes before they unlink it.
+    Commits via _update_run_status (which also skips the rest of each run).
+    """
+    executions = DeploymentExecution.query.filter(DeploymentExecution.status == "queued", condition).all()
+    for execution in executions:
+        execution.status = "failed"
+        execution.log = reason + "\n"
+        execution.finished_at = datetime.utcnow()
+    db.session.flush()
+    for run_id in {execution.run_id for execution in executions}:
+        _update_run_status(run_id)
+
+
 def get_engine_status():
     """Snapshot of what the deploy worker is doing right now — mirrors
     build.worker.get_engine_status(), for /deployment-runs's polling.
@@ -372,6 +387,8 @@ def _run_deployment(app, execution_id):
         try:
             manifest = execution.manifest
             server = execution.server
+            if manifest is None or server is None:
+                raise RuntimeError("Its manifest or server was deleted.")
             run_action = execution.run.action  # "deploy" | "stop" | "restart"
 
             if run_action == "stop":
@@ -548,7 +565,11 @@ def _live_check_candidates():
     """
     pairs = (
         db.session.query(DeploymentExecution.manifest_id, DeploymentExecution.server_id)
-        .filter(DeploymentExecution.status == "success")
+        .filter(
+            DeploymentExecution.status == "success",
+            DeploymentExecution.manifest_id.isnot(None),
+            DeploymentExecution.server_id.isnot(None),
+        )
         .distinct()
         .all()
     )

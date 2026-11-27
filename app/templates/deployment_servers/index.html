@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Deployment Servers -
+{% extends "base.html" %} {% from "partials/_macros.html" import delete_impact, entry_actions, rail_class, status_line %} {% block title %}Deployment Servers -
 MASIMPLE CICD{% endblock %}
 {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
@@ -19,82 +19,60 @@ MASIMPLE CICD{% endblock %}
 
 <div class="card mt-4 bg-base-100 shadow-sm">
   <div class="card-body p-4">
-    <div class="overflow-x-auto">
-      <table class="table table-sm">
+    <div class="mt-2">
+      <table class="table entry-table">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Connection Type</th>
-            <th>Status</th>
-            <th>Last Checked</th>
-            <th>Access</th>
-            <th></th>
+            <th>Server</th>
+            <th class="w-1">Connection</th>
+            <th class="w-1"><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
         <tbody>
           {% for server in servers %}
-          <tr>
-            <td>{{ server.name }}</td>
-            <td><span class="badge badge-ghost badge-sm">{{ server.connection_type }}</span></td>
-            <td>
-              <span
-                class="badge badge-sm {{
-                  'badge-success' if server.status == 'healthy'
-                  else 'badge-error' if server.status == 'unreachable'
-                  else 'badge-ghost'
-                }}"
-              >
-                {{ server.status }}
-              </span>
+          {% set manifest_count = server.manifests.count() %}
+          <tr class="entry-row {{ rail_class(server.status) }}">
+            <td class="min-w-0">
+              <div class="text-[0.9375rem] font-semibold">{{ server.name }}</div>
+              <div class="mt-0.5 text-xs text-base-content/60">
+                {{ 'Kubernetes cluster, reached with a kubeconfig' if server.connection_type == 'kube' else 'Custom agent, reached over its API' }}{{ ', targeted by ' ~ manifest_count ~ ' manifest' ~ ('' if manifest_count == 1 else 's') if manifest_count else '' }}
+              </div>
+              <div class="mt-1 flex items-center gap-1 text-xs text-base-content/60">
+                {% if server.allowed_roles %}
+                {{ server.allowed_roles|map(attribute='name')|join(', ') }} can deploy here
+                {% else %}
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-3 w-3" aria-hidden="true"><path fill-rule="evenodd" d="M10 1a4.5 4.5 0 0 0-4.5 4.5V9H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-.5V5.5A4.5 4.5 0 0 0 10 1Zm3 8V5.5a3 3 0 1 0-6 0V9h6Z" clip-rule="evenodd" /></svg>
+                Admins only
+                {% endif %}
+              </div>
             </td>
-            <td>{{ server.last_checked_at | localtime("%Y-%m-%d %H:%M") if server.last_checked_at else "—" }}</td>
-            <td>
-              {% if server.allowed_roles %}
-              {% for role in server.allowed_roles %}
-              <span class="badge badge-ghost badge-sm">{{ role.name }}</span>
-              {% endfor %}
+            <td class="whitespace-nowrap">
+              {% if server.status == "healthy" %}
+              {{ status_line("success", "Reachable", server.last_checked_at) }}
+              {% elif server.status == "unreachable" %}
+              {{ status_line("error", "Can't reach it", server.last_checked_at) }}
               {% else %}
-              <span class="text-xs text-base-content/60">Admins only</span>
+              {{ status_line("none", "Not tested yet") }}
               {% endif %}
             </td>
-            <td class="flex gap-2">
-              {% if current_user.has_permission("deployment_server.manage") %}
-              <form method="post" action="{{ url_for('deployment_servers.test_connection', server_id=server.id) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-                <button type="submit" class="btn btn-sm">Test Connection</button>
-              </form>
-              {% endif %}
-              {% if server.connection_type == 'kube' and current_user.has_permission("deployment_pod.view") %}
-              <a href="{{ url_for('deployment_pods.list_pods', server_id=server.id) }}" class="btn btn-sm">Kubernetes</a>
-              {% endif %}
-              {% if current_user.has_permission("deployment_server.manage") %}
-              <button
-                type="button"
-                class="btn btn-sm"
-                onclick="document.getElementById('edit-server-modal-{{ server.id }}').showModal()"
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                class="btn btn-sm btn-error"
-                onclick="document.getElementById('delete-server-modal-{{ server.id }}').showModal()"
-                {{ disabled_attrs(delete_reasons.get(server.id)) }}
-              >
-                Delete
-              </button>
-              {% if delete_reasons.get(server.id) %}
-              <form method="POST" action="{{ url_for('deployment_servers.disable', server_id=server.id) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-                <button type="submit" class="btn btn-sm btn-warning">Disable</button>
-              </form>
-              {% endif %}
-              {% endif %}
+            <td>
+              <div class="flex items-center justify-end gap-1">
+                {% if server.connection_type == 'kube' and current_user.has_permission("deployment_pod.view") %}
+                <a href="{{ url_for('deployment_pods.list_pods', server_id=server.id) }}" class="btn btn-sm">Open cluster</a>
+                {% endif %}
+                {% if current_user.has_permission("deployment_server.manage") %}
+                <form method="post" action="{{ url_for('deployment_servers.test_connection', server_id=server.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                  <button type="submit" class="btn btn-ghost btn-sm">Test connection</button>
+                </form>
+                {{ entry_actions(server.name, "edit-server-modal-" ~ server.id, "delete-server-modal-" ~ server.id, url_for('deployment_servers.archive', server_id=server.id)) }}
+                {% endif %}
+              </div>
             </td>
           </tr>
           {% else %}
           <tr>
-            <td colspan="6" class="text-sm text-base-content/60">No deployment servers created yet.</td>
+            <td colspan="3" class="text-sm text-base-content/60">No servers yet. Add one so manifests have somewhere to deploy.</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -209,9 +187,9 @@ MASIMPLE CICD{% endblock %}
   <div class="modal-box w-11/12 max-w-sm">
     <h3 class="text-lg font-bold">Delete Server</h3>
     <p class="py-4 text-sm">
-      Are you sure you want to delete "{{ server.name }}"? Servers still targeted by a manifest, or with any
-      recorded deployment history, can't be deleted.
+      Are you sure you want to delete "{{ server.name }}"?
     </p>
+    {{ delete_impact(delete_impacts.get(server.id)) }}
     <div class="modal-action">
       <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">Cancel</button>
       <form method="post" action="{{ url_for('deployment_servers.delete', server_id=server.id) }}">

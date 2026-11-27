@@ -10,6 +10,7 @@ from app.extensions import db
 from app.models import (
     Builder,
     ChangeType,
+    DeploymentManifestVersionBinding,
     Dockerfile,
     ImageBuild,
     Object,
@@ -21,7 +22,8 @@ from app.models import (
 )
 from app.services.build.prefill import compute_build_prefill
 from app.services.build.versioning import BUMP_TYPES
-from app.services.build.worker import enqueue_build_batch, get_batch_progress, get_engine_status
+from app.models.workflow_step import workflow_step_builders
+from app.services.build.worker import enqueue_build_batch, fail_queued_builds, get_batch_progress, get_engine_status
 from app.services.git.helpers import provider_for_git_source
 from app.utils.decorators import permission_required
 from app.utils.error_logger import log_error
@@ -126,10 +128,27 @@ def _apply_dockerfile_source(builder, form):
     return None
 
 
+def _set_link_fields(form, builder, set_data):
+    """A deleted Version/Repository/Registry leaves the Builder's link empty:
+    give that select a blank first option so saving can't silently pick the
+    first choice (DataRequired then asks for a new one)."""
+    for field, current_id in (
+        (form.version_id, builder.version_id),
+        (form.repository_id, builder.repository_id),
+        (form.registry_target_id, builder.registry_target_id),
+    ):
+        if current_id is None:
+            field.choices = [("", "— Pick a new one —")] + field.choices
+        if set_data:
+            field.data = str(current_id) if current_id else ""
+
+
 def _repo_info(repository, cache):
     """Best-effort branches/dockerfiles for a repo, cached per request so
     several Builders sharing one repo don't each trigger their own git calls.
     """
+    if repository is None:  # deleted: the Builder needs a new one
+        return {"branches": [], "dockerfiles": []}
     if repository.id not in cache:
         try:
             provider = provider_for_git_source(repository.git_source)
@@ -184,9 +203,13 @@ def _builder_groups(builders):
             groups.setdefault(builder.group_name, []).append(builder)
         else:
             ungrouped.append(builder)
-    sorted_groups = [
-        {"name": name, "builders": groups[name]} for name in sorted(groups, key=str.lower)
-    ]
+    sorted_groups = []
+    for name in sorted(groups, key=str.lower):
+        versions = {builder.version for builder in groups[name]}
+        # Shown once in the group header when every member shares it (the
+        # usual case, since a group build needs one Version); rows then skip it.
+        shared_version = versions.pop() if len(versions) == 1 else None
+        sorted_groups.append({"name": name, "builders": groups[name], "shared_version": shared_version})
     return sorted_groups, ungrouped
 
 
@@ -205,10 +228,13 @@ def _last_build_by_builder():
     BuildBatch (Builder has no direct FK to BuildBatch, only through its
     ImageBuilds) — unlike /versions, which can join BuildBatch directly.
     """
-    latest = {}
-    for image_build in ImageBuild.query.order_by(ImageBuild.created_at.desc()).all():
-        latest.setdefault(image_build.builder_id, image_build)
-    return latest
+    # DISTINCT ON: one row per Builder, instead of loading every build ever.
+    latest_per_builder = (
+        ImageBuild.query.filter(ImageBuild.builder_id.isnot(None))
+        .distinct(ImageBuild.builder_id)
+        .order_by(ImageBuild.builder_id, ImageBuild.created_at.desc())
+    )
+    return {image_build.builder_id: image_build for image_build in latest_per_builder}
 
 
 def _change_type_choices():
@@ -264,6 +290,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None, selected
             invalid_form.managed_dockerfile_id.choices = _dockerfile_choices(include_id=builder.managed_dockerfile_id)
             invalid_form.allowed_role_ids.choices = _role_choices()
             invalid_form.default_branch.choices = _branch_choices(info, invalid_form.default_branch.data)
+            _set_link_fields(invalid_form, builder, set_data=False)
             edit_forms[builder.id] = invalid_form
         else:
             form = BuilderForm(obj=builder, prefix=_edit_prefix(builder.id))
@@ -272,9 +299,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None, selected
             form.registry_target_id.choices = _registry_choices(include_id=builder.registry_target_id)
             form.managed_dockerfile_id.choices = _dockerfile_choices(include_id=builder.managed_dockerfile_id)
             form.allowed_role_ids.choices = _role_choices()
-            form.version_id.data = str(builder.version_id)
-            form.repository_id.data = str(builder.repository_id)
-            form.registry_target_id.data = str(builder.registry_target_id)
+            _set_link_fields(form, builder, set_data=True)
             form.managed_dockerfile_id.data = str(builder.managed_dockerfile_id) if builder.managed_dockerfile_id else ""
             form.allowed_role_ids.data = [str(role.id) for role in builder.allowed_roles]
             form.default_branch.choices = _branch_choices(info, builder.default_branch)
@@ -283,23 +308,27 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None, selected
 
     groups, ungrouped = _builder_groups(builders)
 
-    # Same guards delete_builder() itself checks before rejecting the
-    # request — computed here so the button can be disabled up front.
-    delete_reasons = {}
+    # What deleting each one would affect, shown in its delete confirm.
+    delete_impacts = {}
     for builder in builders:
-        build_count = ImageBuild.query.filter_by(builder_id=builder.id).count()
+        parts = []
+        binding_count = DeploymentManifestVersionBinding.query.filter_by(builder_id=builder.id).count()
+        if binding_count:
+            parts.append(
+                f"{binding_count} manifest placeholder(s) use it and won't resolve until bound to another Builder."
+            )
         referencing_steps = WorkflowStep.query.filter(WorkflowStep.selected_builders.any(id=builder.id)).count()
+        if referencing_steps:
+            parts.append(f"It will be removed from {referencing_steps} workflow step(s).")
+        build_count = ImageBuild.query.filter_by(builder_id=builder.id).count()
         if build_count:
-            delete_reasons[builder.id] = f"Has {build_count} recorded build(s)."
-        elif referencing_steps:
-            delete_reasons[builder.id] = f"Individually selected in {referencing_steps} workflow step(s)."
-        else:
-            delete_reasons[builder.id] = None
+            parts.append(f"{build_count} past build(s) keep its name.")
+        delete_impacts[builder.id] = " ".join(parts) or None
 
     return render_template(
         "builders/index.html",
         builders=builders,
-        delete_reasons=delete_reasons,
+        delete_impacts=delete_impacts,
         groups=groups,
         ungrouped=ungrouped,
         versions=Version.query.order_by(Version.name).all(),
@@ -430,28 +459,17 @@ def edit_builder(builder_id):
 @permission_required("builder.manage")
 def delete_builder(builder_id):
     builder = Builder.query.get_or_404(builder_id)
-
-    build_count = ImageBuild.query.filter_by(builder_id=builder.id).count()
-    if build_count:
-        flash(
-            f"Cannot delete '{builder.name}' — it has {build_count} recorded build(s).", "error"
-        )
-        return redirect(url_for("builders.index"))
-
-    # Blocks on a WorkflowStep's individual selection (a real FK, via
-    # workflow_step_builders) — not on merely sharing a group_name with a
-    # WorkflowStepGroup, which is a live/dynamic reference with no FK to
-    # violate (see WorkflowStepGroup's docstring).
-    referencing_steps = WorkflowStep.query.filter(WorkflowStep.selected_builders.any(id=builder.id)).count()
-    if referencing_steps:
-        flash(
-            f"Cannot delete '{builder.name}' — it's individually selected in {referencing_steps} "
-            "workflow step(s). Remove it from those steps first.",
-            "error",
-        )
-        return redirect(url_for("builders.index"))
-
     name = builder.name
+
+    fail_queued_builds(ImageBuild.builder_id == builder.id, f"Builder '{name}' was deleted before this build ran.")
+    # Manifest placeholders bound to it and workflow steps just drop it;
+    # build history keeps its name.
+    DeploymentManifestVersionBinding.query.filter_by(builder_id=builder.id).delete()
+    db.session.execute(workflow_step_builders.delete().where(workflow_step_builders.c.builder_id == builder.id))
+    ImageBuild.query.filter_by(builder_id=builder.id).update(
+        {"builder_id": None, "builder_name": name}, synchronize_session=False
+    )
+
     builder_id_str = str(builder.id)
     db.session.delete(builder)
     db.session.commit()
@@ -477,39 +495,39 @@ def archived():
     return render_template("builders/archived.html", builders=builders)
 
 
-@builders_bp.route("/<uuid:builder_id>/disable", methods=["POST"])
+@builders_bp.route("/<uuid:builder_id>/archive", methods=["POST"])
 @permission_required("builder.manage")
-def disable_builder(builder_id):
+def archive_builder(builder_id):
     builder = Builder.query.get_or_404(builder_id)
     builder.is_active = False
     db.session.commit()
 
     log_activity(
-        action="DISABLE_BUILDER",
+        action="ARCHIVE_BUILDER",
         target_type="builder",
         target_id=str(builder.id),
-        description=f"Disabled builder '{builder.name}'",
+        description=f"Archived builder '{builder.name}'",
     )
 
-    flash(f"'{builder.name}' disabled — moved to Archived.", "info")
+    flash(f"'{builder.name}' archived.", "info")
     return redirect(url_for("builders.index"))
 
 
-@builders_bp.route("/<uuid:builder_id>/enable", methods=["POST"])
+@builders_bp.route("/<uuid:builder_id>/restore", methods=["POST"])
 @permission_required("builder.manage")
-def enable_builder(builder_id):
+def restore_builder(builder_id):
     builder = Builder.query.get_or_404(builder_id)
     builder.is_active = True
     db.session.commit()
 
     log_activity(
-        action="ENABLE_BUILDER",
+        action="RESTORE_BUILDER",
         target_type="builder",
         target_id=str(builder.id),
-        description=f"Re-enabled builder '{builder.name}'",
+        description=f"Restored builder '{builder.name}'",
     )
 
-    flash(f"'{builder.name}' re-enabled.", "success")
+    flash(f"'{builder.name}' restored.", "success")
     return redirect(url_for("builders.archived"))
 
 
@@ -530,7 +548,12 @@ def build():
     # Defense in depth against a disabled Builder's id being POSTed
     # directly — the index page's checkboxes already stop offering one.
     if any(not builder.is_active for builder in builders):
-        flash("One or more selected Builders are disabled and can't be built.", "error")
+        flash("One or more selected Builders are archived and can't be built.", "error")
+        return redirect(url_for("builders.index"))
+
+    broken = [f"'{b.name}' needs a new {', '.join(b.missing_links())}" for b in builders if b.missing_links()]
+    if broken:
+        flash(f"Edit these Builders first (something they use was deleted): {'; '.join(broken)}.", "error")
         return redirect(url_for("builders.index"))
 
     version_ids = {builder.version_id for builder in builders}
@@ -665,7 +688,7 @@ def status():
     if running is not None:
         running_payload = {
             "id": str(running.id),
-            "builder": running.builder.name,
+            "builder": running.builder_label,
             "batch_version": running.batch.full_version_string,
             "log_tail": _log_tail(running.build_log),
             "batch_progress": get_batch_progress(running.batch_id),
@@ -674,7 +697,7 @@ def status():
     queue = [
         {
             "id": str(build.id),
-            "builder": build.builder.name,
+            "builder": build.builder_label,
             # Not yet assigned — the Version bump (and this string) only
             # happens once the worker actually claims a batch's first image.
             "batch_version": build.batch.full_version_string or "pending",

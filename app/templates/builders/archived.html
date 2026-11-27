@@ -1,45 +1,24 @@
-{% extends "base.html" %} {% block title %}Archived Builders -
+{% extends "base.html" %} {% from "partials/_macros.html" import archived_row %} {% block title %}Archived Builders -
 MASIMPLE CICD{% endblock %} {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Archived Builders</h1>
   <a class="btn btn-sm" href="{{ url_for('builders.index') }}">Back to Builders</a>
 </div>
 <p class="mt-2 text-sm text-base-content/60">
-  Disabled builders — hidden from the main list, no longer buildable, and dropped from any Workflow build
+  Archived builders — hidden from the main list, no longer buildable, and dropped from any Workflow build
   step that selects them by group. Restore one to bring it back.
 </p>
 
 <div class="card mt-4 bg-base-100 shadow-sm">
   <div class="card-body p-4">
-    <div class="overflow-x-auto">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Version</th>
-            <th>Repository</th>
-            <th></th>
-          </tr>
-        </thead>
+    <div>
+      <table class="table entry-table">
+        <thead class="sr-only"><tr><th>Name</th><th>Actions</th></tr></thead>
         <tbody>
           {% for builder in builders %}
-          <tr>
-            <td>{{ builder.name }}</td>
-            <td>{{ builder.version.name }}</td>
-            <td>{{ builder.repository.full_name }}</td>
-            <td>
-              {% if current_user.has_permission("builder.manage") %}
-              <form method="POST" action="{{ url_for('builders.enable_builder', builder_id=builder.id) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-                <button type="submit" class="btn btn-sm btn-primary">Restore</button>
-              </form>
-              {% endif %}
-            </td>
-          </tr>
+          {{ archived_row(builder.name, ('Builds ' ~ builder.repository.full_name if builder.repository else 'Its repository was deleted') ~ (', version ' ~ builder.version.name if builder.version else ', its Version was deleted'), url_for('builders.restore_builder', builder_id=builder.id) if current_user.has_permission('builder.manage') else None) }}
           {% else %}
-          <tr>
-            <td colspan="4">No archived builders.</td>
-          </tr>
+          <tr><td colspan="2" class="text-sm text-base-content/60">No archived builders.</td></tr>
           {% endfor %}
         </tbody>
       </table>

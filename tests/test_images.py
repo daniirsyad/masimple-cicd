@@ -152,6 +152,23 @@ class TestPermissionGating:
 
 
 class TestListImages:
+    def test_shows_a_deleted_builder_and_version_by_their_saved_names(self, image_client, app, base_entities):
+        with app.app_context():
+            batch = _make_batch(base_entities)
+            _make_image_build(batch, base_entities)
+            db.session.commit()
+            # What the Builder and Version delete routes leave behind.
+            ImageBuild.query.update({"builder_id": None, "builder_name": "b1"})
+            BuildBatch.query.update({"version_id": None, "version_name": "svc"})
+            db.session.delete(Builder.query.get(base_entities["builder_id"]))
+            db.session.delete(Version.query.get(base_entities["version_id"]))
+            db.session.commit()
+
+        response = image_client.get("/images/")
+        assert response.status_code == 200
+        assert b"b1 (deleted)" in response.data
+        assert image_client.get("/images/status").status_code == 200
+
     def test_empty_state(self, image_client):
         response = image_client.get("/images/")
         assert response.status_code == 200

@@ -234,11 +234,10 @@ class TestIndexRendering:
         assert "2020" not in html
 
     def test_shows_the_most_recent_runs_status(self, workflow_client, app):
-        """Regression test: the "Enabled" column reflects Workflow.is_active,
-        never a run's own status — always shows "Active" as long as the
-        Workflow itself is enabled, run or no run, and was mistaken by a
-        user for a live run-status indicator. Last Run's own badge is the
-        actual per-run status.
+        """The Last run column shows the run's own status. Whether the
+        workflow itself is active is a separate note ("Paused, so it can't
+        be run"), shown only when it's inactive, so an active workflow's
+        row never reads like a run status.
         """
         with app.app_context():
             workflow = _make_workflow("Currently Running")
@@ -248,8 +247,8 @@ class TestIndexRendering:
 
         response = workflow_client.get("/workflows/")
         html = response.data.decode()
-        assert ">running<" in html
-        assert ">Active<" in html  # the Workflow's own Enabled badge, unrelated to the run
+        assert ">Running<" in html
+        assert "Paused, so it can" not in html
 
 
 class TestStatuses:
@@ -564,7 +563,7 @@ class TestApproveRejectStepRun:
         assert f'action="/workflows/step-runs/{step_run_id}/approve"' in html
         assert f'action="/workflows/step-runs/{step_run_id}/reject"' in html
         assert 'value="api"' in html  # pre-filled from suggested_object_names
-        assert "awaiting_review" in html  # step status badge in the polled table
+        assert "Waiting for review" in html  # step status badge in the polled table
 
     def test_review_queue_page_lists_the_step_with_its_workflow_name(
         self, workflow_client, app, base_entities, monkeypatch
@@ -714,7 +713,7 @@ class TestAddDeployStep:
 
 
 class TestDeleteStep:
-    def test_step_with_run_history_cannot_be_deleted(self, workflow_client, app, base_entities):
+    def test_step_with_run_history_is_deleted_and_history_kept(self, workflow_client, app, base_entities):
         with app.app_context():
             workflow = _make_workflow()
             builder = _make_builder(base_entities)
@@ -730,26 +729,32 @@ class TestDeleteStep:
             db.session.add(step)
             db.session.flush()
             step.selected_builders = [builder]
-            run = WorkflowRun(workflow_id=workflow.id, status="success")
+            run = WorkflowRun(workflow_id=workflow.id, status="running", current_step_id=step.id)
             db.session.add(run)
             db.session.flush()
-            db.session.add(
-                WorkflowStepRun(
-                    workflow_run_id=run.id, workflow_step_id=step.id, step_order=0, step_type="build", status="success"
-                )
+            step_run = WorkflowStepRun(
+                workflow_run_id=run.id, workflow_step_id=step.id, step_order=0, step_type="build", status="running"
             )
+            db.session.add(step_run)
             db.session.commit()
-            workflow_id, step_id = workflow.id, step.id
+            workflow_id, step_id, run_id, step_run_id = workflow.id, step.id, run.id, step_run.id
 
         response = workflow_client.post(
             f"/workflows/{workflow_id}/steps/{step_id}/delete", follow_redirects=True
         )
         assert response.status_code == 200
-        assert b"recorded run" in response.data
         with app.app_context():
-            assert WorkflowStep.query.get(step_id) is not None
+            assert WorkflowStep.query.get(step_id) is None
+            run = WorkflowRun.query.get(run_id)
+            assert run.status == "failed"  # it was on the deleted step
+            assert run.current_step_id is None
+            step_run = WorkflowStepRun.query.get(step_run_id)
+            assert step_run.workflow_step_id is None
+            assert step_run.status == "failed"
 
-    def test_delete_button_disabled_when_step_has_run_history(self, workflow_client, app, base_entities):
+        assert workflow_client.get(f"/workflows/runs/{run_id}").status_code == 200
+
+    def test_step_delete_confirm_mentions_run_history(self, workflow_client, app, base_entities):
         with app.app_context():
             workflow = _make_workflow()
             builder = _make_builder(base_entities)
@@ -771,8 +776,8 @@ class TestDeleteStep:
         response = workflow_client.get(f"/workflows/{workflow_id}")
         html = response.data.decode()
         button = html[html.index(f"delete-step-modal-{step_id}") : html.index(f"delete-step-modal-{step_id}") + 400]
-        assert "disabled" in button
-        assert "recorded run" in button
+        assert "disabled" not in button
+        assert "stay in run history" in html
 
     def test_never_run_step_can_be_deleted(self, workflow_client, app, base_entities):
         with app.app_context():
@@ -802,20 +807,27 @@ class TestDeleteStep:
 
 
 class TestDeleteWorkflow:
-    def test_workflow_with_run_history_cannot_be_deleted(self, workflow_client, app):
+    def test_workflow_with_run_history_is_deleted_and_runs_keep_its_name(self, workflow_client, app):
         with app.app_context():
             workflow = _make_workflow()
-            db.session.add(WorkflowRun(workflow_id=workflow.id, status="success"))
+            run = WorkflowRun(workflow_id=workflow.id, status="success")
+            db.session.add(run)
             db.session.commit()
-            workflow_id = workflow.id
+            workflow_id, run_id, name = workflow.id, run.id, workflow.name
 
         response = workflow_client.post(f"/workflows/{workflow_id}/delete", follow_redirects=True)
         assert response.status_code == 200
-        assert b"recorded run" in response.data
         with app.app_context():
-            assert Workflow.query.get(workflow_id) is not None
+            assert Workflow.query.get(workflow_id) is None
+            run = WorkflowRun.query.get(run_id)
+            assert run.workflow_id is None
+            assert run.workflow_label == f"{name} (deleted)"
 
-    def test_delete_button_disabled_when_workflow_has_run_history(self, workflow_client, app):
+        page = workflow_client.get(f"/workflows/runs/{run_id}")
+        assert page.status_code == 200
+        assert f"{name} (deleted)".encode() in page.data
+
+    def test_workflow_delete_confirm_mentions_run_history(self, workflow_client, app):
         with app.app_context():
             workflow = _make_workflow()
             db.session.add(WorkflowRun(workflow_id=workflow.id, status="success"))
@@ -825,8 +837,8 @@ class TestDeleteWorkflow:
         response = workflow_client.get(f"/workflows/{workflow_id}")
         html = response.data.decode()
         button = html[html.index("delete-workflow-modal") : html.index("delete-workflow-modal") + 400]
-        assert "disabled" in button
-        assert "recorded run" in button
+        assert "disabled" not in button
+        assert "past run(s) keep its name" in html
 
     def test_delete_button_enabled_when_workflow_has_no_run_history(self, workflow_client, app):
         with app.app_context():
@@ -848,7 +860,7 @@ class TestDisableArchiveWorkflow:
             db.session.commit()
             workflow_id = workflow.id
 
-        response = workflow_client.post(f"/workflows/{workflow_id}/disable", follow_redirects=True)
+        response = workflow_client.post(f"/workflows/{workflow_id}/archive", follow_redirects=True)
         assert response.status_code == 200
         with app.app_context():
             assert Workflow.query.get(workflow_id).is_active is False
@@ -857,7 +869,7 @@ class TestDisableArchiveWorkflow:
         assert f'workflow_id={workflow_id}' not in index_html
         archived_html = workflow_client.get("/workflows/archived").data.decode()
         assert "wf" in archived_html
-        assert f'/workflows/{workflow_id}/enable' in archived_html
+        assert f'/workflows/{workflow_id}/restore' in archived_html
 
     def test_enable_restores_it(self, workflow_client, app):
         with app.app_context():
@@ -866,7 +878,7 @@ class TestDisableArchiveWorkflow:
             db.session.commit()
             workflow_id = workflow.id
 
-        response = workflow_client.post(f"/workflows/{workflow_id}/enable", follow_redirects=True)
+        response = workflow_client.post(f"/workflows/{workflow_id}/restore", follow_redirects=True)
         assert response.status_code == 200
         with app.app_context():
             assert Workflow.query.get(workflow_id).is_active is True
@@ -1035,7 +1047,7 @@ class TestViewRunPageRendering:
 
 
 class TestBuilderDeleteGuardedByWorkflowReference:
-    def test_builder_individually_selected_by_a_step_cannot_be_deleted(self, workflow_client, app, base_entities):
+    def test_deleting_a_builder_removes_it_from_workflow_steps(self, workflow_client, app, base_entities):
         with app.app_context():
             builder = _make_builder(base_entities)
             workflow = _make_workflow()
@@ -1052,7 +1064,7 @@ class TestBuilderDeleteGuardedByWorkflowReference:
             db.session.flush()
             step.selected_builders = [builder]
             db.session.commit()
-            builder_id = builder.id
+            builder_id, step_id = builder.id, step.id
 
         # builder.manage is needed for the delete route itself, builder.view
         # for the page it redirects to afterward.
@@ -1068,6 +1080,6 @@ class TestBuilderDeleteGuardedByWorkflowReference:
 
         response = workflow_client.post(f"/builders/{builder_id}/delete", follow_redirects=True)
         assert response.status_code == 200
-        assert b"individually selected" in response.data
         with app.app_context():
-            assert Builder.query.get(builder_id) is not None
+            assert Builder.query.get(builder_id) is None
+            assert WorkflowStep.query.get(step_id).selected_builders == []

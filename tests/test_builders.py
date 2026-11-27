@@ -189,6 +189,28 @@ class TestPermissionGating:
 
 
 class TestListBuilders:
+    def test_rows_lead_with_the_last_build_state(self, builder_client, app, base_entities):
+        with app.app_context():
+            failed = _make_builder(base_entities)
+            failed.name = "failing-one"
+            _make_builder(base_entities).name = "fresh-one"
+            batch = BuildBatch(
+                version_id=base_entities["version_id"],
+                full_version_string="DEV.2.4.11.261127091502",
+                bump_type="patch",
+                status="failed",
+            )
+            db.session.add(batch)
+            db.session.flush()
+            db.session.add(ImageBuild(batch_id=batch.id, builder_id=failed.id, branch_used="main", status="failed"))
+            db.session.commit()
+
+        html = builder_client.get("/builders/").data.decode()
+        assert "entry-rail-error" in html
+        assert 'Failed <span class="font-mono">2.4.11</span>' in html
+        assert 'title="DEV.2.4.11.261127091502"' in html
+        assert "Never built" in html
+
     def test_empty_state(self, builder_client):
         response = builder_client.get("/builders/")
         assert response.status_code == 200
@@ -258,7 +280,7 @@ class TestListBuilders:
         # ...but the row still carries the builder's identity as data
         # attributes, since builders.js's "Build Group" handler reads them
         # off the row itself rather than off a (now-absent) button.
-        assert html.count('class="builder-row"') == 2
+        assert html.count('class="builder-row entry-row') == 2
         assert 'data-builder-name="b1"' in html
         assert 'data-builder-name="b2"' in html
 
@@ -681,7 +703,7 @@ class TestDeleteBuilder:
         with app.app_context():
             assert Builder.query.get(builder_id) is None
 
-    def test_blocks_deletion_when_build_history_exists(self, builder_client, app, base_entities):
+    def test_deletes_a_builder_with_build_history_keeping_its_name(self, builder_client, app, base_entities):
         with app.app_context():
             builder = _make_builder(base_entities)
             batch = BuildBatch(
@@ -691,18 +713,25 @@ class TestDeleteBuilder:
             )
             db.session.add(batch)
             db.session.flush()
-            db.session.add(ImageBuild(batch_id=batch.id, builder_id=builder.id, branch_used="main"))
+            done = ImageBuild(batch_id=batch.id, builder_id=builder.id, branch_used="main", status="success")
+            queued = ImageBuild(batch_id=batch.id, builder_id=builder.id, branch_used="main", status="queued")
+            db.session.add_all([done, queued])
             db.session.commit()
-            builder_id = builder.id
+            builder_id, name, done_id, queued_id = builder.id, builder.name, done.id, queued.id
 
         response = builder_client.post(f"/builders/{builder_id}/delete", follow_redirects=True)
         assert response.status_code == 200
-        assert b"recorded build" in response.data
 
         with app.app_context():
-            assert Builder.query.get(builder_id) is not None
+            assert Builder.query.get(builder_id) is None
+            done = ImageBuild.query.get(done_id)
+            assert done.builder_id is None
+            assert done.builder_label == f"{name} (deleted)"
+            queued = ImageBuild.query.get(queued_id)
+            assert queued.status == "failed"
+            assert "was deleted" in queued.build_log
 
-    def test_delete_button_disabled_when_build_history_exists(self, builder_client, app, base_entities):
+    def test_delete_confirm_shows_build_history_is_kept(self, builder_client, app, base_entities):
         with app.app_context():
             builder = _make_builder(base_entities)
             batch = BuildBatch(
@@ -720,8 +749,27 @@ class TestDeleteBuilder:
         html = response.data.decode()
         marker = f"delete-builder-modal-{builder_id}"
         button = html[html.index(marker) : html.index(marker) + 400]
-        assert "disabled" in button
-        assert "recorded build" in button
+        assert "disabled" not in button
+        assert "1 past build(s) keep its name." in html
+
+    def test_a_builder_missing_a_deleted_link_cannot_build(self, builder_client, app, base_entities):
+        with app.app_context():
+            builder = _make_builder(base_entities)
+            builder.registry_target_id = None
+            db.session.commit()
+            builder_id = builder.id
+
+        html = builder_client.get("/builders/").data.decode()
+        assert "Its registry was deleted. Edit this Builder to pick a new one." in html
+
+        response = builder_client.post(
+            "/builders/build",
+            data={"builder_ids": [str(builder_id)], "bump_type": "patch", "new_object_names": ["svc"]},
+            follow_redirects=True,
+        )
+        assert b"needs a new Registry" in response.data
+        with app.app_context():
+            assert ImageBuild.query.filter_by(builder_id=builder_id).count() == 0
 
     def test_delete_button_enabled_with_no_build_history(self, builder_client, app, base_entities):
         with app.app_context():
@@ -753,7 +801,7 @@ class TestDisableArchiveBuilder:
             db.session.commit()
             builder_id = builder.id
 
-        response = builder_client.post(f"/builders/{builder_id}/disable", follow_redirects=True)
+        response = builder_client.post(f"/builders/{builder_id}/archive", follow_redirects=True)
         assert response.status_code == 200
 
         with app.app_context():
@@ -763,7 +811,7 @@ class TestDisableArchiveBuilder:
         assert builder_id.hex not in index_html.replace("-", "")
 
         archived_html = builder_client.get("/builders/archived").data.decode()
-        assert f'/builders/{builder_id}/enable' in archived_html
+        assert f'/builders/{builder_id}/restore' in archived_html
 
         from app.services.workflow.resolver import resolve_builders_from_selection
 
@@ -789,7 +837,7 @@ class TestDisableArchiveBuilder:
             follow_redirects=True,
         )
         assert response.status_code == 200
-        assert b"disabled and can" in response.data
+        assert b"archived and can" in response.data
         with app.app_context():
             assert ImageBuild.query.filter_by(builder_id=builder_id).count() == 0
 
@@ -799,7 +847,7 @@ class TestDisableArchiveBuilder:
             db.session.commit()
             builder_id = builder.id
 
-        response = builder_client.post(f"/builders/{builder_id}/enable", follow_redirects=True)
+        response = builder_client.post(f"/builders/{builder_id}/restore", follow_redirects=True)
         assert response.status_code == 200
         with app.app_context():
             assert Builder.query.get(builder_id).is_active is True

@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% block title %}AI Provider Settings -
+{% extends "base.html" %} {% from "partials/_macros.html" import entry_actions, status_line %} {% block title %}AI Provider Settings -
 MASIMPLE CICD{% endblock %} {% block content %}
 <h1 class="text-2xl font-bold">AI Provider Settings</h1>
 <p class="mt-2 text-sm text-base-content/60">
@@ -195,59 +195,34 @@ MASIMPLE CICD{% endblock %} {% block content %}
       </button>
     </div>
 
-    <div class="mt-2 overflow-x-auto">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>Provider</th>
-            <th>Model</th>
-            <th>API Key</th>
-            <th>Default</th>
-            <th>Active</th>
-            <th></th>
-          </tr>
-        </thead>
+    <div class="mt-2">
+      {% set ai_labels = {'claude': 'Claude', 'gemini': 'Gemini', 'qwen': 'Qwen', 'custom': 'Custom API'} %}
+      <table class="table entry-table">
+        <thead class="sr-only"><tr><th>Provider</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
           {% for provider in providers %}
-          <tr>
-            <td>{{ provider.provider_type }}</td>
-            <td>{{ provider.model_name }}</td>
-            <td>
-              {% if provider.encrypted_api_key %}
-              <span class="badge badge-success badge-sm">Set</span>
-              {% else %}
-              <span class="badge badge-ghost badge-sm">Not set (env var fallback)</span>
-              {% endif %}
+          <tr class="entry-row">
+            <td class="min-w-0">
+              <div class="text-[0.9375rem] font-semibold">
+                {{ ai_labels.get(provider.provider_type, provider.provider_type) }}
+                {% if provider.is_default %}<span class="badge badge-primary badge-sm ml-1 align-middle">Default</span>{% endif %}
+              </div>
+              <div class="mt-0.5 text-xs text-base-content/60">
+                Model <span class="font-mono">{{ provider.model_name }}</span>,
+                {{ 'API key saved here' if provider.encrypted_api_key else 'API key read from the environment variable' }}
+              </div>
             </td>
-            <td>
-              {% if provider.is_default %}<span class="badge badge-primary badge-sm">Default</span>{% endif %}
+            <td class="w-1 whitespace-nowrap">
+              {{ status_line('success', 'In use') if provider.is_active else status_line('none', 'Turned off') }}
             </td>
-            <td>
-              <span class="badge badge-sm {{ 'badge-success' if provider.is_active else 'badge-ghost' }}">
-                {{ 'Active' if provider.is_active else 'Inactive' }}
-              </span>
-            </td>
-            <td class="flex gap-2">
-              <button
-                type="button"
-                class="btn btn-sm"
-                onclick="document.getElementById('edit-provider-modal-{{ provider.id }}').showModal()"
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                class="btn btn-sm btn-error"
-                onclick="document.getElementById('delete-provider-modal-{{ provider.id }}').showModal()"
-              >
-                Delete
-              </button>
+            <td class="w-1">
+              <div class="flex items-center justify-end gap-1">
+                {{ entry_actions(ai_labels.get(provider.provider_type, provider.provider_type), "edit-provider-modal-" ~ provider.id, "delete-provider-modal-" ~ provider.id) }}
+              </div>
             </td>
           </tr>
           {% else %}
-          <tr>
-            <td colspan="6">No AI providers configured yet.</td>
-          </tr>
+          <tr><td colspan="3" class="text-sm text-base-content/60">No AI providers yet. Add one to generate build descriptions.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -274,49 +249,29 @@ MASIMPLE CICD{% endblock %} {% block content %}
       prompt is sent to the AI provider.
     </p>
 
-    <div class="mt-2 overflow-x-auto">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Default</th>
-            <th>Active</th>
-            <th></th>
-          </tr>
-        </thead>
+    <div class="mt-2">
+      <table class="table entry-table">
+        <thead class="sr-only"><tr><th>Template</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
           {% for template in templates %}
-          <tr>
-            <td>{{ template.name }}</td>
-            <td>
-              {% if template.is_default %}<span class="badge badge-primary badge-sm">Default</span>{% endif %}
+          <tr class="entry-row">
+            <td class="min-w-0">
+              <div class="text-[0.9375rem] font-semibold">
+                {{ template.name }}
+                {% if template.is_default %}<span class="badge badge-primary badge-sm ml-1 align-middle">Default</span>{% endif %}
+              </div>
             </td>
-            <td>
-              <span class="badge badge-sm {{ 'badge-success' if template.is_active else 'badge-ghost' }}">
-                {{ 'Active' if template.is_active else 'Inactive' }}
-              </span>
+            <td class="w-1 whitespace-nowrap">
+              {{ status_line('success', 'In use') if template.is_active else status_line('none', 'Turned off') }}
             </td>
-            <td class="flex gap-2">
-              <button
-                type="button"
-                class="btn btn-sm"
-                onclick="document.getElementById('edit-template-modal-{{ template.id }}').showModal()"
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                class="btn btn-sm btn-error"
-                onclick="document.getElementById('delete-template-modal-{{ template.id }}').showModal()"
-              >
-                Delete
-              </button>
+            <td class="w-1">
+              <div class="flex items-center justify-end gap-1">
+                {{ entry_actions(template.name, "edit-template-modal-" ~ template.id, "delete-template-modal-" ~ template.id) }}
+              </div>
             </td>
           </tr>
           {% else %}
-          <tr>
-            <td colspan="4">No prompt templates configured yet.</td>
-          </tr>
+          <tr><td colspan="3" class="text-sm text-base-content/60">No prompt templates yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>

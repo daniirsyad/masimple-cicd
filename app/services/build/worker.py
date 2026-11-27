@@ -100,6 +100,23 @@ def enqueue_build_batch(
     return batch
 
 
+def fail_queued_builds(condition, reason):
+    """Fails every still-queued ImageBuild matching `condition` (a SQLAlchemy
+    filter): called by delete routes before they unlink something those
+    builds need (Builder, Version, Repository, Registry, Dockerfile), so the
+    worker never claims a build it can't run. Running builds finish or fail
+    on their own. Commits via _update_batch_status.
+    """
+    builds = ImageBuild.query.filter(ImageBuild.status == "queued", condition).all()
+    for build in builds:
+        build.status = "failed"
+        build.build_log = reason + "\n"
+        build.finished_at = datetime.utcnow()
+    db.session.flush()
+    for batch_id in {build.batch_id for build in builds}:
+        _update_batch_status(batch_id)
+
+
 def get_queue_position(image_build_id):
     """1-indexed position in the queue, or None if this build isn't (or no longer) queued."""
     image_build = ImageBuild.query.get(image_build_id)
@@ -172,7 +189,7 @@ def _claim_next_job():
     batch_just_started = False
     with db.session.no_autoflush:
         batch = build.batch
-        if batch.full_version_string is None:
+        if batch.full_version_string is None and batch.version is not None:
             batch_just_started = True
             batch.bumped_from_major = batch.version.major
             batch.bumped_from_minor = batch.version.minor
@@ -360,7 +377,7 @@ def _update_batch_status(batch_id):
         # correct because builds are strictly serialized system-wide (see
         # _claim_next_job's docstring): nothing else could have bumped past
         # this batch's number in the meantime.
-        if batch.bumped_from_major is not None:
+        if batch.bumped_from_major is not None and batch.version is not None:
             batch.version.major = batch.bumped_from_major
             batch.version.minor = batch.bumped_from_minor
             batch.version.patch = batch.bumped_from_patch
@@ -536,8 +553,13 @@ def _run_build(app, build_id):
 
         try:
             builder = build.builder
-            repository = builder.repository
             batch = build.batch
+            if builder is None or batch.version is None:
+                raise RuntimeError("Its Builder or Version was deleted.")
+            missing = builder.missing_links()
+            if missing:
+                raise RuntimeError(f"Builder '{builder.name}' needs a new {', '.join(missing)}: it was deleted.")
+            repository = builder.repository
 
             log_buffer.append(f"Syncing {repository.full_name} @ {build.branch_used} ...\n")
             flush_log()

@@ -62,8 +62,8 @@ onPageReady(() => {
       const cm = yamlEditors[btn.dataset.yamlInputId];
       if (cm && cm.getValue().trim() && !confirm("Replace what's in the editor with the chart's default values?")) return;
 
-      btn.disabled = true;
-      status.textContent = "Loading chart defaults...";
+      setBusy(btn, true);
+      showLoading(status, "Loading chart defaults...");
       status.classList.remove("text-error");
       try {
         // Multipart, so a chart file picked but not saved yet can go along.
@@ -95,7 +95,7 @@ onPageReady(() => {
         status.textContent = err.message;
         status.classList.add("text-error");
       } finally {
-        btn.disabled = false;
+        setBusy(btn, false);
       }
     });
   });
@@ -272,7 +272,7 @@ onPageReady(() => {
 
       const contentEl = document.getElementById(contentId);
       const submitBtn = document.getElementById(submitId);
-      contentEl.textContent = "Resolving versions...";
+      showLoading(contentEl, "Resolving versions...");
       submitBtn.disabled = true;
 
       modal.showModal();
@@ -362,7 +362,7 @@ onPageReady(() => {
 
       const contentEl = document.getElementById(contentId);
       const submitBtn = document.getElementById(submitId);
-      contentEl.textContent = "Checking what's currently deployed...";
+      showLoading(contentEl, "Checking what's currently deployed...");
       submitBtn.disabled = true;
 
       modal.showModal();

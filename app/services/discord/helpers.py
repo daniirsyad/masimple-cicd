@@ -105,7 +105,7 @@ def notify_run_finished(run):
         "failed": "failed",
         "completed_with_failures": "completed with failures",
     }.get(run.status, run.status)
-    content = f'Your workflow **{run.workflow.name}** just {status_label}!'
+    content = f'Your workflow **{run.workflow_label}** just {status_label}!'
     return notify_user(user, content, components=status_components(run.id))
 
 
@@ -149,7 +149,7 @@ def notify_awaiting_review(step_run):
         return False
 
     user = User.query.get(run.triggered_by)
-    content = f'**{run.workflow.name}** needs a quick look before it can build:\n\n{format_review_summary(step_run)}'
+    content = f'**{run.workflow_label}** needs a quick look before it can build:\n\n{format_review_summary(step_run)}'
 
     components = review_components(step_run)
     link = _external_url("workflows.view_run", run_id=run.id)
@@ -167,7 +167,7 @@ def notify_build_started(batch):
         return False
 
     user = User.query.get(batch.requested_by)
-    content = f'Build started for **{batch.version.name} {batch.full_version_string}** — hang tight!'
+    content = f'Build started for **{batch.version_label} {batch.full_version_string}** — hang tight!'
     return notify_user(user, content)
 
 
@@ -177,7 +177,7 @@ def notify_build_finished(batch):
 
     user = User.query.get(batch.requested_by)
     status_label = BATCH_STATUS_LABELS.get(batch.status, batch.status)
-    content = f'Build for **{batch.version.name} {batch.full_version_string}** {status_label}.'
+    content = f'Build for **{batch.version_label} {batch.full_version_string}** {status_label}.'
 
     components = None
     link = _external_url("images.list_images")

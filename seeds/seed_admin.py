@@ -142,7 +142,13 @@ def seed_super_admin_user(role):
 
     user = User.query.filter_by(username=username).first()
     if user is not None:
-        print(f"Super Admin user '{username}' already exists, skipping.")
+        # Roles can be deleted (even this one): a restart is the way back in.
+        if user.role is None:
+            user.role = role
+            db.session.commit()
+            print(f"Super Admin user '{username}' had no role; gave it '{SUPER_ADMIN_ROLE_NAME}'.")
+        else:
+            print(f"Super Admin user '{username}' already exists, skipping.")
         return user
 
     user = User(

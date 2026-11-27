@@ -12,6 +12,7 @@ from app.models import Builder, GitSource, ImageBuild, Repository
 from app.services.git.helpers import provider_for_git_source
 from app.utils.crypto import encrypt
 from app.utils.decorators import permission_required
+from app.utils.deletion import builder_impact, builders_using, unlink_builders
 from app.utils.error_logger import error_detail_link, log_error
 from app.utils.logger import log_activity
 
@@ -75,19 +76,20 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
             edit_form.token.data = ""  # never re-populate the encrypted value into the form
 
         repositories = Repository.query.filter_by(git_source_id=source.id).order_by(Repository.full_name).all()
-        # Same guards delete_connection/remove_repo themselves check before
-        # rejecting the request — computed here so the buttons can be
-        # disabled up front instead of only failing after a click.
+        # What deleting the connection / removing each repo would affect,
+        # shown in their confirms.
+        remove_repo_impacts = {
+            repo.id: builder_impact(builders_using(Builder.repository_id, repo.id), "repository")
+            for repo in repositories
+        }
         repo_count = len(repositories)
-        delete_source_reason = (
-            f"{repo_count} repositor{'y is' if repo_count == 1 else 'ies are'} still registered under it."
+        builder_count = sum(builders_using(Builder.repository_id, repo.id) for repo in repositories)
+        delete_source_impact = (
+            f"Its {repo_count} registered repositor{'y' if repo_count == 1 else 'ies'} will be removed"
+            + (f", and {builder_count} Builder(s) will need a new repository." if builder_count else ".")
             if repo_count
             else None
         )
-        remove_repo_reasons = {}
-        for repo in repositories:
-            builder_count = Builder.query.filter_by(repository_id=repo.id).count()
-            remove_repo_reasons[repo.id] = f"{builder_count} Builder(s) still reference it." if builder_count else None
 
         connections.append(
             {
@@ -95,8 +97,8 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
                 "unregistered_repos": unregistered,
                 "list_error": list_error,
                 "repositories": repositories,
-                "delete_source_reason": delete_source_reason,
-                "remove_repo_reasons": remove_repo_reasons,
+                "delete_source_impact": delete_source_impact,
+                "remove_repo_impacts": remove_repo_impacts,
                 "edit_form": edit_form,
             }
         )
@@ -176,18 +178,11 @@ def edit_connection(source_id):
 def delete_connection(source_id):
     source = GitSource.query.get_or_404(source_id)
 
-    repo_count = Repository.query.filter_by(git_source_id=source.id).count()
-    if repo_count:
-        flash(
-            f"Cannot delete '{source.name}' — {repo_count} repositor"
-            f"{'y is' if repo_count == 1 else 'ies are'} still registered under it. Remove "
-            "them first.",
-            "error",
-        )
-        return redirect(url_for("git_sources.index"))
-
     name = source.name
     source_id_str = str(source.id)
+    repositories = Repository.query.filter_by(git_source_id=source.id).all()
+    for repository in repositories:
+        _remove_repository(repository)
     db.session.delete(source)
     db.session.commit()
 
@@ -195,7 +190,8 @@ def delete_connection(source_id):
         action="DELETE_GIT_SOURCE",
         target_type="git_source",
         target_id=source_id_str,
-        description=f"Deleted GitHub connection '{name}'",
+        description=f"Deleted GitHub connection '{name}'"
+        + (f" and its {len(repositories)} repositor{'y' if len(repositories) == 1 else 'ies'}" if repositories else ""),
     )
 
     flash(f"Connection '{name}' deleted.", "success")
@@ -209,39 +205,39 @@ def archived():
     return render_template("git_sources/archived.html", sources=sources)
 
 
-@git_sources_bp.route("/connections/<uuid:source_id>/disable", methods=["POST"])
+@git_sources_bp.route("/connections/<uuid:source_id>/archive", methods=["POST"])
 @permission_required("gitsource.manage")
-def disable_connection(source_id):
+def archive_connection(source_id):
     source = GitSource.query.get_or_404(source_id)
     source.is_active = False
     db.session.commit()
 
     log_activity(
-        action="DISABLE_GIT_SOURCE",
+        action="ARCHIVE_GIT_SOURCE",
         target_type="git_source",
         target_id=str(source.id),
-        description=f"Disabled GitHub connection '{source.name}'",
+        description=f"Archived GitHub connection '{source.name}'",
     )
 
-    flash(f"'{source.name}' disabled — moved to Archived.", "info")
+    flash(f"'{source.name}' archived.", "info")
     return redirect(url_for("git_sources.index"))
 
 
-@git_sources_bp.route("/connections/<uuid:source_id>/enable", methods=["POST"])
+@git_sources_bp.route("/connections/<uuid:source_id>/restore", methods=["POST"])
 @permission_required("gitsource.manage")
-def enable_connection(source_id):
+def restore_connection(source_id):
     source = GitSource.query.get_or_404(source_id)
     source.is_active = True
     db.session.commit()
 
     log_activity(
-        action="ENABLE_GIT_SOURCE",
+        action="RESTORE_GIT_SOURCE",
         target_type="git_source",
         target_id=str(source.id),
-        description=f"Re-enabled GitHub connection '{source.name}'",
+        description=f"Restored GitHub connection '{source.name}'",
     )
 
-    flash(f"'{source.name}' re-enabled.", "success")
+    flash(f"'{source.name}' restored.", "success")
     return redirect(url_for("git_sources.archived"))
 
 
@@ -254,7 +250,7 @@ def register_repo():
         return redirect(url_for("git_sources.index"))
     source = GitSource.query.get_or_404(source_id)
     if not source.is_active:
-        flash(f"'{source.name}' is disabled — re-enable it before registering new repositories.", "error")
+        flash(f"'{source.name}' is archived — restore it before registering new repositories.", "error")
         return redirect(url_for("git_sources.index"))
 
     full_name = (request.form.get("full_name") or "").strip()
@@ -351,23 +347,22 @@ def resync_repo(repository_id):
     return redirect(url_for("git_sources.index"))
 
 
+def _remove_repository(repository):
+    """Unlinks its Builders, deletes its local clone and the row (not committed)."""
+    unlinked = unlink_builders(Builder.repository_id, repository.id, "Repository", repository.full_name)
+    shutil.rmtree(repository.local_path, ignore_errors=True)
+    db.session.delete(repository)
+    return unlinked
+
+
 @git_sources_bp.route("/repos/<uuid:repository_id>/remove", methods=["POST"])
 @permission_required("gitsource.manage")
 def remove_repo(repository_id):
     repository = Repository.query.get_or_404(repository_id)
 
-    builder_count = Builder.query.filter_by(repository_id=repository.id).count()
-    if builder_count:
-        flash(
-            f"Cannot remove '{repository.full_name}' — {builder_count} Builder(s) still reference it.",
-            "error",
-        )
-        return redirect(url_for("git_sources.index"))
-
     full_name = repository.full_name
     repository_id_str = str(repository.id)
-    shutil.rmtree(repository.local_path, ignore_errors=True)
-    db.session.delete(repository)
+    unlinked = _remove_repository(repository)
     db.session.commit()
 
     log_activity(
@@ -377,5 +372,9 @@ def remove_repo(repository_id):
         description=f"Removed registration for repository '{full_name}'",
     )
 
-    flash(f"Registration for '{full_name}' removed.", "success")
+    flash(
+        f"Registration for '{full_name}' removed."
+        + (f" {unlinked} Builder(s) need a new repository." if unlinked else ""),
+        "success",
+    )
     return redirect(url_for("git_sources.index"))

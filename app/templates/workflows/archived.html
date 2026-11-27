@@ -1,48 +1,23 @@
-{% extends "base.html" %} {% block title %}Archived Workflows -
+{% extends "base.html" %} {% from "partials/_macros.html" import archived_row %} {% block title %}Archived Workflows -
 MASIMPLE CICD{% endblock %} {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Archived Workflows</h1>
   <a class="btn btn-sm" href="{{ url_for('workflows.index') }}">Back to Workflows</a>
 </div>
 <p class="mt-2 text-sm text-base-content/60">
-  Disabled workflows — hidden from the main list and can't be run. Restore one to bring it back.
+  Archived workflows — hidden from the main list and can't be run. Restore one to bring it back.
 </p>
 
 <div class="card mt-4 bg-base-100 shadow-sm">
   <div class="card-body p-4">
-    <div class="overflow-x-auto">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Description</th>
-            <th>Steps</th>
-            <th></th>
-          </tr>
-        </thead>
+    <div>
+      <table class="table entry-table">
+        <thead class="sr-only"><tr><th>Name</th><th>Actions</th></tr></thead>
         <tbody>
           {% for workflow in workflows %}
-          <tr>
-            <td>
-              <a class="link link-primary" href="{{ url_for('workflows.view_workflow', workflow_id=workflow.id) }}"
-                >{{ workflow.name }}</a
-              >
-            </td>
-            <td class="max-w-xs truncate text-xs text-base-content/70">{{ workflow.description or "—" }}</td>
-            <td>{{ workflow.steps.count() }}</td>
-            <td>
-              {% if current_user.has_permission("workflow.manage") %}
-              <form method="POST" action="{{ url_for('workflows.enable_workflow', workflow_id=workflow.id) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-                <button type="submit" class="btn btn-sm btn-primary">Restore</button>
-              </form>
-              {% endif %}
-            </td>
-          </tr>
+          {{ archived_row(workflow.name, (workflow.description ~ ' ' if workflow.description else '') ~ '(' ~ workflow.steps.count() ~ ' step' ~ ('' if workflow.steps.count() == 1 else 's') ~ ')', url_for('workflows.restore_workflow', workflow_id=workflow.id) if current_user.has_permission('workflow.manage') else None, href=url_for('workflows.view_workflow', workflow_id=workflow.id)) }}
           {% else %}
-          <tr>
-            <td colspan="4">No archived workflows.</td>
-          </tr>
+          <tr><td colspan="2" class="text-sm text-base-content/60">No archived workflows.</td></tr>
           {% endfor %}
         </tbody>
       </table>

@@ -155,7 +155,7 @@ class TestDetail:
 
         response = runs_client.get(f"/deployment-runs/{run_id}")
         assert response.status_code == 200
-        assert b"(deleted manifest)" in response.data
+        assert b"Manifest (deleted)" in response.data
 
 
 class TestStatusEndpoint:
@@ -194,4 +194,4 @@ class TestStatusEndpoint:
 
         response = runs_client.get("/deployment-runs/status")
         data = response.get_json()
-        assert data["running"]["manifest"] == "(deleted manifest)"
+        assert data["running"]["manifest"] == "Manifest (deleted)"

@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% block title %}ConfigMaps: {{ server.name }} - MASIMPLE CICD{% endblock %} {% block content %}
+{% extends "base.html" %} {% from "partials/_macros.html" import entry_actions %} {% block title %}ConfigMaps: {{ server.name }} - MASIMPLE CICD{% endblock %} {% block content %}
 <span id="deployment-pods-list-page" data-server-id="{{ server.id }}" class="hidden"></span>
 {% set active_kind = 'configmaps' %}
 <div class="flex flex-wrap items-center justify-between gap-2">
@@ -41,41 +41,23 @@
       No configmaps found{{ ' in namespace "' ~ namespace_filter ~ '"' if namespace_filter }}.
     </p>
     {% else %}
-    <div class="mt-4 overflow-x-auto">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Namespace</th>
-            <th>Keys</th>
-            <th>Created</th>
-            <th></th>
-          </tr>
-        </thead>
+    <div class="mt-4">
+      <table class="table entry-table">
+        <thead class="sr-only"><tr><th>Name</th><th>Actions</th></tr></thead>
         <tbody>
           {% for row in rows %}
-          <tr>
-            <td>{{ row.name }}</td>
-            <td>{{ row.namespace }}</td>
-            <td class="text-xs text-base-content/60">{{ row.configmap_keys | join(', ') if row.configmap_keys else '—' }}</td>
-            <td class="text-xs text-base-content/60">{{ row.created_at or "—" }}</td>
-            <td class="flex gap-2">
-              {% if current_user.has_permission("deployment_configmap.manage") %}
-              <button
-                type="button"
-                class="btn btn-xs"
-                onclick="document.getElementById('edit-configmap-modal-{{ row.namespace }}-{{ row.name }}').showModal()"
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                class="btn btn-xs btn-error"
-                onclick="document.getElementById('delete-configmap-modal-{{ row.namespace }}-{{ row.name }}').showModal()"
-              >
-                Delete
-              </button>
-              {% endif %}
+          <tr class="entry-row">
+            <td class="min-w-0">
+              <div class="font-mono text-[0.9375rem] font-semibold">{{ row.name }}</div>
+              <div class="mt-0.5 text-xs text-base-content/60">In <span class="font-mono">{{ row.namespace }}</span>, {{ ('keys ' ~ (row.configmap_keys | join(', '))) if row.configmap_keys else 'no keys' }}</div>
+              <div class="mt-0.5 text-xs text-base-content/50">Created {{ row.created_at or "at an unknown time" }}</div>
+            </td>
+            <td class="w-1">
+              <div class="flex items-center justify-end gap-1">
+                {% if current_user.has_permission("deployment_configmap.manage") %}
+                {{ entry_actions(row.name, 'edit-configmap-modal-' ~ row.namespace ~ '-' ~ row.name ~ '', 'delete-configmap-modal-' ~ row.namespace ~ '-' ~ row.name ~ '') }}
+                {% endif %}
+              </div>
             </td>
           </tr>
           {% endfor %}

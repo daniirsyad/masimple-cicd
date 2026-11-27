@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Versions -
+{% extends "base.html" %} {% from "partials/_macros.html" import delete_impact, entry_actions, rail_class, status_line %} {% block title %}Versions -
 MASIMPLE CICD{% endblock %} {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Versions</h1>
@@ -31,63 +31,57 @@ MASIMPLE CICD{% endblock %} {% block content %}
 
 <div class="card mt-4 bg-base-100 shadow-sm">
   <div class="card-body p-4">
-    <div class="overflow-x-auto">
-      <table class="table table-sm">
+    <div>
+      <table class="table entry-table">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Type</th>
-            <th>Current</th>
-            <th>Last Batch</th>
-            <th></th>
+            <th>Version</th>
+            <th class="w-1">Current</th>
+            <th class="w-1">Last batch</th>
+            <th class="w-1"><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
         <tbody>
-          {% for version in versions %} {% set latest =
-          latest_batches.get(version.id) %}
-          <tr>
-            <td>{{ version.name }}</td>
-            <td><span class="badge badge-ghost badge-sm">{{ version.version_type.name }}</span></td>
-            <td>{{ version.major }}.{{ version.minor }}.{{ version.patch }}</td>
-            <td>
-              {% if latest %}
-              <code class="text-xs">{{ latest.full_version_string or "pending" }}</code>
-              <div class="text-xs text-base-content/60">
-                {{ latest.created_at | localtime("%Y-%m-%d %H:%M") }}
+          {% for version in versions %}
+          {% set latest = latest_batches.get(version.id) %}
+          {% set builder_count = version.builders.count() %}
+          <tr class="entry-row {{ rail_class(latest.status) if latest else '' }}">
+            <td class="min-w-0">
+              <div class="text-[0.9375rem] font-semibold">{{ version.name }}</div>
+              <div class="mt-0.5 text-xs text-base-content/60">
+                {{ version.version_type.name }} versions{{ ', linked with ' ~ version.linked_versions|map(attribute='name')|join(', ') if version.linked_versions else '' }}
               </div>
+              <div class="mt-1 text-xs text-base-content/60">
+                {{ 'Used by ' ~ builder_count ~ ' Builder' ~ ('' if builder_count == 1 else 's') if builder_count else 'Not used by any Builder yet' }}
+              </div>
+            </td>
+            <td class="whitespace-nowrap">
+              <span class="font-mono text-sm">{{ version.major }}.{{ version.minor }}.{{ version.patch }}</span>
+            </td>
+            <td class="whitespace-nowrap">
+              {% if not latest %}
+              {{ status_line("none", "No batches yet") }}
+              {% elif latest.status in ("running", "queued") %}
+              {{ status_line("busy", ("Building " ~ latest.short_version) if latest.short_version else "Queued", latest.created_at, latest.full_version_string or "") }}
+              {% elif latest.status == "success" %}
+              {{ status_line("success", "Built " ~ latest.short_version, latest.created_at, latest.full_version_string) }}
+              {% elif latest.status == "partial_failure" %}
+              {{ status_line("error", "Partly failed " ~ (latest.short_version or ""), latest.created_at, latest.full_version_string or "") }}
               {% else %}
-              <span class="text-xs text-base-content/60">No batches yet</span>
+              {{ status_line("error", "Failed " ~ (latest.short_version or ""), latest.created_at, latest.full_version_string or "") }}
               {% endif %}
             </td>
-            <td class="flex gap-2">
-              {% if current_user.has_permission("version.manage") %}
-              <button
-                type="button"
-                class="btn btn-sm"
-                onclick="document.getElementById('edit-version-modal-{{ version.id }}').showModal()"
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                class="btn btn-sm btn-error"
-                onclick="document.getElementById('delete-version-modal-{{ version.id }}').showModal()"
-                {{ disabled_attrs(delete_reasons.get(version.id)) }}
-              >
-                Delete
-              </button>
-              {% if delete_reasons.get(version.id) %}
-              <form method="POST" action="{{ url_for('versions.disable_version', version_id=version.id) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-                <button type="submit" class="btn btn-sm btn-warning">Disable</button>
-              </form>
-              {% endif %}
-              {% endif %}
+            <td>
+              <div class="flex items-center justify-end gap-1">
+                {% if current_user.has_permission("version.manage") %}
+                {{ entry_actions(version.name, "edit-version-modal-" ~ version.id, "delete-version-modal-" ~ version.id, url_for('versions.archive_version', version_id=version.id)) }}
+                {% endif %}
+              </div>
             </td>
           </tr>
           {% else %}
           <tr>
-            <td colspan="5">No versions created yet.</td>
+            <td colspan="4" class="text-sm text-base-content/60">No versions yet. Create one, then pick it when you add a Builder.</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -247,8 +241,9 @@ MASIMPLE CICD{% endblock %} {% block content %}
   <div class="modal-box w-11/12 max-w-sm">
     <h3 class="text-lg font-bold">Delete Version</h3>
     <p class="py-4 text-sm">
-      Are you sure you want to delete "{{ version.name }}"? Any Builder still attached to it will block this.
+      Are you sure you want to delete "{{ version.name }}"?
     </p>
+    {{ delete_impact(delete_impacts.get(version.id)) }}
     <div class="modal-action">
       <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
         Cancel

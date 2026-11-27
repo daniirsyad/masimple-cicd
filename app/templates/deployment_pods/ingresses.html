@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% block title %}Ingress: {{ server.name }} - MASIMPLE CICD{% endblock %}
+{% extends "base.html" %} {% from "partials/_macros.html" import entry_actions %} {% block title %}Ingress: {{ server.name }} - MASIMPLE CICD{% endblock %}
 {% block content %}
 <span id="deployment-pods-list-page" data-server-id="{{ server.id }}" class="hidden"></span>
 {% set active_kind = 'ingresses' %}
@@ -42,56 +42,26 @@
       No ingresses found{{ ' in namespace "' ~ namespace_filter ~ '"' if namespace_filter }}.
     </p>
     {% else %}
-    <div class="mt-4 overflow-x-auto">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Namespace</th>
-            <th>Hosts</th>
-            <th>Class</th>
-            <th>TLS</th>
-            <th>Created</th>
-            <th></th>
-          </tr>
-        </thead>
+    <div class="mt-4">
+      <table class="table entry-table">
+        <thead class="sr-only"><tr><th>Name</th><th>Actions</th></tr></thead>
         <tbody>
           {% for row in rows %}
-          <tr>
-            <td>{{ row.name }}</td>
-            <td>{{ row.namespace }}</td>
-            <td class="text-xs text-base-content/60">{{ row.hosts | join(', ') if row.hosts else '—' }}</td>
-            <td class="text-xs text-base-content/60">{{ row.ingress_class_name or '—' }}</td>
-            <td class="text-xs text-base-content/60">
-              {{ row.tls_secret_names | join(', ') if row.tls_secret_names else '—' }}
+          <tr class="entry-row">
+            <td class="min-w-0">
+              <div class="font-mono text-[0.9375rem] font-semibold">{{ row.name }}</div>
+              <div class="mt-0.5 text-xs text-base-content/60">In <span class="font-mono">{{ row.namespace }}</span>, {{ ('serves ' ~ (row.hosts | join(', '))) if row.hosts else 'no hosts' }}{{ ', class ' ~ row.ingress_class_name if row.ingress_class_name else '' }}{{ ', TLS from ' ~ (row.tls_secret_names | join(', ')) if row.tls_secret_names else ', no TLS' }}</div>
+              <div class="mt-0.5 text-xs text-base-content/50">Created {{ row.created_at or "at an unknown time" }}</div>
             </td>
-            <td class="text-xs text-base-content/60">{{ row.created_at or "—" }}</td>
-            <td class="flex gap-2">
-              <button
-                type="button"
-                class="resource-describe-btn btn btn-xs"
-                data-kind="ingresses"
-                data-name="{{ row.name }}"
-                data-namespace="{{ row.namespace }}"
-              >
-                Describe
-              </button>
-              {% if current_user.has_permission("deployment_ingress.manage") %}
-              <button
-                type="button"
-                class="btn btn-xs"
-                onclick="document.getElementById('edit-ingress-modal-{{ row.namespace }}-{{ row.name }}').showModal()"
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                class="btn btn-xs btn-error"
-                onclick="document.getElementById('delete-ingress-modal-{{ row.namespace }}-{{ row.name }}').showModal()"
-              >
-                Delete
-              </button>
-              {% endif %}
+            <td class="w-1">
+              <div class="flex items-center justify-end gap-1">
+                <button type="button" class="resource-describe-btn btn btn-ghost btn-sm" data-kind="ingresses" data-name="{{ row.name }}" data-namespace="{{ row.namespace }}">
+                  Describe
+                </button>
+                {% if current_user.has_permission("deployment_ingress.manage") %}
+                {{ entry_actions(row.name, 'edit-ingress-modal-' ~ row.namespace ~ '-' ~ row.name ~ '', 'delete-ingress-modal-' ~ row.namespace ~ '-' ~ row.name ~ '') }}
+                {% endif %}
+              </div>
             </td>
           </tr>
           {% endfor %}

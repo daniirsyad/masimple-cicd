@@ -159,6 +159,43 @@ class TestViewOnlyUser:
         assert "deployment_manifest.manage" in response.json["error"]
 
 
+class TestRunningOnColumn:
+    def test_lights_up_only_the_servers_it_is_deployed_on(self, manifest_client, app, base_entities):
+        with app.app_context():
+            other = DeploymentServer(name="srv2", connection_type="kube")
+            db.session.add(other)
+            manifest = DeploymentManifest(name="m1", yaml_content="image: nginx")
+            manifest.target_servers = [DeploymentServer.query.get(base_entities["server_id"]), other]
+            db.session.add(manifest)
+            db.session.flush()
+            run = DeploymentRun(status="success", action="deploy")
+            db.session.add(run)
+            db.session.flush()
+            db.session.add(
+                DeploymentExecution(
+                    run_id=run.id,
+                    manifest_id=manifest.id,
+                    server_id=base_entities["server_id"],
+                    status="success",
+                    resolved_version_string="default=DEV.1.0.0.1",
+                )
+            )
+            db.session.commit()
+
+        html = manifest_client.get("/deployment-manifests/").data.decode()
+        assert 'title="Deployed default=DEV.1.0.0.1, just now' in html
+        assert ">srv1<span class=\"sr-only\">: deployed</span>" in html
+        assert ">srv2<span class=\"sr-only\">: not deployed</span>" in html
+
+    def test_a_manifest_with_no_servers_says_what_to_do(self, manifest_client, app):
+        with app.app_context():
+            db.session.add(DeploymentManifest(name="draft", yaml_content="image: nginx"))
+            db.session.commit()
+
+        html = manifest_client.get("/deployment-manifests/").data.decode()
+        assert "No target servers yet. Edit it to pick one." in html
+
+
 class TestDeployStopButtonVisibility:
     """Deploy hides once a manifest is live on every one of its target
     servers; Stop shows as soon as it's live on at least one — both can be
@@ -450,7 +487,7 @@ class TestDeleteManifest:
         with app.app_context():
             assert DeploymentManifest.query.get(manifest_id) is None
 
-    def test_blocked_when_still_deployed(self, manifest_client, app, base_entities):
+    def test_deletes_a_deployed_manifest_and_keeps_its_history(self, manifest_client, app, base_entities):
         with app.app_context():
             manifest = DeploymentManifest(name="m1", yaml_content="image: nginx")
             db.session.add(manifest)
@@ -458,21 +495,26 @@ class TestDeleteManifest:
             run = DeploymentRun(status="success", action="deploy")
             db.session.add(run)
             db.session.flush()
-            db.session.add(
-                DeploymentExecution(
-                    run_id=run.id, manifest_id=manifest.id, server_id=base_entities["server_id"], status="success"
-                )
+            execution = DeploymentExecution(
+                run_id=run.id, manifest_id=manifest.id, server_id=base_entities["server_id"], status="success"
             )
+            db.session.add(execution)
             db.session.commit()
-            manifest_id = manifest.id
+            manifest_id, run_id, execution_id = manifest.id, run.id, execution.id
 
         response = manifest_client.post(f"/deployment-manifests/{manifest_id}/delete", follow_redirects=True)
         assert response.status_code == 200
-        assert b"still deployed on" in response.data
+        assert b"deleted" in response.data
         with app.app_context():
-            assert DeploymentManifest.query.get(manifest_id) is not None
+            assert DeploymentManifest.query.get(manifest_id) is None
+            execution = DeploymentExecution.query.get(execution_id)
+            assert execution.manifest_id is None
+            assert execution.manifest_name == "m1"
 
-    def test_delete_button_disabled_when_still_deployed(self, manifest_client, app, base_entities):
+        detail = manifest_client.get(f"/deployment-runs/{run_id}")
+        assert b"m1 (deleted)" in detail.data
+
+    def test_delete_confirm_warns_it_keeps_running(self, manifest_client, app, base_entities):
         with app.app_context():
             manifest = DeploymentManifest(name="m1", yaml_content="image: nginx")
             db.session.add(manifest)
@@ -492,8 +534,11 @@ class TestDeleteManifest:
         html = response.data.decode()
         marker = f"delete-manifest-modal-{manifest_id}"
         button = html[html.index(marker) : html.index(marker) + 400]
-        assert "disabled" in button
-        assert "Still deployed on:" in button
+        assert "disabled" not in button
+        modal = html[html.index(f'id="{marker}"') :]
+        modal = modal[: modal.index("</dialog>")]
+        assert "Still deployed on:" in modal
+        assert "keeps running" in modal
 
     def test_delete_button_enabled_when_unreferenced(self, manifest_client, app):
         with app.app_context():
@@ -508,27 +553,29 @@ class TestDeleteManifest:
         button = html[html.index(marker) : html.index(marker) + 400]
         assert "disabled" not in button
 
-    def test_blocked_when_execution_in_progress(self, manifest_client, app, base_entities):
+    def test_queued_execution_fails_when_its_manifest_is_deleted(self, manifest_client, app, base_entities):
         with app.app_context():
             manifest = DeploymentManifest(name="m1", yaml_content="image: nginx")
             db.session.add(manifest)
             db.session.flush()
-            run = DeploymentRun(status="running", action="deploy")
+            run = DeploymentRun(status="queued", action="deploy")
             db.session.add(run)
             db.session.flush()
-            db.session.add(
-                DeploymentExecution(
-                    run_id=run.id, manifest_id=manifest.id, server_id=base_entities["server_id"], status="running"
-                )
+            execution = DeploymentExecution(
+                run_id=run.id, manifest_id=manifest.id, server_id=base_entities["server_id"], status="queued"
             )
+            db.session.add(execution)
             db.session.commit()
-            manifest_id = manifest.id
+            manifest_id, run_id, execution_id = manifest.id, run.id, execution.id
 
         response = manifest_client.post(f"/deployment-manifests/{manifest_id}/delete", follow_redirects=True)
         assert response.status_code == 200
-        assert b"currently in progress" in response.data
         with app.app_context():
-            assert DeploymentManifest.query.get(manifest_id) is not None
+            assert DeploymentManifest.query.get(manifest_id) is None
+            execution = DeploymentExecution.query.get(execution_id)
+            assert execution.status == "failed"
+            assert "was deleted" in execution.log
+            assert DeploymentRun.query.get(run_id).status == "failed"
 
     def test_allowed_after_stop_and_history_survives_with_null_manifest(self, manifest_client, app, base_entities):
         """Once a manifest is fully stopped (no longer currently deployed
@@ -727,7 +774,7 @@ class TestDisableArchiveManifest:
             db.session.commit()
             manifest_id = manifest.id
 
-        response = manifest_client.post(f"/deployment-manifests/{manifest_id}/disable", follow_redirects=True)
+        response = manifest_client.post(f"/deployment-manifests/{manifest_id}/archive", follow_redirects=True)
         assert response.status_code == 200
         with app.app_context():
             assert DeploymentManifest.query.get(manifest_id).is_active is False
@@ -735,7 +782,7 @@ class TestDisableArchiveManifest:
         assert f"delete-manifest-modal-{manifest_id}" not in manifest_client.get("/deployment-manifests/").data.decode()
         archived_html = manifest_client.get("/deployment-manifests/archived").data.decode()
         assert "m1" in archived_html
-        assert f'/deployment-manifests/{manifest_id}/enable' in archived_html
+        assert f'/deployment-manifests/{manifest_id}/restore' in archived_html
 
         from app.services.workflow.resolver import resolve_step_manifests
 
@@ -761,7 +808,7 @@ class TestDisableArchiveManifest:
             "/deployment-manifests/deploy", data={"manifest_ids": [str(manifest_id)]}, follow_redirects=True
         )
         assert response.status_code == 200
-        assert b"disabled manifest" in response.data
+        assert b"archived manifest" in response.data
         with app.app_context():
             assert DeploymentRun.query.count() == 0
 
@@ -781,7 +828,7 @@ class TestDisableArchiveManifest:
         assert response.status_code == 200
         # Not refused for being disabled — falls through to the ordinary
         # "nothing was actually deployed" outcome instead.
-        assert b"disabled manifest" not in response.data
+        assert b"archived manifest" not in response.data
         assert b"Nothing currently deployed" in response.data
 
     def test_disabled_server_not_offered_when_creating_a_manifest(self, manifest_client, app):
@@ -802,7 +849,7 @@ class TestDisableArchiveManifest:
             db.session.commit()
             manifest_id = manifest.id
 
-        response = manifest_client.post(f"/deployment-manifests/{manifest_id}/enable", follow_redirects=True)
+        response = manifest_client.post(f"/deployment-manifests/{manifest_id}/restore", follow_redirects=True)
         assert response.status_code == 200
         with app.app_context():
             assert DeploymentManifest.query.get(manifest_id).is_active is True

@@ -250,22 +250,23 @@ class TestDeleteRegistry:
         with app.app_context():
             assert RegistryTarget.query.get(target_id) is None
 
-    def test_blocked_when_a_builder_still_references_it(self, registry_client, app):
+    def test_deletes_a_used_registry_and_unlinks_its_builders(self, registry_client, app):
         with app.app_context():
             target = RegistryTarget(name="reg", provider_type="dockerhub")
             db.session.add(target)
             db.session.flush()
-            _make_builder_referencing(target.id)
+            builder = _make_builder_referencing(target.id)
             db.session.commit()
-            target_id = target.id
+            target_id, builder_id = target.id, builder.id
 
         response = registry_client.post(f"/registries/{target_id}/delete", follow_redirects=True)
         assert response.status_code == 200
-        assert b"still reference it" in response.data
+        assert b"need a new registry" in response.data
         with app.app_context():
-            assert RegistryTarget.query.get(target_id) is not None
+            assert RegistryTarget.query.get(target_id) is None
+            assert Builder.query.get(builder_id).missing_links() == ["Registry"]
 
-    def test_delete_button_disabled_when_a_builder_still_references_it(self, registry_client, app):
+    def test_delete_confirm_shows_affected_builders(self, registry_client, app):
         with app.app_context():
             target = RegistryTarget(name="reg", provider_type="dockerhub")
             db.session.add(target)
@@ -274,12 +275,11 @@ class TestDeleteRegistry:
             db.session.commit()
             target_id = target.id
 
-        response = registry_client.get("/registries/")
-        html = response.data.decode()
+        html = registry_client.get("/registries/").data.decode()
         marker = f"delete-registry-modal-{target_id}"
         button = html[html.index(marker) : html.index(marker) + 400]
-        assert "disabled" in button
-        assert "Builder(s) still reference it." in button
+        assert "disabled" not in button
+        assert "which will need a new registry" in html
 
     def test_delete_button_enabled_when_unreferenced(self, registry_client, app):
         with app.app_context():
@@ -305,7 +305,7 @@ class TestDisableArchiveRegistry:
             db.session.commit()
             target_id = target.id
 
-        response = registry_client.post(f"/registries/{target_id}/disable", follow_redirects=True)
+        response = registry_client.post(f"/registries/{target_id}/archive", follow_redirects=True)
         assert response.status_code == 200
         with app.app_context():
             assert RegistryTarget.query.get(target_id).is_active is False
@@ -313,7 +313,7 @@ class TestDisableArchiveRegistry:
         assert f"delete-registry-modal-{target_id}" not in registry_client.get("/registries/").data.decode()
         archived_html = registry_client.get("/registries/archived").data.decode()
         assert "reg" in archived_html
-        assert f'/registries/{target_id}/enable' in archived_html
+        assert f'/registries/{target_id}/restore' in archived_html
 
     def test_enable_restores_it(self, registry_client, app):
         with app.app_context():
@@ -322,7 +322,19 @@ class TestDisableArchiveRegistry:
             db.session.commit()
             target_id = target.id
 
-        response = registry_client.post(f"/registries/{target_id}/enable", follow_redirects=True)
+        response = registry_client.post(f"/registries/{target_id}/restore", follow_redirects=True)
         assert response.status_code == 200
         with app.app_context():
             assert RegistryTarget.query.get(target_id).is_active is True
+
+
+class TestListRows:
+    def test_rows_say_where_it_pushes_and_warn_without_a_token(self, registry_client, app):
+        with app.app_context():
+            db.session.add(RegistryTarget(name="Harbor prod", provider_type="harbor", registry_url="https://harbor.acme.dev"))
+            db.session.commit()
+
+        html = registry_client.get("/registries/").data.decode()
+        assert "Harbor at" in html and "https://harbor.acme.dev" in html
+        assert "No token saved" in html
+        assert "No Builders" in html

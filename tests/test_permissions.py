@@ -31,7 +31,7 @@ def permission_client(client, app):
 
 
 class TestDeleteButtonDisabled:
-    def test_permission_assigned_to_a_role_shows_disabled_delete_button(self, permission_client, app):
+    def test_permission_assigned_to_a_role_can_be_deleted(self, permission_client, app):
         with app.app_context():
             permission = Permission(code="widget.manage", description="Manage widgets")
             db.session.add(permission)
@@ -40,16 +40,20 @@ class TestDeleteButtonDisabled:
             role.permissions = [permission]
             db.session.add(role)
             db.session.commit()
-            permission_id = permission.id
+            permission_id, role_id = permission.id, role.id
 
-        response = permission_client.get("/permissions/")
-        html = response.data.decode()
+        html = permission_client.get("/permissions/").data.decode()
         marker = f"delete-modal-{permission_id}"
         button = html[html.index(marker) : html.index(marker) + 400]
-        assert "disabled" in button
-        assert "Assigned to 1 role(s)." in button
+        assert "disabled" not in button
+        assert "It will be removed from 1 role(s)." in html
 
-    def test_permission_required_by_a_menu_shows_disabled_delete_button(self, permission_client, app):
+        permission_client.post(f"/permissions/{permission_id}/delete", follow_redirects=True)
+        with app.app_context():
+            assert Permission.query.get(permission_id) is None
+            assert Role.query.get(role_id).permissions == []
+
+    def test_permission_required_by_a_menu_warns_it_will_be_hidden(self, permission_client, app):
         with app.app_context():
             permission = Permission(code="widget.manage", description="Manage widgets")
             db.session.add(permission)
@@ -57,12 +61,11 @@ class TestDeleteButtonDisabled:
             db.session.commit()
             permission_id = permission.id
 
-        response = permission_client.get("/permissions/")
-        html = response.data.decode()
+        html = permission_client.get("/permissions/").data.decode()
         marker = f"delete-modal-{permission_id}"
         button = html[html.index(marker) : html.index(marker) + 400]
-        assert "disabled" in button
-        assert "Required by 1 menu item(s)." in button
+        assert "disabled" not in button
+        assert "1 menu item(s) require it and will be hidden from everyone." in html
 
     def test_unused_permission_shows_enabled_delete_button(self, permission_client, app):
         with app.app_context():
@@ -76,3 +79,16 @@ class TestDeleteButtonDisabled:
         marker = f"delete-modal-{permission_id}"
         button = html[html.index(marker) : html.index(marker) + 400]
         assert "disabled" not in button
+
+
+class TestGroupedList:
+    def test_permissions_are_grouped_by_area_and_searchable(self, permission_client, app):
+        with app.app_context():
+            db.session.add(Permission(code="builder.build", description="Trigger image builds"))
+            db.session.commit()
+
+        html = permission_client.get("/permissions/").data.decode()
+        assert "Builders" in html  # the role picker's area heading
+        assert "Trigger image builds" in html
+        assert 'data-list-search="#permission-lists"' in html
+        assert 'data-search="trigger image builds builder.build' in html

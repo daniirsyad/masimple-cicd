@@ -19,7 +19,9 @@ class ImageBuild(db.Model):
 
     id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     batch_id = db.Column(UUID(as_uuid=True), db.ForeignKey("build_batches.id"), nullable=False)
-    builder_id = db.Column(UUID(as_uuid=True), db.ForeignKey("builders.id"), nullable=False)
+    # Null once the Builder is deleted; builder_name then keeps its name.
+    builder_id = db.Column(UUID(as_uuid=True), db.ForeignKey("builders.id"), nullable=True)
+    builder_name = db.Column(db.String, nullable=True)
     branch_used = db.Column(db.String, nullable=False)
     commit_sha = db.Column(db.String, nullable=True)
     # [[status, path], ...] from `git diff --name-status` since the previous
@@ -51,3 +53,10 @@ class ImageBuild(db.Model):
     batch = db.relationship("BuildBatch", backref=db.backref("image_builds", lazy="dynamic"))
     builder = db.relationship("Builder", backref=db.backref("image_builds", lazy="dynamic"))
     error_log = db.relationship("ErrorLog")
+
+    @property
+    def builder_label(self):
+        """Builder name, or the name saved when it was deleted (see its delete route)."""
+        if self.builder is not None:
+            return self.builder.name
+        return f"{self.builder_name or 'Builder'} (deleted)"

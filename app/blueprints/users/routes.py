@@ -1,13 +1,26 @@
 import uuid
 
 from flask import flash, redirect, render_template, request, url_for
-from flask_login import current_user
+from flask_login import current_user, logout_user
 from werkzeug.security import generate_password_hash
 
 from app.blueprints.users import users_bp
 from app.blueprints.users.forms import CreateUserForm, EditUserForm
 from app.extensions import db
-from app.models import ActivityLog, Role, User
+from app.models import (
+    ActivityLog,
+    BuildBatch,
+    DeploymentRun,
+    ErrorLog,
+    PasswordResetToken,
+    Role,
+    SystemConfig,
+    User,
+    VersionDocumentation,
+    Workflow,
+    WorkflowRun,
+)
+from app.models.deployment_manifest import deployment_manifest_users
 from app.utils.decorators import permission_required
 from app.utils.logger import log_activity
 from app.utils.system_config import get_system_config
@@ -189,18 +202,30 @@ def unlock_user(user_id):
 def delete_user(user_id):
     user = User.query.get_or_404(user_id)
 
-    if user.id == current_user.id:
-        flash("You cannot delete your own account.", "error")
-        return redirect(url_for("users.list_users"))
-
     username = user.username
     user_id_str = str(user.id)
+    deleting_self = user.id == current_user.id
 
-    # Detach this user from history/records instead of cascading the delete,
-    # so activity log rows and other users' "created by" attribution survive.
-    ActivityLog.query.filter_by(user_id=user.id).update({"user_id": None})
-    User.query.filter_by(created_by=user.id).update({"created_by": None})
+    # Detach this user from every record that names them instead of
+    # cascading the delete, so history and attribution survive (shown as
+    # no user). Reset tokens and manifest access grants go with them.
+    for column in (
+        ActivityLog.user_id,
+        ErrorLog.user_id,
+        User.created_by,
+        BuildBatch.requested_by,
+        DeploymentRun.triggered_by,
+        WorkflowRun.triggered_by,
+        Workflow.created_by,
+        VersionDocumentation.built_by,
+        SystemConfig.security_notification_user_id,
+    ):
+        column.class_.query.filter(column == user.id).update({column: None}, synchronize_session=False)
+    PasswordResetToken.query.filter_by(user_id=user.id).delete()
+    db.session.execute(deployment_manifest_users.delete().where(deployment_manifest_users.c.user_id == user.id))
 
+    if deleting_self:
+        logout_user()  # so the log entry below isn't attributed to the deleted row
     db.session.delete(user)
     db.session.commit()
 
@@ -212,4 +237,4 @@ def delete_user(user_id):
     )
 
     flash(f"User '{username}' deleted.", "success")
-    return redirect(url_for("users.list_users"))
+    return redirect(url_for("auth.login" if deleting_self else "users.list_users"))

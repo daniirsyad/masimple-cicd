@@ -48,7 +48,7 @@ def awaiting_review_step_runs_for(user):
         for step_run in WorkflowStepRun.query.filter_by(status="awaiting_review")
         .order_by(WorkflowStepRun.created_at.desc())
         .all()
-        if step_run.run.workflow.is_accessible_to(user)
+        if step_run.run.is_accessible_to(user)
     ]
 
 
@@ -61,6 +61,25 @@ def enqueue_workflow_run(workflow, triggered_by):
     db.session.add(run)
     db.session.commit()
     return run
+
+
+def fail_active_runs(runs, reason):
+    """Stops queued/running/awaiting-review WorkflowRuns whose workflow or
+    current step is being deleted. A build/deploy a step already enqueued
+    keeps running in its own queue; only the run stops advancing.
+    """
+    now = datetime.utcnow()
+    for run in runs:
+        if run.status not in ("queued", "running"):
+            continue
+        for step_run in run.step_runs.filter(WorkflowStepRun.status.in_(("running", "awaiting_review"))):
+            step_run.status = "failed"
+            step_run.error = reason
+            step_run.finished_at = now
+        run.status = "failed"
+        run.has_failed_step = True
+        run.finished_at = now
+    db.session.flush()
 
 
 def _first_step(workflow_id):
@@ -118,6 +137,9 @@ def approve_awaiting_step(step_run, bump_type, change_type_id, object_names_text
     builders = resolve_step_builders(step)
     if not builders:
         raise ValueError("This step's builders no longer resolve to anything.")
+    broken = [builder.name for builder in builders if builder.missing_links()]
+    if broken:
+        raise ValueError(f"These builders need editing first (something they use was deleted): {', '.join(broken)}.")
 
     version = Version.query.get({builder.version_id for builder in builders}.pop())
     object_names = [name.strip() for name in (object_names_text or "").split(",") if name.strip()]
@@ -188,6 +210,12 @@ def _start_step(run, step):
         if len(version_ids) > 1:
             db.session.commit()
             _fail_step(run, step, "The resolved builders don't all share the same Version.")
+            return
+
+        broken = [f"{builder.name} (needs a new {', '.join(builder.missing_links())})" for builder in builders if builder.missing_links()]
+        if broken:
+            db.session.commit()
+            _fail_step(run, step, f"Can't build: {'; '.join(broken)}.")
             return
 
         missing_branch = [builder.name for builder in builders if not builder.default_branch]

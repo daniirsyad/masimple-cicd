@@ -1,6 +1,11 @@
 onEveryPage(() => {
   const STORAGE_KEY = "sidebarCollapsed";
 
+  // The groups are an exclusive accordion (<details name>). htmx inserts the
+  // new body before removing the old one, so the browser closes the incoming
+  // open group because the old page's copy is still open. Reopen it.
+  document.querySelectorAll("details[data-sidebar-current]").forEach((group) => (group.open = true));
+
   const wrapper = document.getElementById("app-drawer-wrapper");
   const checkbox = document.getElementById("app-drawer");
   const toggle = document.getElementById("sidebar-toggle");

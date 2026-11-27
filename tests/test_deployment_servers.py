@@ -2,7 +2,16 @@ import pytest
 from werkzeug.security import generate_password_hash
 
 from app.extensions import db
-from app.models import DeploymentManifest, DeploymentServer, ErrorLog, Permission, Role, User
+from app.models import (
+    DeploymentExecution,
+    DeploymentManifest,
+    DeploymentRun,
+    DeploymentServer,
+    ErrorLog,
+    Permission,
+    Role,
+    User,
+)
 from app.services.deployment.kubernetes_provider import KubernetesProvider
 from app.utils.crypto import decrypt
 
@@ -15,6 +24,7 @@ def server_user(app):
         permissions = [
             Permission(code="deployment_server.view", description="view"),
             Permission(code="deployment_server.manage", description="manage"),
+            Permission(code="deployment_run.view", description="view runs"),
         ]
         db.session.add_all(permissions)
         role = Role(name="ServerAdmin", description="Test server admin role")
@@ -170,23 +180,36 @@ class TestDeleteServer:
         with app.app_context():
             assert DeploymentServer.query.get(server_id) is None
 
-    def test_blocked_when_a_manifest_still_targets_it(self, server_client, app):
+    def test_deletes_a_targeted_server_and_keeps_history(self, server_client, app):
         with app.app_context():
             server = DeploymentServer(name="srv", connection_type="kube")
             db.session.add(server)
             manifest = DeploymentManifest(name="m1", yaml_content="image: nginx")
             manifest.target_servers = [server]
             db.session.add(manifest)
+            db.session.flush()
+            run = DeploymentRun(status="success", action="deploy")
+            db.session.add(run)
+            db.session.flush()
+            execution = DeploymentExecution(run_id=run.id, manifest_id=manifest.id, server_id=server.id, status="success")
+            db.session.add(execution)
             db.session.commit()
-            server_id = server.id
+            server_id, manifest_id, run_id, execution_id = server.id, manifest.id, run.id, execution.id
 
         response = server_client.post(f"/deployment-servers/{server_id}/delete", follow_redirects=True)
         assert response.status_code == 200
-        assert b"still target it" in response.data
         with app.app_context():
-            assert DeploymentServer.query.get(server_id) is not None
+            assert DeploymentServer.query.get(server_id) is None
+            assert DeploymentManifest.query.get(manifest_id).target_servers == []
+            execution = DeploymentExecution.query.get(execution_id)
+            assert execution.server_id is None
+            assert execution.server_name == "srv"
 
-    def test_delete_button_disabled_when_a_manifest_still_targets_it(self, server_client, app):
+        detail = server_client.get(f"/deployment-runs/{run_id}")
+        assert detail.status_code == 200
+        assert b"srv (deleted)" in detail.data
+
+    def test_delete_confirm_shows_affected_manifests(self, server_client, app):
         with app.app_context():
             server = DeploymentServer(name="srv", connection_type="kube")
             db.session.add(server)
@@ -200,8 +223,8 @@ class TestDeleteServer:
         html = response.data.decode()
         marker = f"delete-server-modal-{server_id}"
         button = html[html.index(marker) : html.index(marker) + 400]
-        assert "disabled" in button
-        assert "still target it." in button
+        assert "disabled" not in button
+        assert "will lose this target" in html
 
     def test_delete_button_enabled_when_unreferenced(self, server_client, app):
         with app.app_context():
@@ -228,7 +251,7 @@ class TestDisableArchiveServer:
             db.session.commit()
             server_id = server.id
 
-        response = server_client.post(f"/deployment-servers/{server_id}/disable", follow_redirects=True)
+        response = server_client.post(f"/deployment-servers/{server_id}/archive", follow_redirects=True)
         assert response.status_code == 200
         with app.app_context():
             assert DeploymentServer.query.get(server_id).is_active is False
@@ -236,7 +259,7 @@ class TestDisableArchiveServer:
         assert f"delete-server-modal-{server_id}" not in server_client.get("/deployment-servers/").data.decode()
         archived_html = server_client.get("/deployment-servers/archived").data.decode()
         assert "srv" in archived_html
-        assert f'/deployment-servers/{server_id}/enable' in archived_html
+        assert f'/deployment-servers/{server_id}/restore' in archived_html
 
     def test_enable_restores_it(self, server_client, app):
         with app.app_context():
@@ -245,7 +268,7 @@ class TestDisableArchiveServer:
             db.session.commit()
             server_id = server.id
 
-        response = server_client.post(f"/deployment-servers/{server_id}/enable", follow_redirects=True)
+        response = server_client.post(f"/deployment-servers/{server_id}/restore", follow_redirects=True)
         assert response.status_code == 200
         with app.app_context():
             assert DeploymentServer.query.get(server_id).is_active is True
@@ -299,3 +322,23 @@ class TestConnectionTest:
             assert "connection refused" in error_log.message
             assert f"/logs/errors/{error_log.id}".encode() in response.data
             assert "connection refused" in error_log.traceback
+
+
+class TestListRows:
+    def test_each_row_says_whether_the_server_answered(self, server_client, app):
+        with app.app_context():
+            db.session.add_all(
+                [
+                    DeploymentServer(name="up", connection_type="kube", status="healthy"),
+                    DeploymentServer(name="down", connection_type="api", status="unreachable"),
+                    DeploymentServer(name="new", connection_type="kube"),
+                ]
+            )
+            db.session.commit()
+
+        html = server_client.get("/deployment-servers/").data.decode()
+        assert "Reachable" in html
+        assert "Can&#39;t reach it" in html or "Can't reach it" in html
+        assert "Not tested yet" in html
+        assert "entry-rail-error" in html and "entry-rail-success" in html
+        assert "Custom agent, reached over its API" in html

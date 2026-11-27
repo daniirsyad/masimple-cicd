@@ -5,9 +5,11 @@ from flask import flash, redirect, render_template, url_for
 from app.blueprints.versions import versions_bp
 from app.blueprints.versions.forms import VersionForm
 from app.extensions import db
-from app.models import Builder, BuildBatch, Version, VersionType
+from app.models import Builder, BuildBatch, ImageBuild, Version, VersionType
 from app.models.version import version_version_links
+from app.services.build.worker import fail_queued_builds
 from app.utils.decorators import permission_required
+from app.utils.deletion import builder_impact, builders_using, unlink_builders
 from app.utils.logger import log_activity
 
 CREATE_PREFIX = "create-version-"
@@ -86,10 +88,12 @@ def _latest_batch_by_version():
     query against BuildBatch alone — no join through ImageBuild needed (that
     join is for /builders, where a Builder has no direct FK to BuildBatch).
     """
-    latest = {}
-    for batch in BuildBatch.query.order_by(BuildBatch.created_at.desc()).all():
-        latest.setdefault(batch.version_id, batch)
-    return latest
+    latest_per_version = (
+        BuildBatch.query.filter(BuildBatch.version_id.isnot(None))
+        .distinct(BuildBatch.version_id)
+        .order_by(BuildBatch.version_id, BuildBatch.created_at.desc())
+    )
+    return {batch.version_id: batch for batch in latest_per_version}
 
 
 def _render_index(create_form=None, open_modal=None, invalid_edit=None):
@@ -99,12 +103,14 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
 
     versions = Version.query.filter_by(is_active=True).order_by(Version.name).all()
     latest_batches = _latest_batch_by_version()
-    # Same guard delete_version itself checks before rejecting the request —
-    # computed here so the button can be disabled up front.
-    delete_reasons = {}
+    # What deleting each one would affect, shown in its delete confirm.
+    delete_impacts = {}
     for version in versions:
-        builder_count = Builder.query.filter_by(version_id=version.id).count()
-        delete_reasons[version.id] = f"{builder_count} Builder(s) still reference it." if builder_count else None
+        parts = [builder_impact(builders_using(Builder.version_id, version.id), "Version")]
+        batch_count = version.batches.count()
+        if batch_count:
+            parts.append(f"{batch_count} past build batch(es) keep its name.")
+        delete_impacts[version.id] = " ".join(p for p in parts if p) or None
 
     invalid_id, invalid_form = invalid_edit or (None, None)
     edit_forms = {}
@@ -127,7 +133,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
         "versions/list.html",
         versions=versions,
         latest_batches=latest_batches,
-        delete_reasons=delete_reasons,
+        delete_impacts=delete_impacts,
         create_form=create_form,
         edit_forms=edit_forms,
         version_type_names=_version_type_names(),
@@ -227,14 +233,21 @@ def edit_version(version_id):
 def delete_version(version_id):
     version = Version.query.get_or_404(version_id)
 
-    builder_count = Builder.query.filter_by(version_id=version.id).count()
-    if builder_count:
-        flash(
-            f"Cannot delete '{version.name}' — {builder_count} Builder(s) still reference it.", "error"
-        )
-        return redirect(url_for("versions.list_versions"))
-
     name = version.name
+    fail_queued_builds(
+        ImageBuild.batch_id.in_(db.session.query(BuildBatch.id).filter(BuildBatch.version_id == version.id)),
+        f"Version '{name}' was deleted before this build ran.",
+    )
+    unlinked = unlink_builders(Builder.version_id, version.id, "Version", name)
+    BuildBatch.query.filter_by(version_id=version.id).update(
+        {"version_id": None, "version_name": name}, synchronize_session=False
+    )
+    db.session.execute(
+        version_version_links.delete().where(
+            (version_version_links.c.version_id == version.id)
+            | (version_version_links.c.linked_version_id == version.id)
+        )
+    )
     version_id_str = str(version.id)
     db.session.delete(version)
     db.session.commit()
@@ -243,10 +256,10 @@ def delete_version(version_id):
         action="DELETE_VERSION",
         target_type="version",
         target_id=version_id_str,
-        description=f"Deleted version '{name}'",
+        description=f"Deleted version '{name}'" + (f" ({unlinked} Builder(s) unlinked)" if unlinked else ""),
     )
 
-    flash(f"Version '{name}' deleted.", "success")
+    flash(f"Version '{name}' deleted." + (f" {unlinked} Builder(s) need a new Version." if unlinked else ""), "success")
     return redirect(url_for("versions.list_versions"))
 
 
@@ -256,37 +269,37 @@ def archived():
     return _render_archived()
 
 
-@versions_bp.route("/<uuid:version_id>/disable", methods=["POST"])
+@versions_bp.route("/<uuid:version_id>/archive", methods=["POST"])
 @permission_required("version.manage")
-def disable_version(version_id):
+def archive_version(version_id):
     version = Version.query.get_or_404(version_id)
     version.is_active = False
     db.session.commit()
 
     log_activity(
-        action="DISABLE_VERSION",
+        action="ARCHIVE_VERSION",
         target_type="version",
         target_id=str(version.id),
-        description=f"Disabled version '{version.name}'",
+        description=f"Archived version '{version.name}'",
     )
 
-    flash(f"'{version.name}' disabled — moved to Archived.", "info")
+    flash(f"'{version.name}' archived.", "info")
     return redirect(url_for("versions.list_versions"))
 
 
-@versions_bp.route("/<uuid:version_id>/enable", methods=["POST"])
+@versions_bp.route("/<uuid:version_id>/restore", methods=["POST"])
 @permission_required("version.manage")
-def enable_version(version_id):
+def restore_version(version_id):
     version = Version.query.get_or_404(version_id)
     version.is_active = True
     db.session.commit()
 
     log_activity(
-        action="ENABLE_VERSION",
+        action="RESTORE_VERSION",
         target_type="version",
         target_id=str(version.id),
-        description=f"Re-enabled version '{version.name}'",
+        description=f"Restored version '{version.name}'",
     )
 
-    flash(f"'{version.name}' re-enabled.", "success")
+    flash(f"'{version.name}' restored.", "success")
     return redirect(url_for("versions.archived"))

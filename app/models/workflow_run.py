@@ -19,7 +19,9 @@ class WorkflowRun(db.Model):
     __tablename__ = "workflow_runs"
 
     id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    workflow_id = db.Column(UUID(as_uuid=True), db.ForeignKey("workflows.id"), nullable=False)
+    # Null once the Workflow is deleted; workflow_name then keeps its name.
+    workflow_id = db.Column(UUID(as_uuid=True), db.ForeignKey("workflows.id"), nullable=True)
+    workflow_name = db.Column(db.String, nullable=True)
     # "queued" (not yet started) / "running" / "success" / "failed" /
     # "completed_with_failures" (only reachable via an on_failure="continue"
     # step — see workflow.worker._advance).
@@ -38,3 +40,16 @@ class WorkflowRun(db.Model):
     workflow = db.relationship("Workflow", backref=db.backref("runs", lazy="dynamic"))
     triggerer = db.relationship("User")
     current_step = db.relationship("WorkflowStep")
+
+    @property
+    def workflow_label(self):
+        """Workflow name, or the name saved when it was deleted (see its delete route)."""
+        if self.workflow is not None:
+            return self.workflow.name
+        return f"{self.workflow_name or 'Workflow'} (deleted)"
+
+    def is_accessible_to(self, user):
+        """A deleted workflow's runs have no allowed roles left: workflow.manage only."""
+        if self.workflow is None:
+            return user.has_permission("workflow.manage")
+        return self.workflow.is_accessible_to(user)

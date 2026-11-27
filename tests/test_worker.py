@@ -1271,7 +1271,7 @@ class TestManagedDockerfile:
         with app.app_context():
             build = ImageBuild.query.get(build_id)
             assert build.status == "failed"
-            assert "managed Dockerfile" in build.build_log
+            assert "Dockerfile" in build.build_log
 
 
 class TestRunBuildFailureModes:

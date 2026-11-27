@@ -16,7 +16,8 @@ from app.utils.error_logger import log_error  # noqa: E402
 from app.utils.menu_builder import menu_builder  # noqa: E402
 from app.utils.setup_status import is_setup_complete  # noqa: E402
 from app.utils.system_config import get_system_config  # noqa: E402
-from app.utils.timezone import format_local  # noqa: E402
+from app.utils.status_words import status_word  # noqa: E402
+from app.utils.timezone import format_local, time_ago  # noqa: E402
 
 def create_app(config_name=None):
     """Application factory."""
@@ -69,6 +70,8 @@ def create_app(config_name=None):
         return context
 
     app.jinja_env.filters["localtime"] = format_local
+    app.jinja_env.filters["timeago"] = time_ago
+    app.jinja_env.filters["status_word"] = status_word
 
     @app.before_request
     def _require_setup():

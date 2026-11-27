@@ -30,6 +30,7 @@ from app.services.workflow.worker import (
     approve_awaiting_step,
     awaiting_review_step_runs_for,
     enqueue_workflow_run,
+    fail_active_runs,
     reject_awaiting_step,
 )
 from app.utils.decorators import permission_required
@@ -254,15 +255,19 @@ def _render_view(workflow, edit_form=None, build_form=None, deploy_form=None, op
     step_summaries = {step.id: _step_target_summary(step) for step in steps}
     runs = workflow.runs.order_by(WorkflowRun.created_at.desc()).limit(20).all()
 
-    # Same guards delete_workflow/delete_step themselves check before
-    # rejecting the request — computed here too so the Delete buttons can be
-    # disabled up front instead of only failing after a click.
+    # What deleting the workflow / each step would affect, shown in their confirms.
     run_count = workflow.runs.count()
-    delete_workflow_reason = f"Has {run_count} recorded run(s)." if run_count else None
-    step_delete_reasons = {}
+    delete_workflow_impact = (
+        f"{run_count} past run(s) keep its name; a run in progress stops." if run_count else None
+    )
+    step_delete_impacts = {}
     for step in steps:
         step_run_count = WorkflowStepRun.query.filter_by(workflow_step_id=step.id).count()
-        step_delete_reasons[step.id] = f"Has {step_run_count} recorded run(s)." if step_run_count else None
+        step_delete_impacts[step.id] = (
+            f"{step_run_count} past run(s) of it stay in run history; a run on this step stops."
+            if step_run_count
+            else None
+        )
 
     return render_template(
         "workflows/view.html",
@@ -270,8 +275,8 @@ def _render_view(workflow, edit_form=None, build_form=None, deploy_form=None, op
         steps=steps,
         step_summaries=step_summaries,
         runs=runs,
-        delete_workflow_reason=delete_workflow_reason,
-        step_delete_reasons=step_delete_reasons,
+        delete_workflow_impact=delete_workflow_impact,
+        step_delete_impacts=step_delete_impacts,
         edit_form=edit_form,
         build_form=build_form,
         deploy_form=deploy_form,
@@ -318,13 +323,17 @@ def edit_workflow(workflow_id):
 def delete_workflow(workflow_id):
     workflow = Workflow.query.get_or_404(workflow_id)
 
-    run_count = WorkflowRun.query.filter_by(workflow_id=workflow.id).count()
-    if run_count:
-        flash(f"Cannot delete '{workflow.name}' — it has {run_count} recorded run(s).", "error")
-        return redirect(url_for("workflows.view_workflow", workflow_id=workflow.id))
-
     name = workflow.name
     workflow_id_str = str(workflow.id)
+    runs = WorkflowRun.query.filter_by(workflow_id=workflow.id)
+    fail_active_runs(runs.all(), f"Workflow '{name}' was deleted.")
+    # Run history stays, keeping the name; its step runs keep order/type.
+    step_ids = [step.id for step in workflow.steps]
+    if step_ids:
+        WorkflowStepRun.query.filter(WorkflowStepRun.workflow_step_id.in_(step_ids)).update(
+            {"workflow_step_id": None}, synchronize_session=False
+        )
+    runs.update({"workflow_id": None, "workflow_name": name, "current_step_id": None}, synchronize_session=False)
     # Cascades to this workflow's WorkflowSteps (and their group/item
     # selections) — see the cascade="all, delete-orphan" on
     # Workflow.steps/WorkflowStep.selected_groups.
@@ -342,9 +351,9 @@ def delete_workflow(workflow_id):
     return redirect(url_for("workflows.index"))
 
 
-@workflows_bp.route("/<uuid:workflow_id>/disable", methods=["POST"])
+@workflows_bp.route("/<uuid:workflow_id>/archive", methods=["POST"])
 @permission_required("workflow.manage")
-def disable_workflow(workflow_id):
+def archive_workflow(workflow_id):
     # Reuses the same is_active column the Edit form's own "Active" checkbox
     # already writes — this is just a guided shortcut for the "can't delete,
     # do this instead" case, not a separate concept.
@@ -353,31 +362,31 @@ def disable_workflow(workflow_id):
     db.session.commit()
 
     log_activity(
-        action="DISABLE_WORKFLOW",
+        action="ARCHIVE_WORKFLOW",
         target_type="workflow",
         target_id=str(workflow.id),
-        description=f"Disabled workflow '{workflow.name}'",
+        description=f"Archived workflow '{workflow.name}'",
     )
 
-    flash(f"'{workflow.name}' disabled — moved to Archived.", "info")
+    flash(f"'{workflow.name}' archived.", "info")
     return redirect(url_for("workflows.index"))
 
 
-@workflows_bp.route("/<uuid:workflow_id>/enable", methods=["POST"])
+@workflows_bp.route("/<uuid:workflow_id>/restore", methods=["POST"])
 @permission_required("workflow.manage")
-def enable_workflow(workflow_id):
+def restore_workflow(workflow_id):
     workflow = Workflow.query.get_or_404(workflow_id)
     workflow.is_active = True
     db.session.commit()
 
     log_activity(
-        action="ENABLE_WORKFLOW",
+        action="RESTORE_WORKFLOW",
         target_type="workflow",
         target_id=str(workflow.id),
-        description=f"Re-enabled workflow '{workflow.name}'",
+        description=f"Restored workflow '{workflow.name}'",
     )
 
-    flash(f"'{workflow.name}' re-enabled.", "success")
+    flash(f"'{workflow.name}' restored.", "success")
     return redirect(url_for("workflows.archived"))
 
 
@@ -549,17 +558,13 @@ def delete_step(workflow_id, step_id):
     workflow = Workflow.query.get_or_404(workflow_id)
     step = WorkflowStep.query.filter_by(id=step_id, workflow_id=workflow.id).first_or_404()
 
-    # A step that's actually been run (win or lose) can't be deleted — its
-    # WorkflowStepRun rows have a NOT NULL FK back to it and this app
-    # doesn't null-out-and-preserve step history the way e.g. a hard user
-    # delete does for ActivityLog.user_id. The workflow itself has the same
-    # rule (see delete_workflow) — a never-run step can still be removed
-    # from a workflow that otherwise has run history on its other steps.
-    run_count = WorkflowStepRun.query.filter_by(workflow_step_id=step.id).count()
-    if run_count:
-        flash(f"Cannot delete this step — it has {run_count} recorded run(s).", "error")
-        return redirect(url_for("workflows.view_workflow", workflow_id=workflow.id))
-
+    # A run currently on this step stops; past step runs stay in run history.
+    runs_on_step = WorkflowRun.query.filter_by(current_step_id=step.id)
+    fail_active_runs(runs_on_step.all(), "The step it was on was deleted.")
+    runs_on_step.update({"current_step_id": None}, synchronize_session=False)
+    WorkflowStepRun.query.filter_by(workflow_step_id=step.id).update(
+        {"workflow_step_id": None}, synchronize_session=False
+    )
     db.session.delete(step)
     db.session.commit()
 
@@ -680,7 +685,7 @@ def review_queue():
 @permission_required("workflow.view")
 def view_run(run_id):
     run = WorkflowRun.query.get_or_404(run_id)
-    if not run.workflow.is_accessible_to(current_user):
+    if not run.is_accessible_to(current_user):
         abort(403)
 
     step_runs = run.step_runs.all()
@@ -698,7 +703,7 @@ def view_run(run_id):
 @permission_required("workflow.view")
 def run_status(run_id):
     run = WorkflowRun.query.get_or_404(run_id)
-    if not run.workflow.is_accessible_to(current_user):
+    if not run.is_accessible_to(current_user):
         abort(403)
 
     step_runs = run.step_runs.all()
@@ -722,7 +727,7 @@ def run_status(run_id):
 
 def _awaiting_review_step_run_or_404(step_run_id):
     step_run = WorkflowStepRun.query.get_or_404(step_run_id)
-    if not step_run.run.workflow.is_accessible_to(current_user):
+    if not step_run.run.is_accessible_to(current_user):
         abort(403)
     if step_run.status != "awaiting_review":
         abort(404)
@@ -760,7 +765,7 @@ def approve_step_run(step_run_id):
         action="APPROVE_WORKFLOW_BUILD_STEP",
         target_type="workflow_run",
         target_id=str(run.id),
-        description=f"Approved AI-suggested build metadata for a step in workflow '{run.workflow.name}'",
+        description=f"Approved AI-suggested build metadata for a step in workflow '{run.workflow_label}'",
     )
 
     flash("Build approved — queued.", "success")
@@ -779,7 +784,7 @@ def reject_step_run(step_run_id):
         action="REJECT_WORKFLOW_BUILD_STEP",
         target_type="workflow_run",
         target_id=str(run.id),
-        description=f"Rejected AI-suggested build metadata for a step in workflow '{run.workflow.name}'",
+        description=f"Rejected AI-suggested build metadata for a step in workflow '{run.workflow_label}'",
     )
 
     flash("Build step rejected.", "info")

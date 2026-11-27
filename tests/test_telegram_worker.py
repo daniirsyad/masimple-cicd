@@ -716,7 +716,7 @@ class TestDeployCallback:
 
         with app.app_context():
             assert DeploymentRun.query.count() == 0
-        assert any("disabled manifest" in (a["text"] or "").lower() for a in calls["answered"])
+        assert any("archived manifest" in (a["text"] or "").lower() for a in calls["answered"])
 
 
 class TestStopCommandAndCallback:

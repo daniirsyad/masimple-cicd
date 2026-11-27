@@ -1,7 +1,7 @@
 {# Commits modal for one ImageBuild. Expects `image` and `range` (from documentation.routes._commit_range_for_image) in scope. #}
 <dialog id="commits-modal-{{ image.id }}" class="modal">
   <div class="modal-box w-11/12 max-w-2xl">
-    <h3 class="text-lg font-bold">Commits — {{ image.builder.name }} ({{ image.branch_used }})</h3>
+    <h3 class="text-lg font-bold">Commits — {{ image.builder_label }} ({{ image.branch_used }})</h3>
     <p class="mt-1 text-xs text-base-content/60">
       <code>{{ range.from_sha[:7] if range.from_sha else 'initial build' }}</code>
       &rarr;

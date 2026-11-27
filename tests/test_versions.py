@@ -71,7 +71,7 @@ class TestListVersions:
     def test_empty_state(self, version_client):
         response = version_client.get("/versions/")
         assert response.status_code == 200
-        assert b"No versions created yet." in response.data
+        assert b"No versions yet." in response.data
 
     def test_lists_a_version_with_no_batches_yet(self, version_client, app, version_type):
         with app.app_context():
@@ -276,7 +276,7 @@ class TestDeleteVersion:
         with app.app_context():
             assert Version.query.get(version_id) is None
 
-    def test_blocked_when_a_builder_is_still_attached(self, version_client, app, version_type):
+    def test_deletes_a_used_version_keeping_batch_history(self, version_client, app, version_type):
         with app.app_context():
             version = Version(name="svc", version_type_id=version_type)
             db.session.add(version)
@@ -292,26 +292,31 @@ class TestDeleteVersion:
             registry_target = RegistryTarget(name="reg", provider_type="dockerhub")
             db.session.add(registry_target)
             db.session.flush()
-            db.session.add(
-                Builder(
-                    name="b1",
-                    version_id=version.id,
-                    repository_id=repository.id,
-                    registry_target_id=registry_target.id,
-                    dockerfile_path="Dockerfile",
-                )
+            builder = Builder(
+                name="b1",
+                version_id=version.id,
+                repository_id=repository.id,
+                registry_target_id=registry_target.id,
+                dockerfile_path="Dockerfile",
             )
+            db.session.add(builder)
+            batch = BuildBatch(version_id=version.id, full_version_string="DEV.1.0.0.0", bump_type="patch", status="success")
+            db.session.add(batch)
             db.session.commit()
-            version_id = version.id
+            version_id, builder_id, batch_id = version.id, builder.id, batch.id
 
         response = version_client.post(f"/versions/{version_id}/delete", follow_redirects=True)
         assert response.status_code == 200
-        assert b"still reference it" in response.data
+        assert b"need a new Version" in response.data
 
         with app.app_context():
-            assert Version.query.get(version_id) is not None
+            assert Version.query.get(version_id) is None
+            assert Builder.query.get(builder_id).missing_links() == ["Version"]
+            batch = BuildBatch.query.get(batch_id)
+            assert batch.version_id is None
+            assert batch.version_label == "svc (deleted)"
 
-    def test_delete_button_disabled_when_a_builder_is_attached(self, version_client, app, version_type):
+    def test_delete_confirm_shows_affected_builders(self, version_client, app, version_type):
         with app.app_context():
             version = Version(name="svc", version_type_id=version_type)
             db.session.add(version)
@@ -343,8 +348,8 @@ class TestDeleteVersion:
         html = response.data.decode()
         marker = f"delete-version-modal-{version_id}"
         button = html[html.index(marker) : html.index(marker) + 400]
-        assert "disabled" in button
-        assert "Builder(s) still reference it." in button
+        assert "disabled" not in button
+        assert "which will need a new Version" in html
 
     def test_delete_button_enabled_when_no_builder_is_attached(self, version_client, app, version_type):
         with app.app_context():
@@ -361,7 +366,7 @@ class TestDeleteVersion:
 
 
 class TestDisableArchiveVersion:
-    def test_disable_button_only_shown_when_undeletable(self, version_client, app, version_type):
+    def test_archive_button_always_shown(self, version_client, app, version_type):
         with app.app_context():
             deletable = Version(name="deletable", version_type_id=version_type)
             db.session.add(deletable)
@@ -370,7 +375,7 @@ class TestDisableArchiveVersion:
 
         response = version_client.get("/versions/")
         html = response.data.decode()
-        assert f'/versions/{deletable_id}/disable' not in html
+        assert f'/versions/{deletable_id}/archive' in html
 
     def test_disable_moves_version_off_main_list_onto_archived_page(
         self, version_client, app, version_type
@@ -397,7 +402,7 @@ class TestDisableArchiveVersion:
             db.session.commit()
             version_id = version.id
 
-        response = version_client.post(f"/versions/{version_id}/disable", follow_redirects=True)
+        response = version_client.post(f"/versions/{version_id}/archive", follow_redirects=True)
         assert response.status_code == 200
 
         with app.app_context():
@@ -408,7 +413,7 @@ class TestDisableArchiveVersion:
 
         archived_html = version_client.get("/versions/archived").data.decode()
         assert "svc" in archived_html
-        assert f'/versions/{version_id}/enable' in archived_html
+        assert f'/versions/{version_id}/restore' in archived_html
 
     def test_enable_restores_it_to_the_main_list(self, version_client, app, version_type):
         with app.app_context():
@@ -417,7 +422,7 @@ class TestDisableArchiveVersion:
             db.session.commit()
             version_id = version.id
 
-        response = version_client.post(f"/versions/{version_id}/enable", follow_redirects=True)
+        response = version_client.post(f"/versions/{version_id}/restore", follow_redirects=True)
         assert response.status_code == 200
 
         with app.app_context():

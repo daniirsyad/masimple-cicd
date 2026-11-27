@@ -32,9 +32,7 @@ onPageReady(() => {
 
   generateBtn.addEventListener("click", () => {
     hideError();
-    generateBtn.disabled = true;
-    const originalLabel = generateBtn.textContent;
-    generateBtn.textContent = "Generating...";
+    setBusy(generateBtn, true);
 
     fetch(generateUrl, {
       method: "POST",
@@ -62,8 +60,7 @@ onPageReady(() => {
       })
       .catch(() => showError("Failed to generate a description."))
       .finally(() => {
-        generateBtn.disabled = false;
-        generateBtn.textContent = originalLabel;
+        setBusy(generateBtn, false);
       });
   });
 });

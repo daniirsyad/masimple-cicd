@@ -93,7 +93,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | ORM / Migrations | Flask-SQLAlchemy + Flask-Migrate (Alembic) |
 | Database | PostgreSQL, UUID primary keys everywhere |
 | Auth | Flask-Login (session-based) + Flask-WTF (CSRF) + Werkzeug password hashing |
-| Frontend | Jinja2 + Tailwind CSS 3 + daisyUI 4 — **no JS framework**; vanilla JS per page, vendored SortableJS for drag-and-drop. Vendored htmx (`hx-boost` on `<body>`) loads every link/form in the background and swaps `<body>`, so the app navigates like an SPA while every page stays server-rendered; page scripts follow the lifecycle helpers in `app/static/js/page.js` (`onPageReady`, `pageInterval`, `pageSignal`, `onPageLeave`, `refreshPage`) |
+| Frontend | Jinja2 + Tailwind CSS 3 + daisyUI 4 — **no JS framework**; vanilla JS per page, vendored SortableJS for drag-and-drop. Vendored htmx (`hx-boost` on `<body>`) loads every link/form in the background and swaps `<body>`, so the app navigates like an SPA while every page stays server-rendered; page scripts follow the lifecycle helpers in `app/static/js/page.js` (`onPageReady`, `pageInterval`, `pageSignal`, `onPageLeave`, `refreshPage`). `app/static/js/loading.js` gives every submit button a spinner (and disables it) while its request runs, shows a top progress bar for any request over 300ms, and offers `setBusy`/`showLoading` to fetch-driven buttons |
 | Background work | Python `threading`/`queue` — independent in-process worker threads (one for builds, one for deploys, one deploy live-status poller, one workflow orchestrator, one Telegram bot long-poller, one Discord Gateway WebSocket connection), no Celery/Redis |
 | Deployment (of MASIMPLE CICD itself) | Docker (multi-stage: Node build for CSS, then Python/gunicorn `--worker-class gthread --threads 4`), Docker Compose (`web` + `db`) |
 | Git integration | GitPython, provider-abstracted (`GitProvider` → `GitHubProvider`) |
@@ -104,7 +104,7 @@ different roles) — not a SaaS product with per-customer isolation.
 | Credential encryption | `cryptography` Fernet, key from `SECRET_ENCRYPTION_KEY` env var (Image Builder) / `CREDENTIAL_ENCRYPTION_KEY` env var (Deployment module) |
 | AWS SDK | `boto3` — ECR `RegistryProvider` only (SigV4-signed calls, doesn't fit the generic Docker Registry v2 bearer-token flow the other registry providers share) |
 | YAML generation | `PyYAML` — YAML Generator page only; everywhere else in this app deliberately avoids it in favor of dict→`json.dumps()` (JSON is valid YAML) since that output only ever feeds `kubectl apply -f -`, never a human — see `app/services/yaml_generator/render.py` |
-| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 1142 tests |
+| Tests | pytest against a **real** Postgres test DB (not sqlite/mocked), 1227 tests |
 | Telegram integration | `requests` against the Bot API (`app/services/telegram/`) — both directions now: outbound `sendMessage` (security notifications, forgot-password links, workflow/build/deploy start-finish pushes) **and** inbound, via a long-polling `getUpdates` background thread (no webhook/public HTTPS needed) handling `/run`, `/status`, `/review`, `/build`, `/deploy`, `/update`, `/stop`, `/restart` bot commands and their inline-keyboard callbacks |
 | Discord integration | `requests` (REST) + `websocket-client` (Gateway) against the Discord API (`app/services/discord/`) — same notifications/commands as Telegram above (`/help` instead of `/start`), reached via a persistent Gateway WebSocket + native slash commands/Button/Select Menu components instead of long-polling + inline keyboards; group-resolution/action-table logic shared with Telegram via `app/services/bot_shared.py` |
 
@@ -215,8 +215,8 @@ backs the forgot-password flow: single-use, 15-minute expiry.
 - `Dockerfile` — a reusable, app-managed Dockerfile (name + content), an
   alternative to a Builder pointing at a path inside its own repo. Same
   "shared, independently managed config referenced by Builder" shape as
-  `RegistryTarget`/`GitSource`; can't be deleted while any `Builder` still
-  references it.
+  `RegistryTarget`/`GitSource`; deleting one unlinks the Builders that use
+  it (see "Deleting anything" below).
 - `Builder` — a reusable build config: one `Repository` + one `Version` +
   branch + one `RegistryTarget` + build args + optional `group_name`
   (purely organizational grouping for the UI) + optional custom `image_name`
@@ -434,9 +434,8 @@ backs the forgot-password flow: single-use, 15-minute expiry.
 - Every `Workflow` (via its pre-existing `is_active`) plus `Version`,
   `Dockerfile`, `RegistryTarget`, `GitSource`, `DeploymentServer`, `Builder`,
   and `DeploymentManifest` (each with a new `is_active` column) can be
-  **disabled/archived**: a "Disable" button appears next to Delete on each
-  one's own page exactly when Delete is already blocked by something still
-  referencing it, moves the row onto a new `/<blueprint>/archived` page
+  **archived**: an "Archive" button (`POST /<id>/archive`; "Restore" is `/<id>/restore`) appears next to Delete on each
+  one's own page as the soft alternative to deleting, moves the row onto a new `/<blueprint>/archived` page
   (hidden from the main list), and a "Restore" button there flips it back.
   Disabling is functionally enforced, not just cosmetic — a disabled row
   stops being offered in every dropdown that creates a new reference to it
@@ -471,12 +470,12 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   Telegram's `/review`), each linking straight to its own run's review
   panel, plus a "Review" button to the dedicated `/workflows/review` page
   (see below).
-- **`/users`, `/roles`, `/permissions`** — standard RBAC CRUD. The Roles
+- **`/users`, `/roles`, `/permissions`** — standard RBAC CRUD. Same list rows as the rest of the app (state first, ⋯ menu for rare actions); Permissions are grouped by area with a search box. The Roles
   page's permission picker groups the ~48 permissions under friendly
   resource headings (Users, Builders, AI Providers, …) with human
   descriptions, not raw codes. Users support both soft-delete
-  (`is_active=False`) and hard delete (blocks self-deletion, reassigns
-  `activity_logs.user_id`/`created_by` references first). Each row also
+  (`is_active=False`) and hard delete (your own account included, which
+  signs you out; every column referencing the user is nulled first). Each row also
   shows a Telegram Chat ID and a Discord User ID field (both admin-set) and,
   once a user's `failed_login_attempts` reaches the configured max, a
   "Locked" badge plus an Unlock button gated by a separate `user.unlock`
@@ -498,9 +497,13 @@ backs the forgot-password flow: single-use, 15-minute expiry.
 - **`/github`** — GitHub token connections; per-connection repo listing via
   the API; **Register** (mandatory immediate clone into a persistent local
   directory, `Repository.status` cloning→ready/error), **Re-sync**, **Remove
-  registration** (blocked if any Builder still references it).
+  registration** (its Builders are unlinked and need a new repository).
+  Deleting a connection removes its registered repositories the same way.
 - **`/registries`** — container registry targets, credentials validated on
-  save.
+  save. Versions, Registries, Dockerfiles, Deployment Servers, GitHub
+  connections and Workflows use the same list rows as Builders: name, a
+  plain sentence of what it is, its state with time ago, Edit, and a ⋯ menu
+  for Archive/Delete.
 - **`/versions`** — Version entity CRUD; Version Type field is a
   searchable-history combobox (free text, autocompletes from prior values,
   creates a new `VersionType` row if unseen). A **Linked Versions** checkbox
@@ -511,9 +514,9 @@ backs the forgot-password flow: single-use, 15-minute expiry.
 - **`/dockerfiles`** (`dockerfile.manage`) — CRUD for reusable, app-managed
   Dockerfiles (name + raw content), referenced by a Builder whose
   `dockerfile_source` is set to "Managed Dockerfile" instead of "From
-  Repository". Delete is blocked while any Builder still references it,
-  same delete-guard pattern used elsewhere in this app.
-- **`/builders`** — Builder CRUD, grouped by `group_name` (grouped builders
+  Repository". Deleting one unlinks the Builders that use it (they show
+  "Needs a new Dockerfile" until edited).
+- **`/builders`** — Builder CRUD (each row: name, a plain sentence of what it builds and where it pushes, and its last build as "Built 2.4.11, 2 hours ago"/"Failed"/"Building" with a colored bar on the row's edge; Build + Edit visible, Archive/Delete in a ⋯ menu), grouped by `group_name` (grouped builders
   only build as a group; ungrouped builders build individually); per-builder
   **role-based access control** (a Builder with no `allowed_roles` is
   visible/buildable only to users with `builder.manage`; otherwise limited to
@@ -581,7 +584,7 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   server's Pods page (kube type only) — this is now the *only* entry point
   into `/deployment-pods`; there's no separate server-picker page there
   anymore (see below).
-- **`/deployment-manifests`** — manifest CRUD grouped by `group_name`
+- **`/deployment-manifests`** — manifest CRUD (each row: name, what it deploys, and a "Running on" light per target server, lit where it's deployed, with version and time on hover; Update/Deploy + Edit visible, Restart/Stop/Archive/Delete in a ⋯ menu; group headers say "N of M running") grouped by `group_name`
   (drag-and-drop reorder within a group via SortableJS); per-manifest
   version-binding picker (scan YAML for placeholders, pick a Builder +
   optional pin per placeholder); `allowed_users` picker. Per-row/group
@@ -738,19 +741,29 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   step-creation time). "Run" (`workflow.run`) queues a `WorkflowRun`; its
   detail page polls run status and renders a step tracker that links each
   finished step straight into the real `/images` or `/deployment-runs/<id>`
-  page for its actual build/deploy log — no duplicate log UI. Deleting a
-  Workflow or an individual step is blocked once either has any run
-  history, mirroring the delete-guard pattern elsewhere in the app
-  (`builder.manage`'s "N recorded build(s)" block, etc.) rather than
-  nulling out foreign keys — and, exactly when that block is active, a
-  "Disable" button appears next to the (now greyed-out, tooltipped) Delete
-  button as the real alternative: it archives the Workflow/step's parent
-  Workflow onto `/workflows/archived`, off the main list, restorable from
-  there. The same disabled-Delete-button-plus-tooltip and Disable/Archived
-  pattern is used across `/versions`, `/dockerfiles`, `/registries`,
-  `/github` (Git Sources), `/deployment-servers`, `/builders`, and
-  `/deployment-manifests` too — see the Data model section above for what
-  "disabled" actually enforces for each.
+  page for its actual build/deploy log — no duplicate log UI. A Workflow or
+  step can be deleted even with run history: runs keep the workflow's name
+  ("name (deleted)"), step runs keep their order/type, and a run in
+  progress on it stops. "Archive" next to Delete moves the Workflow onto
+  `/workflows/archived` instead, restorable from there.
+
+**Deleting anything.** Every item can be deleted by anyone holding its
+delete/manage permission; nothing is blocked by being in use. Each delete
+confirm shows a server-computed impact line (e.g. "Used by 3 Builder(s),
+which will need a new registry before they can build"). A delete (1) fails
+the item's still-queued builds/deploys/workflow runs with a reason, (2)
+unlinks what used it instead of deleting it: a Builder whose Version,
+Repository, Registry or managed Dockerfile is gone shows "Needs a new X" and
+refuses to build (web, bots, workflows, worker) until edited; manifests lose
+a deleted server target; workflow steps drop a deleted Builder/manifest;
+manifest placeholders bound to a deleted Builder stop resolving; a deleted
+role's users have no role; a deleted permission is removed from roles and
+menus needing it are hidden; a deleted menu takes its sub-items. (3) History
+keeps the name: build, deploy and workflow run pages show "name (deleted)".
+A deleted manifest or server leaves whatever it deployed running on the
+cluster. Deleting the Super Admin role or every admin is allowed; restarting
+the container re-runs `seeds/seed_admin.py`, which recreates the role and
+gives the admin user it back.
 
 ## Conventions a new feature should follow
 
@@ -827,8 +840,7 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   same Builder in between the two steps. Would need a new resolver mode
   scoped to a specific `BuildBatch`, not just latest.
 - No Workflow step *editing* — only add/delete. Changing a step means
-  deleting it and adding a new one (blocked entirely if the step has any
-  run history — see `WorkflowStepRun`).
+  deleting it and adding a new one (its past step runs stay in run history).
 - **Partially resolved**: a Workflow build step's Bump Type/Object(s)/
   Change Type/Description used to always be **captured once when the step
   is added and replayed unchanged on every future run**, whether typed in
@@ -842,7 +854,7 @@ backs the forgot-password flow: single-use, 15-minute expiry.
   preserve, not something still to fix.
 - **New from this arc, unverified in a live browser**: the auto-generate/
   review-approval Workflow build-step flow, the disabled-Delete-button
-  tooltips, the Disable/Archived pages across the 8 affected blueprints, and
+  tooltips, the Archive/Restore pages across the 8 affected blueprints, and
   the Workflow index page's own Run button — all only exercised via the
   Flask test client so far (same sandbox constraint noted throughout this
   section), not a real browser.

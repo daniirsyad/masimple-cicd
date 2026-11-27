@@ -410,28 +410,21 @@ class TestRemoveRepo:
             assert Repository.query.get(repo_id) is None
         assert not clone_dir.exists()
 
-    def test_remove_button_disabled_when_a_builder_still_references_it(self, git_client, app, tmp_path):
+    def test_remove_confirm_shows_affected_builders(self, git_client, app, tmp_path):
         with app.app_context():
             source = GitSource(name="conn", provider_type="github", encrypted_token="x")
             db.session.add(source)
             db.session.flush()
-            repo = Repository(
-                git_source_id=source.id, full_name="org/repo", local_path=str(tmp_path), status="ready"
-            )
+            repo = Repository(git_source_id=source.id, full_name="org/repo", local_path=str(tmp_path), status="ready")
             db.session.add(repo)
             db.session.flush()
             _make_builder_referencing(repo.id)
             db.session.commit()
-            repo_id = repo.id
 
-        response = git_client.get("/github/")
-        html = response.data.decode()
-        marker = f"remove-repo-modal-{repo_id}"
-        button = html[html.index(marker) : html.index(marker) + 400]
-        assert "disabled" in button
-        assert "Builder(s) still reference it." in button
+        html = git_client.get("/github/").data.decode()
+        assert "which will need a new repository" in html
 
-    def test_blocked_when_a_builder_still_references_it(self, git_client, app, tmp_path):
+    def test_removes_a_used_repo_and_fails_its_queued_builds(self, git_client, app, tmp_path):
         with app.app_context():
             source = GitSource(name="conn", provider_type="github", encrypted_token="x")
             db.session.add(source)
@@ -444,17 +437,22 @@ class TestRemoveRepo:
             )
             db.session.add(repo)
             db.session.flush()
-            _make_builder_referencing(repo.id)
+            builder = _make_builder_referencing(repo.id, batch_status="queued")
             db.session.commit()
-            repo_id = repo.id
+            repo_id, builder_id = repo.id, builder.id
 
         response = git_client.post(f"/github/repos/{repo_id}/remove", follow_redirects=True)
         assert response.status_code == 200
-        assert b"still reference it" in response.data
+        assert b"need a new repository" in response.data
 
         with app.app_context():
-            assert Repository.query.get(repo_id) is not None
-
+            assert Repository.query.get(repo_id) is None
+            builder = Builder.query.get(builder_id)
+            assert builder.missing_links() == ["Repository"]
+            build = ImageBuild.query.filter_by(builder_id=builder_id).one()
+            assert build.status == "failed"
+            assert "org/repo" in build.build_log
+            assert build.batch.status == "failed"
 
 class TestEditConnection:
     def test_renames_the_connection(self, git_client, app):
@@ -526,49 +524,38 @@ class TestDeleteConnection:
         with app.app_context():
             assert GitSource.query.get(source_id) is None
 
-    def test_blocked_when_a_repository_is_still_registered(self, git_client, app, tmp_path):
+    def test_deleting_a_connection_removes_its_repositories(self, git_client, app, tmp_path):
         with app.app_context():
             source = GitSource(name="conn", provider_type="github", encrypted_token="x")
             db.session.add(source)
             db.session.flush()
-            db.session.add(
-                Repository(
-                    git_source_id=source.id,
-                    full_name="org/repo",
-                    local_path=str(tmp_path),
-                    status="ready",
-                )
-            )
+            repo = Repository(git_source_id=source.id, full_name="org/repo", local_path=str(tmp_path), status="ready")
+            db.session.add(repo)
+            db.session.flush()
+            builder = _make_builder_referencing(repo.id)
             db.session.commit()
-            source_id = source.id
+            source_id, repo_id, builder_id = source.id, repo.id, builder.id
 
         response = git_client.post(f"/github/connections/{source_id}/delete", follow_redirects=True)
         assert response.status_code == 200
-        assert b"still registered under it" in response.data
 
         with app.app_context():
-            assert GitSource.query.get(source_id) is not None
+            assert GitSource.query.get(source_id) is None
+            assert Repository.query.get(repo_id) is None
+            assert Builder.query.get(builder_id).repository_id is None
 
-    def test_delete_button_disabled_when_a_repository_is_still_registered(self, git_client, app, tmp_path):
+    def test_delete_confirm_says_repositories_are_removed(self, git_client, app, tmp_path):
         with app.app_context():
             source = GitSource(name="conn", provider_type="github", encrypted_token="x")
             db.session.add(source)
             db.session.flush()
             db.session.add(
-                Repository(
-                    git_source_id=source.id, full_name="org/repo", local_path=str(tmp_path), status="ready"
-                )
+                Repository(git_source_id=source.id, full_name="org/repo", local_path=str(tmp_path), status="ready")
             )
             db.session.commit()
-            source_id = source.id
 
-        response = git_client.get("/github/")
-        html = response.data.decode()
-        marker = f"delete-connection-modal-{source_id}"
-        button = html[html.index(marker) : html.index(marker) + 400]
-        assert "disabled" in button
-        assert "still registered under it." in button
-
+        html = git_client.get("/github/").data.decode()
+        assert "Its 1 registered repository will be removed" in html
 
 class TestDisableArchiveGitSource:
     def test_disable_moves_it_off_main_list_onto_archived_page(self, git_client, app, tmp_path):
@@ -582,7 +569,7 @@ class TestDisableArchiveGitSource:
             db.session.commit()
             source_id = source.id
 
-        response = git_client.post(f"/github/connections/{source_id}/disable", follow_redirects=True)
+        response = git_client.post(f"/github/connections/{source_id}/archive", follow_redirects=True)
         assert response.status_code == 200
         with app.app_context():
             assert GitSource.query.get(source_id).is_active is False
@@ -590,7 +577,7 @@ class TestDisableArchiveGitSource:
         assert f"delete-connection-modal-{source_id}" not in git_client.get("/github/").data.decode()
         archived_html = git_client.get("/github/archived").data.decode()
         assert "conn" in archived_html
-        assert f'/github/connections/{source_id}/enable' in archived_html
+        assert f'/github/connections/{source_id}/restore' in archived_html
 
     def test_enable_restores_it(self, git_client, app):
         with app.app_context():
@@ -599,7 +586,7 @@ class TestDisableArchiveGitSource:
             db.session.commit()
             source_id = source.id
 
-        response = git_client.post(f"/github/connections/{source_id}/enable", follow_redirects=True)
+        response = git_client.post(f"/github/connections/{source_id}/restore", follow_redirects=True)
         assert response.status_code == 200
         with app.app_context():
             assert GitSource.query.get(source_id).is_active is True
@@ -617,6 +604,6 @@ class TestDisableArchiveGitSource:
             follow_redirects=True,
         )
         assert response.status_code == 200
-        assert b"disabled" in response.data
+        assert b"is archived" in response.data
         with app.app_context():
             assert Repository.query.filter_by(git_source_id=source_id).count() == 0

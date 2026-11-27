@@ -31,9 +31,12 @@ from app.services.deployment.helpers import KUBE_CONNECTION_TYPE
 from app.services.deployment.resolver import UnresolvedPlaceholderError, find_placeholder_keys, resolve_manifest
 from app.services.deployment.worker import (
     enqueue_deployment_run,
+    fail_queued_executions,
+    get_current_deployment,
     get_available_update,
     is_currently_deployed,
 )
+from app.models.workflow_step import workflow_step_manifests
 from app.utils.decorators import permission_required
 from app.utils.logger import log_activity
 
@@ -285,63 +288,60 @@ def _group_name_suggestions():
     ]
 
 
-def _manifest_live_server_ids(manifests):
-    """{manifest_id_str: [server_id_str, ...]} of target servers each
-    manifest is *currently deployed* on right now (same is_currently_deployed
-    check the stop route itself uses to decide what actually gets torn
-    down) — drives whether a row/group shows Deploy, Stop, or both. Restart
-    reuses this same set (anything currently deployed can be restarted).
+def _manifest_current_deployments(manifests):
+    """{manifest_id_str: {server_id_str: execution}} for the target servers
+    each manifest is *currently deployed* on (is_currently_deployed's rule:
+    latest successful execution wasn't a stop). Its keys drive whether a
+    row/group shows Deploy, Stop, or both (Restart reuses Stop's set); the
+    executions feed the row's "Running on" lights (version, when).
     """
-    return {
-        str(manifest.id): [
-            str(server.id) for server in manifest.target_servers if is_currently_deployed(manifest.id, server.id)
-        ]
-        for manifest in manifests
-    }
-
-
-def _manifest_delete_reasons(manifests):
-    """{manifest_id: reason_or_None} — the same three checks delete_manifest()
-    itself runs, in the same order, before rejecting the request; computed
-    here so the Delete button can be disabled up front instead of only
-    failing after a click. The "still deployed" check intentionally mirrors
-    delete_manifest()'s own candidate set (every server with ANY execution
-    history for this manifest, not just its *current* target_servers, since
-    those can drift apart after a manifest's targets are edited) rather than
-    reusing manifest_live_servers/_manifest_live_server_ids above, which is
-    scoped to current target_servers and would miss a manifest still live on
-    a since-detached server.
-    """
-    reasons = {}
+    current = {}
     for manifest in manifests:
-        in_flight = DeploymentExecution.query.filter(
-            DeploymentExecution.manifest_id == manifest.id, DeploymentExecution.status.in_(("queued", "running"))
-        ).first()
-        if in_flight is not None:
-            reasons[manifest.id] = "A deploy/stop is currently in progress for it."
-            continue
+        live = {}
+        for server in manifest.target_servers:
+            execution = get_current_deployment(manifest.id, server.id)
+            if execution is not None and execution.run.action != "stop":
+                live[str(server.id)] = execution
+        current[str(manifest.id)] = live
+    return current
 
-        server_ids = {
-            row[0]
-            for row in DeploymentExecution.query.with_entities(DeploymentExecution.server_id)
-            .filter_by(manifest_id=manifest.id)
-            .distinct()
-        }
-        live_servers = [
-            server
-            for server in DeploymentServer.query.filter(DeploymentServer.id.in_(server_ids)).all()
-            if is_currently_deployed(manifest.id, server.id)
-        ]
+
+
+def _live_servers(manifest):
+    """Servers this manifest is still deployed on: every server with any
+    execution history for it, not just its current target_servers, since
+    those can drift apart after its targets are edited."""
+    server_ids = {
+        row[0]
+        for row in DeploymentExecution.query.with_entities(DeploymentExecution.server_id)
+        .filter_by(manifest_id=manifest.id)
+        .distinct()
+        if row[0] is not None
+    }
+    return [
+        server
+        for server in DeploymentServer.query.filter(DeploymentServer.id.in_(server_ids)).all()
+        if is_currently_deployed(manifest.id, server.id)
+    ]
+
+
+def _manifest_delete_impacts(manifests):
+    """{manifest_id: text_or_None}: what deleting each one would affect,
+    shown in its delete confirm. Nothing blocks the delete."""
+    impacts = {}
+    for manifest in manifests:
+        parts = []
+        live_servers = _live_servers(manifest)
         if live_servers:
             names = ", ".join(server.name for server in live_servers)
-            reasons[manifest.id] = f"Still deployed on: {names}."
-            continue
-
+            parts.append(
+                f"Still deployed on: {names}. It keeps running there, and this app can no longer stop it."
+            )
         referencing_steps = WorkflowStep.query.filter(WorkflowStep.selected_manifests.any(id=manifest.id)).count()
-        reasons[manifest.id] = (
-            f"Individually selected in {referencing_steps} workflow step(s)." if referencing_steps else None
-        )
-    return reasons
+        if referencing_steps:
+            parts.append(f"It will be removed from {referencing_steps} workflow step(s).")
+        impacts[manifest.id] = " ".join(parts) or None
+    return impacts
 
 
 def _manifest_update_availability(manifests, manifest_live_servers):
@@ -450,10 +450,11 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
             form.helm_chart_upload_version.data = manifest.helm_chart_version
             edit_forms[manifest.id] = form
 
-    manifest_live_servers = _manifest_live_server_ids(manifests)
+    current_deployments = _manifest_current_deployments(manifests)
+    manifest_live_servers = {manifest_id: list(live) for manifest_id, live in current_deployments.items()}
     manifest_updates = _manifest_update_availability(manifests, manifest_live_servers)
     groups, ungrouped = _manifest_groups(manifests, manifest_live_servers, manifest_updates)
-    delete_reasons = _manifest_delete_reasons(manifests)
+    delete_impacts = _manifest_delete_impacts(manifests)
 
     manifest_bindings = {
         str(manifest.id): [
@@ -473,8 +474,9 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
         groups=groups,
         ungrouped=ungrouped,
         manifest_live_servers=manifest_live_servers,
+        current_deployments=current_deployments,
         manifest_updates=manifest_updates,
-        delete_reasons=delete_reasons,
+        delete_impacts=delete_impacts,
         create_form=create_form,
         edit_forms=edit_forms,
         builders=Builder.query.order_by(Builder.name).all(),
@@ -679,59 +681,22 @@ def reorder_manifests():
 @permission_required("deployment_manifest.manage")
 def delete_manifest(manifest_id):
     manifest = DeploymentManifest.query.get_or_404(manifest_id)
+    name = manifest.name
 
-    in_flight = DeploymentExecution.query.filter(
-        DeploymentExecution.manifest_id == manifest.id, DeploymentExecution.status.in_(("queued", "running"))
-    ).first()
-    if in_flight is not None:
-        flash(f"Cannot delete '{manifest.name}' — a deploy/stop is currently in progress for it.", "error")
-        return redirect(url_for("deployment_manifests.index"))
-
-    # Block only while it's actually still deployed somewhere — not merely
-    # because it has execution history. A manifest that's been fully
-    # stopped (or never made it live) is safe to delete even with past
-    # runs recorded; deploying-and-never-stopping is the case worth
-    # blocking, since deleting it would orphan whatever's still running.
-    server_ids = {
-        row[0]
-        for row in DeploymentExecution.query.with_entities(DeploymentExecution.server_id)
-        .filter_by(manifest_id=manifest.id)
-        .distinct()
-    }
-    live_servers = [
-        server
-        for server in DeploymentServer.query.filter(DeploymentServer.id.in_(server_ids)).all()
-        if is_currently_deployed(manifest.id, server.id)
-    ]
-    if live_servers:
-        names = ", ".join(server.name for server in live_servers)
-        flash(f"Cannot delete '{manifest.name}' — still deployed on: {names}. Stop it first.", "error")
-        return redirect(url_for("deployment_manifests.index"))
-
-    # Blocks on a WorkflowStep's individual selection (a real FK, via
-    # workflow_step_manifests) — not on merely sharing a group_name with a
-    # WorkflowStepGroup, which is a live/dynamic reference with no FK to
-    # violate (see WorkflowStepGroup's docstring).
-    referencing_steps = WorkflowStep.query.filter(WorkflowStep.selected_manifests.any(id=manifest.id)).count()
-    if referencing_steps:
-        flash(
-            f"Cannot delete '{manifest.name}' — it's individually selected in {referencing_steps} "
-            "workflow step(s). Remove it from those steps first.",
-            "error",
-        )
-        return redirect(url_for("deployment_manifests.index"))
-
-    # Detach rather than cascade or block: version bindings have no
-    # standalone meaning once the manifest is gone, so they're dropped: but
-    # DeploymentExecution rows are deployment_runs' history — null out their
-    # manifest_id (nullable for exactly this) so that history survives
-    # instead of failing on the FK or being deleted along with it. Mirrors
-    # users.routes hard-delete nulling ActivityLog.user_id.
+    fail_queued_executions(
+        DeploymentExecution.manifest_id == manifest.id, f"Manifest '{name}' was deleted before this deployment ran."
+    )
+    # Version bindings and chart uploads mean nothing without the manifest;
+    # workflow steps just drop it; deploy history keeps its name.
     DeploymentManifestVersionBinding.query.filter_by(manifest_id=manifest.id).delete()
     HelmChartUpload.query.filter_by(manifest_id=manifest.id).delete()
-    DeploymentExecution.query.filter_by(manifest_id=manifest.id).update({"manifest_id": None})
+    db.session.execute(
+        workflow_step_manifests.delete().where(workflow_step_manifests.c.manifest_id == manifest.id)
+    )
+    DeploymentExecution.query.filter_by(manifest_id=manifest.id).update(
+        {"manifest_id": None, "manifest_name": name}, synchronize_session=False
+    )
 
-    name = manifest.name
     manifest_id_str = str(manifest.id)
     db.session.delete(manifest)
     db.session.commit()
@@ -758,39 +723,39 @@ def archived():
     return render_template("deployment_manifests/archived.html", groups=groups, ungrouped=ungrouped)
 
 
-@deployment_manifests_bp.route("/<uuid:manifest_id>/disable", methods=["POST"])
+@deployment_manifests_bp.route("/<uuid:manifest_id>/archive", methods=["POST"])
 @permission_required("deployment_manifest.manage")
-def disable_manifest(manifest_id):
+def archive_manifest(manifest_id):
     manifest = DeploymentManifest.query.get_or_404(manifest_id)
     manifest.is_active = False
     db.session.commit()
 
     log_activity(
-        action="DISABLE_DEPLOYMENT_MANIFEST",
+        action="ARCHIVE_DEPLOYMENT_MANIFEST",
         target_type="deployment_manifest",
         target_id=str(manifest.id),
-        description=f"Disabled deployment manifest '{manifest.name}'",
+        description=f"Archived deployment manifest '{manifest.name}'",
     )
 
-    flash(f"'{manifest.name}' disabled — moved to Archived.", "info")
+    flash(f"'{manifest.name}' archived.", "info")
     return redirect(url_for("deployment_manifests.index"))
 
 
-@deployment_manifests_bp.route("/<uuid:manifest_id>/enable", methods=["POST"])
+@deployment_manifests_bp.route("/<uuid:manifest_id>/restore", methods=["POST"])
 @permission_required("deployment_manifest.manage")
-def enable_manifest(manifest_id):
+def restore_manifest(manifest_id):
     manifest = DeploymentManifest.query.get_or_404(manifest_id)
     manifest.is_active = True
     db.session.commit()
 
     log_activity(
-        action="ENABLE_DEPLOYMENT_MANIFEST",
+        action="RESTORE_DEPLOYMENT_MANIFEST",
         target_type="deployment_manifest",
         target_id=str(manifest.id),
-        description=f"Re-enabled deployment manifest '{manifest.name}'",
+        description=f"Restored deployment manifest '{manifest.name}'",
     )
 
-    flash(f"'{manifest.name}' re-enabled.", "success")
+    flash(f"'{manifest.name}' restored.", "success")
     return redirect(url_for("deployment_manifests.archived"))
 
 
@@ -858,7 +823,7 @@ def _trigger_deploy_action(manifests, activity_action, verb, no_manifest_message
     # rollouts of it are blocked.
     disabled = [manifest.name for manifest in manifests if not manifest.is_active]
     if disabled:
-        flash(f"Cannot {verb}: disabled manifest(s): {', '.join(disabled)}.", "error")
+        flash(f"Cannot {verb}: archived manifest(s): {', '.join(disabled)}.", "error")
         return redirect(url_for("deployment_manifests.index"))
 
     servers = {server for manifest in manifests for server in manifest.target_servers}

@@ -275,3 +275,32 @@ class TestAwaitingReviewNotification:
 
         response = workflow_review_client.get("/")
         assert b"awaiting review" not in response.data
+
+
+def test_every_page_loads_the_loading_feedback_script(noperm_client):
+    """js/loading.js (button spinners + top progress bar) is loaded in base.html's head."""
+    html = noperm_client.get("/").data.decode()
+    head = html[: html.index("</head>")]
+    assert "js/loading.js" in head
+
+
+def test_timeago_reads_like_a_person_would_say_it():
+    from datetime import datetime, timedelta
+
+    from app.utils.timezone import time_ago
+
+    now = datetime(2026, 11, 27, 12, 0, 0)
+    assert time_ago(None) == ""
+    assert time_ago(now - timedelta(seconds=20), now) == "just now"
+    assert time_ago(now - timedelta(minutes=5), now) == "5 min ago"
+    assert time_ago(now - timedelta(hours=1), now) == "1 hour ago"
+    assert time_ago(now - timedelta(hours=26), now) == "yesterday"
+    assert time_ago(now - timedelta(days=4), now) == "4 days ago"
+
+
+def test_status_word_turns_codes_into_words():
+    from app.utils.status_words import status_word
+
+    assert status_word("partial_failure") == "Partly failed"
+    assert status_word("completed_with_failures") == "Finished with failures"
+    assert status_word("something_new") == "something_new"

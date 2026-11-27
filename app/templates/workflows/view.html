@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}{{
+{% extends "base.html" %} {% from "partials/_macros.html" import delete_impact, entry_actions, status_line %} {% block title %}{{
 workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
 
 <span id="workflow-view-page" data-csrf="{{ csrf_token() }}" class="hidden"></span>
@@ -10,7 +10,7 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
     <p class="mt-1 text-sm text-base-content/60">{{ workflow.description }}</p>
     {% endif %}
   </div>
-  <div class="flex flex-wrap gap-2">
+  <div class="flex flex-wrap items-center gap-1">
     {% if current_user.has_permission("workflow.run") %}
     <form method="POST" action="{{ url_for('workflows.run_workflow', workflow_id=workflow.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
@@ -24,23 +24,7 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
     </form>
     {% endif %}
     {% if current_user.has_permission("workflow.manage") %}
-    <button type="button" class="btn btn-sm" onclick="document.getElementById('edit-workflow-modal').showModal()">
-      Edit
-    </button>
-    <button
-      type="button"
-      class="btn btn-sm btn-error"
-      onclick="document.getElementById('delete-workflow-modal').showModal()"
-      {{ disabled_attrs(delete_workflow_reason) }}
-    >
-      Delete
-    </button>
-    {% if delete_workflow_reason %}
-    <form method="POST" action="{{ url_for('workflows.disable_workflow', workflow_id=workflow.id) }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-      <button type="submit" class="btn btn-sm btn-warning">Disable</button>
-    </form>
-    {% endif %}
+    {{ entry_actions(workflow.name, "edit-workflow-modal", "delete-workflow-modal", url_for('workflows.archive_workflow', workflow_id=workflow.id)) }}
     {% endif %}
   </div>
 </div>
@@ -68,68 +52,46 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
       </div>
       {% endif %}
     </div>
-    {% if current_user.has_permission("workflow.manage") %}
-    <p class="mt-1 text-xs text-base-content/60">
-      Drag <span class="drag-handle">⠿</span> to reorder — a run walks these top-to-bottom, one at a time.
-    </p>
-    {% endif %}
+    <p class="mt-1 text-xs text-base-content/60">A run goes through these steps in order, one at a time.</p>
 
     {% if steps %}
-    <div class="mt-2 overflow-x-auto">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th></th>
-            <th>#</th>
-            <th>Type</th>
-            <th>Targets (resolved now)</th>
-            <th>If it fails</th>
-            <th></th>
-          </tr>
+    <div class="mt-2">
+      <table class="table entry-table">
+        <thead class="sr-only">
+          <tr><th>Order</th><th>Step</th><th>Actions</th></tr>
         </thead>
-        <tbody id="workflow-steps-body" data-reorder-url="{{ url_for('workflows.reorder_steps', workflow_id=workflow.id) }}">
+        <tbody id="workflow-steps-body" class="ordered-rows" data-reorder-url="{{ url_for('workflows.reorder_steps', workflow_id=workflow.id) }}">
           {% for step in steps %}
-          <tr class="workflow-step-row" data-step-id="{{ step.id }}">
-            <td class="w-6">{% if current_user.has_permission("workflow.manage") %}<span class="drag-handle cursor-move text-base-content/40" title="Drag to reorder">⠿</span>{% endif %}</td>
-            <td>{{ loop.index }}</td>
-            <td>
-              {% if step.step_type == "build" %}
-              <span class="badge badge-primary badge-sm">Build</span>
-              {% else %}
-              <span class="badge badge-info badge-sm">Deploy</span>
+          {% set targets = step_summaries.get(step.id, []) %}
+          <tr class="workflow-step-row entry-row {{ '' if targets else 'entry-rail-warning' }}" data-step-id="{{ step.id }}">
+            <td class="w-10 whitespace-nowrap pr-0 text-base-content/50">
+              <span class="row-order inline-block w-4 text-right text-sm tabular-nums"></span>
+              {% if current_user.has_permission("workflow.manage") %}
+              <span class="drag-handle ml-1 cursor-move" title="Drag to change the order">⠿</span>
               {% endif %}
             </td>
-            <td>
-              {% set targets = step_summaries.get(step.id, []) %} {% if targets %} {% for name in targets %}
-              <span class="badge badge-ghost badge-sm">{{ name }}</span>
-              {% endfor %} {% else %}
-              <span class="text-xs text-error">Resolves to nothing right now</span>
-              {% endif %} {% if step.step_type == "build" %}
-              <div class="mt-1 text-xs text-base-content/60">
+            <td class="min-w-0">
+              <div class="text-[0.9375rem]">
+                <span class="font-semibold">{{ "Build" if step.step_type == "build" else "Deploy" }}</span>
+                {% if targets %}{{ targets|join(", ") }}{% else %}<span class="text-warning">nothing right now: its groups and picks are all empty or archived</span>{% endif %}
+              </div>
+              <div class="mt-0.5 text-xs text-base-content/60">
+                {% if step.step_type == "build" %}
                 {% if step.auto_generate_build_metadata %}
-                Auto-generated at run time ({{ "review required" if step.require_review_before_build else
-                "applied automatically" }})
+                Version bump and notes come from the commits at run time{{ ', after someone reviews them' if step.require_review_before_build else '' }}.
                 {% else %}
-                {{ step.bump_type }} bump · {{ step.change_type.name if step.change_type else "—" }} · "{{
-                step.object }}"
+                {{ (step.bump_type or '')|capitalize }} bump{{ ', ' ~ step.change_type.name if step.change_type else '' }}{{ ', object "' ~ step.object ~ '"' if step.object else '' }}.
+                {% endif %}
+                {% endif %}
+                If it fails, the run {{ "stops" if step.on_failure == "stop" else "keeps going" }}.
+              </div>
+            </td>
+            <td class="w-1">
+              <div class="flex items-center justify-end gap-1">
+                {% if current_user.has_permission("workflow.manage") %}
+                {{ entry_actions("step " ~ loop.index, None, "delete-step-modal-" ~ step.id) }}
                 {% endif %}
               </div>
-              {% endif %}
-            </td>
-            <td>
-              <span class="badge badge-ghost badge-sm">{{ "Stop run" if step.on_failure == "stop" else "Continue" }}</span>
-            </td>
-            <td>
-              {% if current_user.has_permission("workflow.manage") %}
-              <button
-                type="button"
-                class="btn btn-sm btn-error"
-                onclick="document.getElementById('delete-step-modal-{{ step.id }}').showModal()"
-                {{ disabled_attrs(step_delete_reasons.get(step.id)) }}
-              >
-                Delete
-              </button>
-              {% endif %}
             </td>
           </tr>
           {% endfor %}
@@ -161,10 +123,7 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
           {% for run in runs %}
           <tr>
             <td>
-              <span
-                class="badge badge-sm {{ 'badge-success' if run.status == 'success' else 'badge-error' if run.status in ('failed', 'completed_with_failures') else 'badge-info' }}"
-                >{{ run.status }}</span
-              >
+              {{ status_line('success' if run.status == 'success' else ('busy' if run.status in ('running', 'queued') else 'error'), run.status|status_word) }}
             </td>
             <td>{{ run.triggerer.username if run.triggerer else "—" }}</td>
             <td>{{ run.started_at|localtime if run.started_at else "—" }}</td>
@@ -224,9 +183,9 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
   <div class="modal-box">
     <h3 class="text-lg font-bold">Delete Workflow</h3>
     <p class="py-2 text-sm">
-      Delete "{{ workflow.name }}"? This only works if it has never been run — blocked otherwise so run history is
-      never orphaned.
+      Delete "{{ workflow.name }}" and its steps?
     </p>
+    {{ delete_impact(delete_workflow_impact) }}
     <form method="POST" action="{{ url_for('workflows.delete_workflow', workflow_id=workflow.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
       <div class="modal-action">
@@ -243,8 +202,9 @@ workflow.name }} - Workflows - MASIMPLE CICD{% endblock %} {% block content %}
   <div class="modal-box">
     <h3 class="text-lg font-bold">Delete Step</h3>
     <p class="py-2 text-sm">
-      Delete this {{ step.step_type }} step? This only works if it has never been run.
+      Delete this {{ step.step_type }} step?
     </p>
+    {{ delete_impact(step_delete_impacts.get(step.id)) }}
     <form method="POST" action="{{ url_for('workflows.delete_step', workflow_id=workflow.id, step_id=step.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
       <div class="modal-action">

@@ -5,6 +5,7 @@ from app.blueprints.dockerfiles.forms import DockerfileForm
 from app.extensions import db
 from app.models import Builder, Dockerfile
 from app.utils.decorators import permission_required
+from app.utils.deletion import builder_impact, builders_using, unlink_builders
 from app.utils.logger import log_activity
 
 CREATE_PREFIX = "create-dockerfile-"
@@ -20,12 +21,11 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
 
     dockerfiles = Dockerfile.query.filter_by(is_active=True).order_by(Dockerfile.name).all()
 
-    # Same guard delete() itself checks before rejecting the request —
-    # computed here so the button can be disabled up front.
-    delete_reasons = {}
-    for dockerfile in dockerfiles:
-        builder_count = Builder.query.filter_by(managed_dockerfile_id=dockerfile.id).count()
-        delete_reasons[dockerfile.id] = f"{builder_count} Builder(s) still reference it." if builder_count else None
+    # What deleting each one would affect, shown in its delete confirm.
+    delete_impacts = {
+        dockerfile.id: builder_impact(builders_using(Builder.managed_dockerfile_id, dockerfile.id), "Dockerfile")
+        for dockerfile in dockerfiles
+    }
 
     invalid_id, invalid_form = invalid_edit or (None, None)
     edit_forms = {}
@@ -38,7 +38,7 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
     return render_template(
         "dockerfiles/index.html",
         dockerfiles=dockerfiles,
-        delete_reasons=delete_reasons,
+        delete_impacts=delete_impacts,
         create_form=create_form,
         edit_forms=edit_forms,
         open_modal=open_modal,
@@ -108,14 +108,8 @@ def edit(dockerfile_id):
 def delete(dockerfile_id):
     dockerfile = Dockerfile.query.get_or_404(dockerfile_id)
 
-    builder_count = Builder.query.filter_by(managed_dockerfile_id=dockerfile.id).count()
-    if builder_count:
-        flash(
-            f"Cannot delete '{dockerfile.name}' — {builder_count} Builder(s) still reference it.", "error"
-        )
-        return redirect(url_for("dockerfiles.index"))
-
     name = dockerfile.name
+    unlinked = unlink_builders(Builder.managed_dockerfile_id, dockerfile.id, "Dockerfile", name)
     dockerfile_id_str = str(dockerfile.id)
     db.session.delete(dockerfile)
     db.session.commit()
@@ -124,10 +118,10 @@ def delete(dockerfile_id):
         action="DELETE_DOCKERFILE",
         target_type="dockerfile",
         target_id=dockerfile_id_str,
-        description=f"Deleted Dockerfile '{name}'",
+        description=f"Deleted Dockerfile '{name}'" + (f" ({unlinked} Builder(s) unlinked)" if unlinked else ""),
     )
 
-    flash(f"Dockerfile '{name}' deleted.", "success")
+    flash(f"Dockerfile '{name}' deleted." + (f" {unlinked} Builder(s) need a new Dockerfile." if unlinked else ""), "success")
     return redirect(url_for("dockerfiles.index"))
 
 
@@ -137,37 +131,37 @@ def archived():
     return _render_archived()
 
 
-@dockerfiles_bp.route("/<uuid:dockerfile_id>/disable", methods=["POST"])
+@dockerfiles_bp.route("/<uuid:dockerfile_id>/archive", methods=["POST"])
 @permission_required("dockerfile.manage")
-def disable(dockerfile_id):
+def archive(dockerfile_id):
     dockerfile = Dockerfile.query.get_or_404(dockerfile_id)
     dockerfile.is_active = False
     db.session.commit()
 
     log_activity(
-        action="DISABLE_DOCKERFILE",
+        action="ARCHIVE_DOCKERFILE",
         target_type="dockerfile",
         target_id=str(dockerfile.id),
-        description=f"Disabled Dockerfile '{dockerfile.name}'",
+        description=f"Archived Dockerfile '{dockerfile.name}'",
     )
 
-    flash(f"'{dockerfile.name}' disabled — moved to Archived.", "info")
+    flash(f"'{dockerfile.name}' archived.", "info")
     return redirect(url_for("dockerfiles.index"))
 
 
-@dockerfiles_bp.route("/<uuid:dockerfile_id>/enable", methods=["POST"])
+@dockerfiles_bp.route("/<uuid:dockerfile_id>/restore", methods=["POST"])
 @permission_required("dockerfile.manage")
-def enable(dockerfile_id):
+def restore(dockerfile_id):
     dockerfile = Dockerfile.query.get_or_404(dockerfile_id)
     dockerfile.is_active = True
     db.session.commit()
 
     log_activity(
-        action="ENABLE_DOCKERFILE",
+        action="RESTORE_DOCKERFILE",
         target_type="dockerfile",
         target_id=str(dockerfile.id),
-        description=f"Re-enabled Dockerfile '{dockerfile.name}'",
+        description=f"Restored Dockerfile '{dockerfile.name}'",
     )
 
-    flash(f"'{dockerfile.name}' re-enabled.", "success")
+    flash(f"'{dockerfile.name}' restored.", "success")
     return redirect(url_for("dockerfiles.archived"))

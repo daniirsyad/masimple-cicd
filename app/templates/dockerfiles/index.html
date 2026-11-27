@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Dockerfiles -
+{% extends "base.html" %} {% from "partials/_macros.html" import delete_impact, entry_actions %} {% block title %}Dockerfiles -
 MASIMPLE CICD{% endblock %} {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Dockerfiles</h1>
@@ -21,56 +21,38 @@ MASIMPLE CICD{% endblock %} {% block content %}
 
 <div class="card mt-4 bg-base-100 shadow-sm">
   <div class="card-body p-4">
-    <div class="mt-2 overflow-x-auto">
-      <table class="table table-sm">
+    <div class="mt-2">
+      <table class="table entry-table">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Used by</th>
-            <th>First line</th>
-            <th></th>
+            <th>Dockerfile</th>
+            <th class="w-1">Used by</th>
+            <th class="w-1"><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
         <tbody>
           {% for dockerfile in dockerfiles %}
-          <tr>
-            <td>{{ dockerfile.name }}</td>
-            <td>
-              {% set builder_count = dockerfile.builders.count() %}
-              {% if builder_count %}
-              <span class="badge badge-ghost badge-sm">{{ builder_count }} Builder(s)</span>
-              {% else %}
-              <span class="text-xs text-base-content/60">Unused</span>
-              {% endif %}
+          {% set builder_count = dockerfile.builders.count() %}
+          {% set first_line = (dockerfile.content.splitlines() | first) if dockerfile.content else "" %}
+          <tr class="entry-row">
+            <td class="min-w-0">
+              <div class="text-[0.9375rem] font-semibold">{{ dockerfile.name }}</div>
+              <div class="mt-0.5 truncate text-xs text-base-content/60">
+                {% if first_line %}Starts with <span class="font-mono">{{ first_line }}</span>{% else %}Empty{% endif %}
+              </div>
             </td>
-            <td><code class="text-xs">{{ (dockerfile.content.splitlines() | first) if dockerfile.content else "" }}</code></td>
-            <td class="flex gap-2">
-              <button
-                type="button"
-                class="btn btn-sm"
-                onclick="document.getElementById('edit-dockerfile-modal-{{ dockerfile.id }}').showModal()"
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                class="btn btn-sm btn-error"
-                onclick="document.getElementById('delete-dockerfile-modal-{{ dockerfile.id }}').showModal()"
-                {{ disabled_attrs(delete_reasons.get(dockerfile.id)) }}
-              >
-                Delete
-              </button>
-              {% if delete_reasons.get(dockerfile.id) %}
-              <form method="POST" action="{{ url_for('dockerfiles.disable', dockerfile_id=dockerfile.id) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-                <button type="submit" class="btn btn-sm btn-warning">Disable</button>
-              </form>
-              {% endif %}
+            <td class="whitespace-nowrap text-sm {{ '' if builder_count else 'text-base-content/60' }}">
+              {{ builder_count ~ ' Builder' ~ ('' if builder_count == 1 else 's') if builder_count else 'No Builders' }}
+            </td>
+            <td>
+              <div class="flex items-center justify-end gap-1">
+                {{ entry_actions(dockerfile.name, "edit-dockerfile-modal-" ~ dockerfile.id, "delete-dockerfile-modal-" ~ dockerfile.id, url_for('dockerfiles.archive', dockerfile_id=dockerfile.id)) }}
+              </div>
             </td>
           </tr>
           {% else %}
           <tr>
-            <td colspan="4">No Dockerfiles created yet.</td>
+            <td colspan="3" class="text-sm text-base-content/60">No Dockerfiles yet. Add one to build a repository that doesn't have its own.</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -167,8 +149,9 @@ MASIMPLE CICD{% endblock %} {% block content %}
   <div class="modal-box w-11/12 max-w-sm">
     <h3 class="text-lg font-bold">Delete Dockerfile</h3>
     <p class="py-4 text-sm">
-      Are you sure you want to delete "{{ dockerfile.name }}"? Any Builder still using it will block this.
+      Are you sure you want to delete "{{ dockerfile.name }}"?
     </p>
+    {{ delete_impact(delete_impacts.get(dockerfile.id)) }}
     <div class="modal-action">
       <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
         Cancel

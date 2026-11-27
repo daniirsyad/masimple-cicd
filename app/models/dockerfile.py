@@ -22,7 +22,7 @@ class Dockerfile(db.Model):
     content = db.Column(db.Text, nullable=False)
     # Disabled (archived) Dockerfiles drop off the main list onto a separate
     # Archived page, and stop being offered as a choice for new Builders —
-    # see dockerfiles.routes.disable/enable and
+    # see dockerfiles.routes.archive/restore and
     # builders.routes._apply_dockerfile_source.
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)

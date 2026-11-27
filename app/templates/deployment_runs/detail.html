@@ -16,7 +16,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
           else 'badge-ghost'
         }}"
       >
-        {{ run.status }}
+        {{ run.status|status_word }}
       </span>
       <span class="text-xs text-base-content/60">
         Triggered by {{ run.triggerer.username if run.triggerer else "—" }} ·
@@ -33,9 +33,9 @@ MASIMPLE CICD{% endblock %} {% block content %}
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-sm font-semibold">
-            {{ execution.manifest.name if execution.manifest else "(deleted manifest)" }}
+            {{ execution.manifest_label }}
           </span>
-          <span class="text-xs text-base-content/60">→ {{ execution.server.name }}</span>
+          <span class="text-xs text-base-content/60">→ {{ execution.server_label }}</span>
           {% if execution.status == 'running' %}
           <span class="loading loading-spinner loading-xs text-warning"></span>
           {% endif %}
@@ -47,7 +47,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
               else 'badge-warning'
             }}"
           >
-            {{ execution.status }}
+            {{ execution.status|status_word }}
           </span>
           {% if execution.resolved_version_string %}
           <code class="text-xs">{{ execution.resolved_version_string }}</code>

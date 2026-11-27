@@ -25,7 +25,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
           {% for image in batch.image_builds %}
           {% set range = commit_ranges[image.id | string] %}
           <tr>
-            <td>{{ image.builder.name }}</td>
+            <td>{{ image.builder_label }}</td>
             <td>{{ image.branch_used }}</td>
             <td>
               <span
@@ -36,7 +36,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
                   else 'badge-ghost'
                 }}"
               >
-                {{ image.status }}
+                {{ image.status|status_word }}
               </span>
             </td>
             <td>
@@ -66,7 +66,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
     {% set range = commit_ranges[image.id | string] %}
     <section id="changes-{{ image.id }}" class="mt-2 scroll-mt-20">
       <h3 class="text-sm font-semibold">
-        {{ image.builder.name }} <span class="font-normal text-base-content/60">({{ image.branch_used }})</span>
+        {{ image.builder_label }} <span class="font-normal text-base-content/60">({{ image.branch_used }})</span>
         {% if range.to_sha %}
         <code class="ml-1 text-xs font-normal">{{ range.from_sha[:7] if range.from_sha else 'initial build' }} &rarr; {{ range.to_sha[:7] }}</code>
         {% endif %}

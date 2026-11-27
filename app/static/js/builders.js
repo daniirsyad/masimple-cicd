@@ -408,8 +408,8 @@ onPageReady(() => {
         formData.append("additional_description", existingNotes.value.trim());
       }
 
-      previewBtn.disabled = true;
-      previewStatus.textContent = "Reading commits since the last build...";
+      setBusy(previewBtn, true);
+      showLoading(previewStatus, "Reading commits since the last build...");
 
       fetch("/builders/build/preview", { method: "POST", body: formData })
         .then((response) => response.json().then((data) => ({ ok: response.ok, data })))
@@ -443,7 +443,7 @@ onPageReady(() => {
           previewStatus.textContent = "Preview failed — check the server logs.";
         })
         .finally(() => {
-          previewBtn.disabled = false;
+          setBusy(previewBtn, false);
         });
     });
   }

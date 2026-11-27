@@ -96,7 +96,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
               else 'badge-ghost'
             }}"
           >
-            {{ run.status }}
+            {{ run.status|status_word }}
           </span>
           {% if progress %}
           <span class="text-xs text-base-content/60">{{ progress.finished }} of {{ progress.total }} done</span>

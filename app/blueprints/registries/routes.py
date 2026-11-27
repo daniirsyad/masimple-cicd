@@ -7,6 +7,7 @@ from app.models import Builder, RegistryTarget
 from app.services.registry.factory import get_registry_provider
 from app.utils.crypto import decrypt, encrypt
 from app.utils.decorators import permission_required
+from app.utils.deletion import builder_impact, builders_using, unlink_builders
 from app.utils.error_logger import error_detail_link, log_error
 from app.utils.logger import log_activity
 
@@ -63,12 +64,9 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
 
     targets = RegistryTarget.query.filter_by(is_active=True).order_by(RegistryTarget.name).all()
 
-    # Same guard delete() itself checks before rejecting the request —
-    # computed here so the button can be disabled up front.
-    delete_reasons = {}
-    for target in targets:
-        builder_count = Builder.query.filter_by(registry_target_id=target.id).count()
-        delete_reasons[target.id] = f"{builder_count} Builder(s) still reference it." if builder_count else None
+    # What deleting each one would affect, shown in its delete confirm.
+    builder_counts = {target.id: builders_using(Builder.registry_target_id, target.id) for target in targets}
+    delete_impacts = {target.id: builder_impact(builder_counts[target.id], "registry") for target in targets}
 
     invalid_id, invalid_form = invalid_edit or (None, None)
     edit_forms = {}
@@ -83,7 +81,8 @@ def _render_index(create_form=None, open_modal=None, invalid_edit=None):
     return render_template(
         "registries/index.html",
         targets=targets,
-        delete_reasons=delete_reasons,
+        delete_impacts=delete_impacts,
+        builder_counts=builder_counts,
         create_form=create_form,
         edit_forms=edit_forms,
         open_modal=open_modal,
@@ -194,14 +193,8 @@ def edit(target_id):
 def delete(target_id):
     target = RegistryTarget.query.get_or_404(target_id)
 
-    builder_count = Builder.query.filter_by(registry_target_id=target.id).count()
-    if builder_count:
-        flash(
-            f"Cannot delete '{target.name}' — {builder_count} Builder(s) still reference it.", "error"
-        )
-        return redirect(url_for("registries.index"))
-
     name = target.name
+    unlinked = unlink_builders(Builder.registry_target_id, target.id, "Registry", name)
     target_id_str = str(target.id)
     db.session.delete(target)
     db.session.commit()
@@ -210,10 +203,10 @@ def delete(target_id):
         action="DELETE_REGISTRY_TARGET",
         target_type="registry_target",
         target_id=target_id_str,
-        description=f"Deleted registry target '{name}'",
+        description=f"Deleted registry target '{name}'" + (f" ({unlinked} Builder(s) unlinked)" if unlinked else ""),
     )
 
-    flash(f"Registry '{name}' deleted.", "success")
+    flash(f"Registry '{name}' deleted." + (f" {unlinked} Builder(s) need a new registry." if unlinked else ""), "success")
     return redirect(url_for("registries.index"))
 
 
@@ -223,37 +216,37 @@ def archived():
     return _render_archived()
 
 
-@registries_bp.route("/<uuid:target_id>/disable", methods=["POST"])
+@registries_bp.route("/<uuid:target_id>/archive", methods=["POST"])
 @permission_required("registry.manage")
-def disable(target_id):
+def archive(target_id):
     target = RegistryTarget.query.get_or_404(target_id)
     target.is_active = False
     db.session.commit()
 
     log_activity(
-        action="DISABLE_REGISTRY_TARGET",
+        action="ARCHIVE_REGISTRY_TARGET",
         target_type="registry_target",
         target_id=str(target.id),
-        description=f"Disabled registry target '{target.name}'",
+        description=f"Archived registry target '{target.name}'",
     )
 
-    flash(f"'{target.name}' disabled — moved to Archived.", "info")
+    flash(f"'{target.name}' archived.", "info")
     return redirect(url_for("registries.index"))
 
 
-@registries_bp.route("/<uuid:target_id>/enable", methods=["POST"])
+@registries_bp.route("/<uuid:target_id>/restore", methods=["POST"])
 @permission_required("registry.manage")
-def enable(target_id):
+def restore(target_id):
     target = RegistryTarget.query.get_or_404(target_id)
     target.is_active = True
     db.session.commit()
 
     log_activity(
-        action="ENABLE_REGISTRY_TARGET",
+        action="RESTORE_REGISTRY_TARGET",
         target_type="registry_target",
         target_id=str(target.id),
-        description=f"Re-enabled registry target '{target.name}'",
+        description=f"Restored registry target '{target.name}'",
     )
 
-    flash(f"'{target.name}' re-enabled.", "success")
+    flash(f"'{target.name}' restored.", "success")
     return redirect(url_for("registries.archived"))

@@ -5,7 +5,10 @@ from flask import flash, redirect, render_template, request, url_for
 from app.blueprints.roles import roles_bp
 from app.blueprints.roles.forms import RoleForm
 from app.extensions import db
-from app.models import Permission, Role
+from app.models import Permission, Role, User
+from app.models.builder import builder_roles
+from app.models.deployment_server import deployment_server_roles
+from app.models.workflow import workflow_roles
 from app.utils.decorators import permission_required
 from app.utils.logger import log_activity
 
@@ -93,12 +96,14 @@ def _render_roles_list(create_form=None, open_modal=None, invalid_edit=None):
             form.permissions.data = [str(permission.id) for permission in role.permissions]
             edit_forms[role.id] = form
 
-    # Same guard delete_role itself checks before rejecting the request
-    # (is_system is handled separately, by simply not rendering the Delete
-    # button at all — see roles/list.html) — computed here so the button can
-    # be disabled up front instead of only failing after a click.
-    role_delete_reasons = {
-        role.id: (f"Assigned to {len(role.users)} user(s)." if role.users else None) for role in roles
+    # What deleting each role would affect, shown in its delete confirm.
+    role_delete_impacts = {
+        role.id: (
+            f"{len(role.users)} user(s) will have no role (and no permissions) until given a new one."
+            if role.users
+            else None
+        )
+        for role in roles
     }
 
     return render_template(
@@ -107,7 +112,7 @@ def _render_roles_list(create_form=None, open_modal=None, invalid_edit=None):
         create_form=create_form,
         edit_forms=edit_forms,
         permission_groups=_permission_groups(),
-        role_delete_reasons=role_delete_reasons,
+        role_delete_impacts=role_delete_impacts,
         open_modal=open_modal,
     )
 
@@ -187,16 +192,10 @@ def edit_role(role_id):
 def delete_role(role_id):
     role = Role.query.get_or_404(role_id)
 
-    if role.is_system:
-        flash(f"Role '{role.name}' is a built-in system role and cannot be deleted.", "error")
-        return redirect(url_for("roles.list_roles"))
-
-    if role.users:
-        flash(
-            f"Role '{role.name}' is still assigned to {len(role.users)} user(s) and cannot be deleted.",
-            "error",
-        )
-        return redirect(url_for("roles.list_roles"))
+    # Its users stay, with no role; per-item access lists just drop it.
+    User.query.filter_by(role_id=role.id).update({"role_id": None}, synchronize_session=False)
+    for table in (builder_roles, deployment_server_roles, workflow_roles):
+        db.session.execute(table.delete().where(table.c.role_id == role.id))
 
     role_name = role.name
     role_id_str = str(role.id)

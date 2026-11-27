@@ -183,7 +183,7 @@ onPageReady(() => {
 
   function loadDescribe(showLoading = true) {
     if (!currentDescribePod) return;
-    if (showLoading) describeContent.textContent = "Loading...";
+    if (showLoading) window.showLoading(describeContent, "Loading...");
 
     fetch(podUrl(currentDescribePod.namespace, currentDescribePod.podName, "describe"))
       .then((r) => r.json())
@@ -234,7 +234,7 @@ onPageReady(() => {
         const namespace = btn.dataset.namespace || "";
 
         resourceDescribeTitle.textContent = name;
-        resourceDescribeContent.textContent = "Loading...";
+        window.showLoading(resourceDescribeContent, "Loading...");
         resourceDescribeModal.showModal();
 
         const url = new URL(`/deployment-pods/${serverId}/resources/${kind}/describe`, window.location.origin);

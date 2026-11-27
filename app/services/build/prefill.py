@@ -43,7 +43,7 @@ def compute_build_prefill(builder_branches, additional_description=None):
     all_messages = []
     commit_list = []
     for builder, branch in builder_branches:
-        if not branch:
+        if not branch or builder.repository is None:
             continue
         repository = builder.repository
         try:

@@ -139,32 +139,34 @@ class TestDeleteDockerfile:
         with app.app_context():
             assert Dockerfile.query.get(dockerfile_id) is None
 
-    def test_blocks_deletion_when_a_builder_references_it(self, dockerfile_client, app):
+    def test_deletes_a_used_dockerfile_and_unlinks_its_builders(self, dockerfile_client, app):
         with app.app_context():
             dockerfile = _make_dockerfile()
-            _make_builder_referencing(dockerfile.id)
+            builder = _make_builder_referencing(dockerfile.id)
             db.session.commit()
-            dockerfile_id = dockerfile.id
+            dockerfile_id, builder_id = dockerfile.id, builder.id
 
         response = dockerfile_client.post(f"/dockerfiles/{dockerfile_id}/delete", follow_redirects=True)
         assert response.status_code == 200
-        assert b"still reference it" in response.data
+        assert b"need a new Dockerfile" in response.data
         with app.app_context():
-            assert Dockerfile.query.get(dockerfile_id) is not None
+            assert Dockerfile.query.get(dockerfile_id) is None
+            builder = Builder.query.get(builder_id)
+            assert builder.managed_dockerfile_id is None
+            assert builder.missing_links() == ["Dockerfile"]
 
-    def test_delete_button_disabled_when_a_builder_references_it(self, dockerfile_client, app):
+    def test_delete_confirm_shows_affected_builders(self, dockerfile_client, app):
         with app.app_context():
             dockerfile = _make_dockerfile()
             _make_builder_referencing(dockerfile.id)
             db.session.commit()
             dockerfile_id = dockerfile.id
 
-        response = dockerfile_client.get("/dockerfiles/")
-        html = response.data.decode()
+        html = dockerfile_client.get("/dockerfiles/").data.decode()
         marker = f"delete-dockerfile-modal-{dockerfile_id}"
         button = html[html.index(marker) : html.index(marker) + 400]
-        assert "disabled" in button
-        assert "Builder(s) still reference it." in button
+        assert "disabled" not in button
+        assert "Used by 1 Builder(s), which will need a new Dockerfile" in html
 
     def test_delete_button_enabled_when_unreferenced(self, dockerfile_client, app):
         with app.app_context():
@@ -187,7 +189,7 @@ class TestDisableArchiveDockerfile:
             db.session.commit()
             dockerfile_id = dockerfile.id
 
-        response = dockerfile_client.post(f"/dockerfiles/{dockerfile_id}/disable", follow_redirects=True)
+        response = dockerfile_client.post(f"/dockerfiles/{dockerfile_id}/archive", follow_redirects=True)
         assert response.status_code == 200
         with app.app_context():
             assert Dockerfile.query.get(dockerfile_id).is_active is False
@@ -195,7 +197,7 @@ class TestDisableArchiveDockerfile:
         assert f"delete-dockerfile-modal-{dockerfile_id}" not in dockerfile_client.get("/dockerfiles/").data.decode()
         archived_html = dockerfile_client.get("/dockerfiles/archived").data.decode()
         assert "base" in archived_html
-        assert f'/dockerfiles/{dockerfile_id}/enable' in archived_html
+        assert f'/dockerfiles/{dockerfile_id}/restore' in archived_html
 
     def test_enable_restores_it(self, dockerfile_client, app):
         with app.app_context():
@@ -204,7 +206,7 @@ class TestDisableArchiveDockerfile:
             db.session.commit()
             dockerfile_id = dockerfile.id
 
-        response = dockerfile_client.post(f"/dockerfiles/{dockerfile_id}/enable", follow_redirects=True)
+        response = dockerfile_client.post(f"/dockerfiles/{dockerfile_id}/restore", follow_redirects=True)
         assert response.status_code == 200
         with app.app_context():
             assert Dockerfile.query.get(dockerfile_id).is_active is True

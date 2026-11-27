@@ -37,7 +37,7 @@ class DeploymentManifest(db.Model):
     status = db.Column(db.String, default="active", nullable=False)
     # Disabled (archived) manifests drop off the main list onto a separate
     # Archived page, and stop being deployable/selectable for new build-
-    # step authoring — see deployment_manifests.routes.disable/enable, its
+    # step authoring — see deployment_manifests.routes.archive/restore, its
     # deploy()/update()/restart() guards (never stop() — an archived
     # manifest that's still deployed must still be stoppable), and
     # app/services/workflow/resolver.py's resolve_step_manifests(), which

@@ -27,7 +27,7 @@ class DeploymentServer(db.Model):
     last_checked_at = db.Column(db.DateTime, nullable=True)
     # Disabled (archived) servers drop off the main list onto a separate
     # Archived page, and stop being offered as a new target for Deployment
-    # Manifests — see deployment_servers.routes.disable/enable and
+    # Manifests — see deployment_servers.routes.archive/restore and
     # deployment_manifests.routes._server_choices.
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)

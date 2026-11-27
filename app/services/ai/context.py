@@ -54,5 +54,7 @@ def gather_batch_ai_context(batch):
     """`gather_ai_context`, sourcing (Builder, branch) pairs from an already-
     created BuildBatch's ImageBuilds instead of a not-yet-submitted selection.
     """
-    builder_branches = [(image_build.builder, image_build.branch_used) for image_build in batch.image_builds]
+    builder_branches = [
+        (image_build.builder, image_build.branch_used) for image_build in batch.image_builds if image_build.builder is not None
+    ]
     return gather_ai_context(builder_branches)

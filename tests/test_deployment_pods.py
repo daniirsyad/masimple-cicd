@@ -686,7 +686,7 @@ class TestListSecrets:
         response = pod_client.get(f"/deployment-pods/{kube_server}/secrets")
         assert response.status_code == 200
         assert b"regcred" in response.data
-        assert b"Image Pull Secret" in response.data
+        assert b"image pull secret (registry credentials)" in response.data
 
     def test_api_type_server_is_404(self, pod_client, api_server):
         assert pod_client.get(f"/deployment-pods/{api_server}/secrets").status_code == 404

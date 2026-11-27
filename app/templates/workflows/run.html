@@ -1,12 +1,14 @@
-{% extends "base.html" %} {% import "partials/_macros.html" as macros %} {% block title %}Run - {{ run.workflow.name
+{% extends "base.html" %} {% import "partials/_macros.html" as macros %} {% block title %}Run - {{ run.workflow_label
 }} - MASIMPLE CICD{% endblock %} {% block content %}
 
 <div class="flex flex-wrap items-center justify-between gap-2">
   <div>
     <h1 class="text-2xl font-bold">
+      {% if run.workflow_id %}
       <a class="link" href="{{ url_for('workflows.view_workflow', workflow_id=run.workflow_id) }}"
-        >{{ run.workflow.name }}</a
+        >{{ run.workflow_label }}</a
       >
+      {% else %}{{ run.workflow_label }}{% endif %}
       — Run
     </h1>
     <p class="mt-1 text-sm text-base-content/60">
@@ -17,7 +19,7 @@
   <span
     id="run-status-badge"
     class="badge {{ 'badge-success' if run.status == 'success' else 'badge-error' if run.status in ('failed', 'completed_with_failures') else 'badge-info' }}"
-    >{{ run.status }}</span
+    >{{ run.status|status_word }}</span
   >
 </div>
 
@@ -58,7 +60,7 @@
             <td>
               <span
                 class="step-run-status badge badge-sm {{ 'badge-success' if step_run.status == 'success' else 'badge-error' if step_run.status == 'failed' else 'badge-warning' if step_run.status == 'awaiting_review' else 'badge-info' }}"
-                >{{ step_run.status }}</span
+                >{{ step_run.status|status_word }}</span
               >
             </td>
             <td class="step-run-details text-xs">

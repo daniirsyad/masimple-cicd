@@ -2,6 +2,7 @@ from flask import flash, redirect, render_template, url_for
 
 from app.blueprints.permissions import permissions_bp
 from app.blueprints.permissions.forms import PermissionForm
+from app.blueprints.roles.routes import _permission_groups
 from app.extensions import db
 from app.models import Menu, Permission
 from app.utils.decorators import permission_required
@@ -27,22 +28,28 @@ def _render_permissions_list(create_form=None, open_modal=None, invalid_edit=Non
         else:
             edit_forms[permission.id] = PermissionForm(obj=permission, prefix=_edit_prefix(permission.id))
 
-    # Same guards delete_permission() itself checks before rejecting the
-    # request — computed here so the button can be disabled up front.
-    delete_reasons = {}
+    # What deleting each one would affect, shown in its delete confirm. The
+    # app's own routes check codes like user.view: deleting one of those
+    # locks that page for everyone until a permission with that code exists again.
+    delete_impacts = {}
     for permission in permissions:
-        menus_using_it = Menu.query.filter_by(permission_code=permission.code).count()
+        parts = []
         if permission.roles:
-            delete_reasons[permission.id] = f"Assigned to {len(permission.roles)} role(s)."
-        elif menus_using_it:
-            delete_reasons[permission.id] = f"Required by {menus_using_it} menu item(s)."
-        else:
-            delete_reasons[permission.id] = None
+            parts.append(f"It will be removed from {len(permission.roles)} role(s).")
+        menus_using_it = Menu.query.filter_by(permission_code=permission.code).count()
+        if menus_using_it:
+            parts.append(f"{menus_using_it} menu item(s) require it and will be hidden from everyone.")
+        parts.append(
+            f"Any page or action that checks '{permission.code}' becomes unusable until a permission "
+            "with that code is created again."
+        )
+        delete_impacts[permission.id] = " ".join(parts)
 
     return render_template(
         "permissions/list.html",
         permissions=permissions,
-        delete_reasons=delete_reasons,
+        permission_groups=_permission_groups(),
+        delete_impacts=delete_impacts,
         create_form=create_form,
         edit_forms=edit_forms,
         open_modal=open_modal,
@@ -126,23 +133,7 @@ def edit_permission(permission_id):
 def delete_permission(permission_id):
     permission = Permission.query.get_or_404(permission_id)
 
-    if permission.roles:
-        flash(
-            f"Permission '{permission.code}' is still assigned to {len(permission.roles)} role(s) "
-            "and cannot be deleted.",
-            "error",
-        )
-        return redirect(url_for("permissions.list_permissions"))
-
-    menus_using_it = Menu.query.filter_by(permission_code=permission.code).count()
-    if menus_using_it:
-        flash(
-            f"Permission '{permission.code}' is still required by {menus_using_it} menu item(s) "
-            "and cannot be deleted.",
-            "error",
-        )
-        return redirect(url_for("permissions.list_permissions"))
-
+    # Removed from its roles by the role_permissions relationship on delete.
     permission_code = permission.code
     permission_id_str = str(permission.id)
     db.session.delete(permission)

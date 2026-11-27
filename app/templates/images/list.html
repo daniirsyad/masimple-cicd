@@ -53,7 +53,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
               else 'badge-ghost'
             }}"
           >
-            {{ batch.status }}
+            {{ batch.status|status_word }}
           </span>
           <span class="badge badge-ghost badge-sm">bump: {{ batch.bump_type }}</span>
           {% if doc %}
@@ -89,7 +89,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
           <tbody>
             {% for image in batch.image_builds %}
             <tr>
-              <td>{{ image.builder.name }}</td>
+              <td>{{ image.builder_label }}</td>
               <td>{{ image.branch_used }}</td>
               <td>
                 <span class="flex items-center gap-1.5">
@@ -104,7 +104,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
                       else 'badge-ghost'
                     }}"
                   >
-                    {{ image.status }}
+                    {{ image.status|status_word }}
                   </span>
                   {% if image.status == 'failed' and image.error_log_id and current_user.has_permission("logs.view") %}
                   <a

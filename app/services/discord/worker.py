@@ -221,11 +221,11 @@ def _workflow_options(workflows):
 
 
 def _run_status_options(runs):
-    return [_option(f"{r.workflow.name} ({r.status})", f"status:{r.id}") for r in runs]
+    return [_option(f"{r.workflow_label} ({r.status})", f"status:{r.id}") for r in runs]
 
 
 def _review_options(step_runs):
-    return [_option(f"{sr.run.workflow.name} (step {sr.step_order})", f"review:{sr.id}") for sr in step_runs]
+    return [_option(f"{sr.run.workflow_label} (step {sr.step_order})", f"review:{sr.id}") for sr in step_runs]
 
 
 def _manifest_options(base_action, manifests, groups):
@@ -282,7 +282,7 @@ def _handle_review_command(client, interaction, user):
 
     step_runs = [
         sr for sr in WorkflowStepRun.query.filter_by(status="awaiting_review").order_by(WorkflowStepRun.created_at.desc()).all()
-        if sr.run.workflow.is_accessible_to(user)
+        if sr.run.is_accessible_to(user)
     ][:REVIEW_LIST_LIMIT]
     if not step_runs:
         _ack_message(client, interaction, "Nothing's waiting on a review right now.")
@@ -373,7 +373,7 @@ def _handle_run_select(client, interaction, user, workflow_id):
 
 
 def _format_run_status(run):
-    lines = [f'**{run.workflow.name}** — {run.status}']
+    lines = [f'**{run.workflow_label}** — {run.status}']
     for step_run in run.step_runs.all():
         line = f"  Step {step_run.step_order} ({step_run.step_type}): {step_run.status}"
         if step_run.error:
@@ -397,7 +397,7 @@ def _awaiting_review_step_run_for_user(step_run_id, user):
     step_run = WorkflowStepRun.query.get(step_run_id)
     if step_run is None or step_run.status != "awaiting_review":
         return None
-    if not step_run.run.workflow.is_accessible_to(user):
+    if not step_run.run.is_accessible_to(user):
         return None
     return step_run
 
@@ -448,10 +448,10 @@ def _handle_approve_review(client, interaction, user, step_run_id):
 
     log_activity(
         action="APPROVE_WORKFLOW_BUILD_STEP", target_type="workflow_run", target_id=str(run.id),
-        description=f"Approved AI-suggested build metadata for a step in workflow '{run.workflow.name}' via Discord by {user.username}",
+        description=f"Approved AI-suggested build metadata for a step in workflow '{run.workflow_label}' via Discord by {user.username}",
         user=user,
     )
-    _ack_update(client, interaction, f'Approved! The build for **{run.workflow.name}** is queued.')
+    _ack_update(client, interaction, f'Approved! The build for **{run.workflow_label}** is queued.')
 
 
 def _handle_reject_review(client, interaction, user, step_run_id):
@@ -468,10 +468,10 @@ def _handle_reject_review(client, interaction, user, step_run_id):
     reject_awaiting_step(step_run)
     log_activity(
         action="REJECT_WORKFLOW_BUILD_STEP", target_type="workflow_run", target_id=str(run.id),
-        description=f"Rejected AI-suggested build metadata for a step in workflow '{run.workflow.name}' via Discord by {user.username}",
+        description=f"Rejected AI-suggested build metadata for a step in workflow '{run.workflow_label}' via Discord by {user.username}",
         user=user,
     )
-    _ack_update(client, interaction, f'Got it — rejected the build step for **{run.workflow.name}**.')
+    _ack_update(client, interaction, f'Got it — rejected the build step for **{run.workflow_label}**.')
 
 
 def _handle_manifest_action_select(client, interaction, user, base_action, payload, is_group):
@@ -504,7 +504,7 @@ def _handle_manifest_action_select(client, interaction, user, base_action, paylo
     if not spec["teardown"]:
         disabled = [m.name for m in manifests if not m.is_active]
         if disabled:
-            _ack_update(client, interaction, f"Can't {spec['verb']} — disabled manifest(s): {', '.join(disabled)}.")
+            _ack_update(client, interaction, f"Can't {spec['verb']} — archived manifest(s): {', '.join(disabled)}.")
             return
 
     if any(not m.is_accessible_to(user) for m in manifests):
@@ -577,7 +577,13 @@ def _format_group_build_summary(group_name, builders, prefill):
 
 
 def _builder_still_buildable(builder, user):
-    return builder is not None and builder.is_active and builder.default_branch and builder.is_accessible_to(user)
+    return (
+        builder is not None
+        and builder.is_active
+        and builder.default_branch
+        and not builder.missing_links()
+        and builder.is_accessible_to(user)
+    )
 
 
 def _handle_build_select(app, client, interaction, user, builder_id):

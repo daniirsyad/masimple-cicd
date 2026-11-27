@@ -17,8 +17,10 @@ class Builder(db.Model):
 
     id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = db.Column(db.String, nullable=False)
-    version_id = db.Column(UUID(as_uuid=True), db.ForeignKey("versions.id"), nullable=False)
-    repository_id = db.Column(UUID(as_uuid=True), db.ForeignKey("repositories.id"), nullable=False)
+    # version_id/repository_id/registry_target_id are null after that item is
+    # deleted: the Builder then needs a new one before it can build (missing_links).
+    version_id = db.Column(UUID(as_uuid=True), db.ForeignKey("versions.id"), nullable=True)
+    repository_id = db.Column(UUID(as_uuid=True), db.ForeignKey("repositories.id"), nullable=True)
     # This Builder's own default branch — may differ from the Repository's own
     # default_branch (e.g. a Builder that always builds "release" even though
     # the repo's default is "main").
@@ -41,11 +43,11 @@ class Builder(db.Model):
     dockerfile_source = db.Column(db.String, default="repo", nullable=False)
     dockerfile_path = db.Column(db.String, default="Dockerfile", nullable=False)
     managed_dockerfile_id = db.Column(UUID(as_uuid=True), db.ForeignKey("dockerfiles.id"), nullable=True)
-    registry_target_id = db.Column(UUID(as_uuid=True), db.ForeignKey("registry_targets.id"), nullable=False)
+    registry_target_id = db.Column(UUID(as_uuid=True), db.ForeignKey("registry_targets.id"), nullable=True)
     default_build_args = db.Column(db.JSON, nullable=True)
     # Disabled (archived) Builders drop off the main list onto a separate
     # Archived page, and stop being buildable/selectable — see
-    # builders.routes.disable/enable/build, and
+    # builders.routes.archive/restore/build, and
     # app/services/workflow/resolver.py's resolve_builders_from_selection(),
     # which drops a disabled Builder from group resolution on every future
     # workflow run, not just new step authoring.
@@ -62,6 +64,22 @@ class Builder(db.Model):
     # roles assigned means restricted to builder.manage users only — see
     # is_accessible_to() below.
     allowed_roles = db.relationship("Role", secondary=builder_roles, backref=db.backref("allowed_builders", lazy="dynamic"))
+
+    def missing_links(self):
+        """What was deleted out from under this Builder, e.g. ["Version", "Registry"].
+        Non-empty means it can't build until edited."""
+        missing = [
+            label
+            for label, value in (
+                ("Version", self.version),
+                ("Repository", self.repository),
+                ("Registry", self.registry_target),
+            )
+            if value is None
+        ]
+        if self.dockerfile_source == "managed" and self.managed_dockerfile is None:
+            missing.append("Dockerfile")
+        return missing
 
     def is_accessible_to(self, user):
         if user.has_permission("builder.manage"):

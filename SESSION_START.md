@@ -27,8 +27,203 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1205 tests passing** (as of the last full run).
-- **This session's work** (on top of everything below) — the YAML editor on
+- **1227 tests passing** (as of the last full run).
+- **This session's work, part 7** — sidebar group closing on sub-pages
+  (asked: "the menu collapse after moving the page" from Builders):
+  1. Menu "active" was an exact path match, so `/builders/archived`,
+     `/images/<id>` etc. matched no menu and the group rendered closed.
+     `menu_builder._active_url()` now picks the longest menu URL the page
+     is at or under (`/` only matches itself; `/logs/errors` beats `/logs`).
+  2. Test: `TestSidebarActiveMenu` in `tests/test_menus.py`. Full suite 1227 passed.
+  3. The actual report: clicking a sub-menu link closed its group after
+     the htmx swap (fine after a refresh). The groups are an exclusive
+     accordion (`<details name="sidebar-accordion">`); htmx inserts the new
+     body before removing the old one, so the browser closes the incoming
+     open group while the old copy is still open. `sidebar.html` marks the
+     current group `data-sidebar-current`; `sidebar.js` reopens it on every
+     page. Checked in a headless browser (closes without the fix, stays
+     open with it).
+- **This session's work, part 6** — the rest of the app (asked: "do it on
+  the other pages").
+  1. Same rows on AI settings (providers: "Model x, API key saved here /
+     read from the environment variable", "In use"/"Turned off", Default
+     tag; prompt templates), the 5 cluster CRUD pages (namespaces with
+     Active/Terminating state; secrets, configmaps, ingresses, network
+     policies as one sentence each; Describe stays visible on ingresses;
+     kubectl's created time kept as text), and all 8 Archived pages via a
+     new `archived_row` macro (name, one sentence, Restore).
+  2. History/log pages (Images, deploy runs, documentation, dashboard,
+     workflow run page) deliberately keep their column tables, since people
+     compare across them and several are re-rendered by polling JS; they
+     now print statuses through a new `status_word` filter
+     (`app/utils/status_words.py`: "Partly failed", "Finished with
+     failures", "Waiting for review"...), with a twin map in workflows.js.
+     The workflow pages' inline word maps were replaced by the filter.
+  3. Not changed: read-only cluster views (pods, nodes, services, PVs,
+     PVCs, workloads) and the activity/error logs, which are data grids.
+  4. Checked in headless Chromium (AI settings, archived builders and
+     workflows, Images, deploy runs; cluster pages need a real cluster, so
+     their rendering is covered by the existing stubbed-kubectl tests).
+     Test DB cleared afterwards. 2 wording assertions updated, new
+     `status_word` test. Full suite 1220 passed.
+- **This session's work, part 5** — the same rows on Users, Roles and
+  Permissions (asked: "do it on user, role, and permission too").
+  1. Users: full name (greyed when deactivated, "You" on your own row),
+     "Username x, role Y" or a warning "no role, so no permissions"; state
+     "Active / Signed in 2 hours ago", "Deactivated, can't sign in", or
+     "Locked after N failed sign-ins" (amber bar, visible Unlock). Edit +
+     ⋯ with Activate/Deactivate and Delete.
+  2. Roles: name + "Built in" tag, description, permission count (warning
+     when none), user count; Edit + ⋯ Delete via `entry_actions`.
+  3. Permissions: grouped into cards by area with the role editor's own
+     `roles.routes._permission_groups()` (same headings/order), each row
+     the human description first and the code under it, "Given to Super
+     Admin" (or "N roles"); plus the `list_search` box (description, code,
+     role names) since ~48 permissions make a long page.
+  4. All three tables now sit in a card like the other list pages.
+  5. Checked in headless Chromium (1280/420, search for "secret" leaves one
+     card); test DB cleared afterwards. New tests for user row states and
+     grouped/searchable permissions. Full suite 1219 passed.
+- **This session's work, part 4** — the same row style on the other list
+  pages with Edit/Delete/Archive rows (asked: "do it on the other pages
+  that have the same entry table"): Versions, Registries, Dockerfiles,
+  Deployment Servers, GitHub connections (+ repositories), Workflows list
+  and the workflow page (header actions, steps, Recent Runs statuses).
+  1. New shared macros `entry_actions`, `status_line`, `rail_class`; the
+     order counter generalized to `.ordered-rows`/`.row-order` (manifests
+     and workflow steps).
+  2. Each row: name, a plain sentence (e.g. "Kubernetes cluster, reached
+     with a kubeconfig, targeted by 3 manifests", "Harbor at ..., signs in
+     as ...", "Starts with FROM python:3.12-slim", "DEV versions, linked
+     with payments"), usage counts ("3 Builders"), state with time ago
+     (server reachable / can't reach it / not tested; repo synced / last
+     sync failed / cloning; version's last batch; workflow's last run in
+     words), warnings in one sentence (no registry token, step resolving to
+     nothing, workflow with no steps).
+  3. GitHub page: registered repositories now come before "Available to
+     register". Registries route passes `builder_counts`.
+     `_latest_batch_by_version()` uses `DISTINCT ON`.
+  4. Phones: stacked cells get `width: auto` and actions wrap.
+  5. Not changed (different table shapes): Users, Roles, Permissions, AI
+     settings, the cluster pages (namespaces/secrets/...), archived pages,
+     history tables (Images, deploy runs, logs).
+  6. Checked in headless Chromium at 1280/420 with the extended seed (test
+     DB cleared afterwards). New tests for server and registry rows; 4
+     wording assertions updated. Full suite 1217 passed.
+- **This session's work, part 3** — friendlier Builders and Deployment
+  Manifests lists (asked: "make table entries look easy and friendly";
+  plan agreed first, from before/after screenshots of a realistic seed).
+  1. Rows rebuilt as "state first" entries: name (semibold) + one plain
+     sentence ("Builds acme/x on main, pushes to Harbor prod" / "Uses the
+     latest payments-api build" / "Helm chart redis 19.6.2, release ... in
+     ..."), then the state, then one primary button + ghost Edit + a ⋯
+     menu (`more_menu` macro) holding Archive/Delete (and Restart/Stop on
+     manifests). Builders: 8 columns -> 3; manifests: 5 -> 3 (+ order).
+  2. State shown once as a bar on the row's left edge (`entry-rail-*`,
+     pulses while building, static under reduced motion). Builders' last
+     build reads "Built 2.4.11 / 2 hours ago" (`BuildBatch.short_version`,
+     full tag on hover; new `timeago` Jinja filter in
+     `app/utils/timezone.py`, exact time on hover); failed links to Images.
+  3. Manifests got a **"Running on"** column: one `server-lamp` per target
+     server, lit when deployed there (tooltip: version + when), marked when
+     a newer build is ready. New `_manifest_current_deployments()` replaces
+     `_manifest_live_server_ids()`. Group header says "N of M running";
+     deploy order numbers come from a CSS counter (renumber on drag); the
+     drag hint moved into the handle's tooltip.
+  4. Builder group header shows the shared Version once; rows skip it.
+     Access only shown when it says something ("Developers can build", lock
+     + "Admins only", "Only X can deploy").
+  5. `_last_build_by_builder()` now uses `DISTINCT ON` instead of loading
+     every ImageBuild ever.
+  6. No `overflow-x-auto` around these tables (clipped the ⋯ menu); an open
+     group collapse gets `overflow: visible`; below 640px rows stack.
+  7. Checked in headless Chromium (1440/1024/420, light + dark): menus open
+     unclipped, Restart/Stop/Delete in the menu open their modals, order
+     numbers render, no page errors. New tests: last-build state,
+     Running-on lights, no-target hint, `time_ago`. Full suite 1215 passed.
+     The screenshot server seeds the TEST database; clear it afterwards
+     (`db.drop_all()` under FLASK_ENV=testing) or the suite's fixtures
+     collide with the leftover rows.
+- **This session's work, part 2** — loading feedback (asked: "add loading
+  animation when actions take long, sometimes I thought it's not working").
+  1. New `app/static/js/loading.js` (head script, after `page.js`): on
+     `htmx:beforeSend` the form's submitter (remembered from the `submit`
+     event; falls back to the form's first submit button) gets a daisyUI
+     spinner + `disabled` + `aria-busy`; restored on `htmx:afterRequest`
+     (fires on success, error, abort, timeout). beforeSend, not
+     beforeRequest, so values are already serialized. `<input type=submit>`
+     (WTForms, ~26 templates) gets the spinner as its previous sibling.
+     Opt out: `data-no-busy`.
+  2. Top progress bar: `html.page-loading::after` (on `<html>` so body swaps
+     can't remove it), shown only after 300ms while any htmx request is in
+     flight, static under `prefers-reduced-motion`.
+  3. `setBusy(btn, on)` / `showLoading(el, text)` used by the fetch-driven
+     actions: Preview from Git (builders.js, workflows.js), AI Generate
+     (ai-generate.js, replaced its "Generating..." label swap), Helm default
+     values, the deploy/update/stop/restart preview modals
+     (deployment_manifests.js), pod/resource describe (deployment_pods.js).
+     Dropped the planned `withBusy` wrapper: every site already had a
+     disable/finally pair to swap.
+  4. Checked in headless Chromium against the app on the test DB (Playwright
+     route interception for slow/failed requests): slow delete shows
+     spinner + disabled + bar, page swap clears it; a 204 reply and a
+     network failure both restore the button and hide the bar; 5 fast
+     navigations never flashed the bar; no console errors. Screenshot of a
+     WTForms Save button mid-request looked right. New test
+     `test_every_page_loads_the_loading_feedback_script`.
+
+  anything + Archive instead of Disable" plan (asked: "make all items
+  deletable, except for a user who doesn't have delete access"). Decisions:
+  dependents are **unlinked**, Users keep Deactivate, and **no safety
+  blocks at all** (the user first chose to keep them, then chose
+  "permission only": deleting mid-run, the Super Admin role, your own
+  account or the last admin are all allowed). The plan section is removed
+  from CLAUDE.md; its rules now live in Business Rules there.
+  **Phase 1 (Archive)**, no migration:
+  1. On the 8 pages (builders, versions, registries, git_sources, dockerfiles,
+     deployment_servers, deployment_manifests, workflows incl. `view.html`)
+     the Disable button is now **Archive**; routes `/disable`/`/enable` are
+     now `/archive`/`/restore` (view functions renamed `archive_*`/`restore_*`,
+     or `archive`/`restore`). `is_active` stays the column.
+  2. Flash text says "archived"/"restored"; new activity-log entries use
+     `ARCHIVE_*`/`RESTORE_*` actions (old `DISABLE_*`/`ENABLE_*` rows left as is).
+  3. "disabled manifest(s)" refusals (web, Telegram, Discord) and the git
+     connection "is archived — restore it" message updated; tests adjusted.
+  4. Archive now shows next to Delete on every row (before: only when Delete
+     was blocked).
+  **Phases 2–4 (delete anything)**:
+  5. Migration `eaaeda97f5e7` (applied to the dev DB): nullable
+     `image_builds.builder_id`, `build_batches.version_id`,
+     `builders.version_id`/`repository_id`/`registry_target_id`,
+     `deployment_executions.server_id`, `workflow_runs.workflow_id`,
+     `workflow_step_runs.workflow_step_id`; new name columns
+     `image_builds.builder_name`, `build_batches.version_name`,
+     `deployment_executions.manifest_name`/`server_name`,
+     `workflow_runs.workflow_name`. Names are written only at delete time
+     (no backfill); readers use `*_label` properties ("name (deleted)").
+  6. Every delete route (Dockerfile, Registry, Version, Git connection +
+     repos, Server, Manifest, Builder, Workflow, step, Role, Permission,
+     Menu, User) lost its blocks and follows one pattern: fail queued work
+     (`fail_queued_builds`/`fail_queued_executions`/`fail_active_runs`),
+     unlink dependents (`app/utils/deletion.py`), null history links + save
+     the name. Confirms show a `delete_impacts` line via the
+     `delete_impact` macro (replaced `disabled_attrs`, now gone).
+  7. **Bug fixed on the way**: `delete_user` only nulled `activity_logs` and
+     `created_by`, so deleting anyone who had triggered a build/deploy/
+     workflow run, or was the security contact, hit an FK error. It now
+     nulls every `users.id` reference and drops reset tokens/manifest grants.
+  8. `Builder.missing_links()` + "Needs a new X" badges + a blank first
+     option on the edit form's selects; every build path refuses such a
+     Builder. Deploy live-status poller skips rows whose manifest/server
+     was deleted; deploy/build workers fail cleanly on a missing link.
+  9. `seeds/seed_admin.py`: an existing admin user with no role gets Super
+     Admin back on startup (the recovery path for deleting that role).
+  10. Tests: the ~30 "delete is blocked" tests rewritten as "deletes,
+      unlinks, keeps history" tests, plus new ones for user delete (history
+      + self-delete), system role delete, images page after a Builder/
+      Version delete, and building a Builder with a deleted link. Not
+      checked in a real browser.
+- **A prior session's work** (on top of everything below) — the YAML editor on
   Deployment Manifests (asked: "the modal must be full, and it scrolls right
   with the modal's bottom scrollbar instead of the editor's"; then "make the
   YAML editor easy to use and edit").
@@ -174,7 +369,7 @@ Then ask me what to work on next rather than assuming.
      with no full page loads. Still not checked: a real `helm upgrade`
      against a cluster. Not built: deleting old uploaded versions (they
      accumulate, each up to 10 MB). Full suite: 1205 passed.
-- **A prior session's work** (on top of everything below): a user with only
+- **An earlier session's work** (on top of everything below): a user with only
   `deployment_manifest.view` could open Edit, change the YAML, and on Save got
   Flask's bare unstyled "403 Forbidden" page. Fixed app-wide.
   1. **App-wide 403 handler** (`app/__init__.py`, new
@@ -242,7 +437,7 @@ Then ask me what to work on next rather than assuming.
      The Documentation list shows an "N commits" badge per batch (one
      grouped count query). Not done: writing the changes into the saved
      Description text.
-- **An earlier session's work** (on top of everything below) — after a real
+- **A session before that's work** (on top of everything below) — after a real
   "Cannot reach Docker daemon … 10.5.0.38:2376 … Connection refused" from
   Test Connection (diagnosed as dockerd not listening on TCP at all, not an
   app bug), added a TLS setup guide for a remote Docker host to `/config`.
@@ -285,7 +480,7 @@ Then ask me what to work on next rather than assuming.
      root@<host>:/etc/docker/certs/{ca,cert,key}.pem .`). The user ran the
      test command where the files weren't, and docker failed with "open
      ca.pem: no such file or directory".
-- **A session before that's work** (on top of everything below) — answered "can the
+- **Two sessions before that's work** (on top of everything below) — answered "can the
   Docker build engine use a Docker host while this app runs in a pod?" (yes:
   hostPath-mount the node's socket if the node runs dockerd, or point
   `DOCKER_HOST` at a remote daemon), then made that configurable in the UI.
@@ -308,7 +503,7 @@ Then ask me what to work on next rather than assuming.
      (connected), a closed TCP port, and a missing socket. Not tried in a
      real browser.
   4. 5 new tests (`tests/test_system_config.py`, `tests/test_build_factory.py`).
-- **Two sessions before that's work** (on top of everything below) — diagnosed a
+- **Three sessions before that's work** (on top of everything below) — diagnosed a
   "`/deployment-manifests` is very slow" report (started from a pasted,
   truncated `SELECT deployment_executions.* ...` query).
   1. **Root cause: `deployment_executions` had no index on `(manifest_id,
@@ -359,7 +554,7 @@ Then ask me what to work on next rather than assuming.
   query per request is the next step if the page is still slow in prod
   after this migration. Production's own `EXPLAIN` was not checked from
   this session.
-- **Three sessions before that's work** (on top of everything below) — a real production
+- **Four sessions before that's work** (on top of everything below) — a real production
   bug report plus a cluster of small, directly-requested Workflow UX
   additions, each implemented and pushed as its own commit rather than
   batched into one.
@@ -440,7 +635,7 @@ Then ask me what to work on next rather than assuming.
   (`TestPollLoopHandlesATickException`). 1086 → 1102 tests; full suite
   re-run clean after each of the four points above, not just at the end —
   each was its own commit and push, per direct request.
-- **Four sessions before that's work** (on top of everything below) — a full Discord bot
+- **Five sessions before that's work** (on top of everything below) — a full Discord bot
   integration, feature-parity with the existing Telegram integration (both
   directions: outbound notifications and inbound commands). Scoped up front
   via AskUserQuestion (Discord Gateway WebSocket transport, not an HTTP
@@ -658,7 +853,7 @@ Then ask me what to work on next rather than assuming.
        full suite re-run clean (an earlier run showed spurious failures in
        unrelated files purely from two `pytest` processes hitting the same
        Postgres test DB concurrently — a re-run by itself was clean).
-- **Five sessions before that's work** (on top of everything below) — Deploy/Update/
+- **Six sessions before that's work** (on top of everything below) — Deploy/Update/
   Restart's rollout wait (see the prior session's work just below for how
   that wait itself was added) now stops immediately on an obviously-fatal
   pod state instead of blocking out the full configured timeout — requested
@@ -710,7 +905,7 @@ Then ask me what to work on next rather than assuming.
   alongside the existing timeout description. No migration needed — no
   model/schema change, this only changes `KubernetesProvider`'s own internal
   polling.
-- **Six sessions before that's work** (on top of everything below):
+- **Seven sessions before that's work** (on top of everything below):
   1. **Deploy/Update/Restart now waits for the rollout to actually become
      Ready before counting as a success, with a configurable timeout** —
      planned via plan-mode (AskUserQuestion locked the design up front, then
@@ -772,7 +967,7 @@ Then ask me what to work on next rather than assuming.
      SortableJS's drag-reorder still initializes fine against the collapsed
      table since daisyUI hides collapse content via a zero-height grid row,
      not `display:none`.
-- **Seven sessions before that's work** (on top of everything below) — pressing Build,
+- **Eight sessions before that's work** (on top of everything below) — pressing Build,
   Deploy, Update, Stop, or Restart (single or "Whole group") on the
   Builders / Deployment Manifests index pages no longer navigates away to
   the Images / Deployment Runs list on success — it stays on the same
@@ -794,7 +989,7 @@ Then ask me what to work on next rather than assuming.
   `/deployment-manifests/` accordingly; no new tests added since this is a
   redirect-target/flash-content change to already-covered routes, not new
   behavior. No migration needed.
-- **Eight sessions before that's work** (on top of everything below) — the Telegram bot
+- **Nine sessions before that's work** (on top of everything below) — the Telegram bot
   integration (previously Workflow-only: `/run`/`/status`/`/review`) can now
   also trigger manual, non-Workflow Builds and Deployment Manifest
   actions — requested directly, not via plan-mode. No migration needed.
@@ -877,7 +1072,7 @@ Then ask me what to work on next rather than assuming.
   disabled-manifest and "nothing currently deployed" edge cases for
   deploy/stop, the AI-prefill confident-vs-not-confident branches (plus
   Confirm/Cancel) for Build, and the mixed-Version group-build rejection.
-- **Nine sessions before that's work** (on top of everything below) — two independent bug
+- **Ten sessions before that's work** (on top of everything below) — two independent bug
   fixes in the Deployment/Workflow pipeline, found via direct user reports
   rather than the test suite. No migration needed for either. Two commits,
   `45464ac` and `95d3b93`.
@@ -936,7 +1131,7 @@ Then ask me what to work on next rather than assuming.
      duplicate rows from before the fix; they're inert leftovers (no
      corruption, just wasted redundant builds), and that one run will keep
      showing 3x "Build" until this fix is actually deployed there.
-- **Ten sessions before that's work** (on top of everything below) — the "kaniko" build
+- **Eleven sessions before that's work** (on top of everything below) — the "kaniko" build
   engine now actually works, for a self-hosted deploy onto a real
   Kubernetes + CRI-O cluster (<CLUSTER_NAME>) with no Docker-compatible socket
   to mount at all. No migration needed. Two commits, `928fa53` and
@@ -996,7 +1191,7 @@ Then ask me what to work on next rather than assuming.
     through this app — including future builds of itself — should work
     end-to-end. The RBAC manifest also still needs an actual Deploy once
     <CLUSTER_NAME>'s cert is sorted.
-- **Eleven sessions before that's work** (on top of everything below) — commit messages
+- **Twelve sessions before that's work** (on top of everything below) — commit messages
   now drive Bump Type/Object(s)/Change Type more directly, plus a way to
   actually try that out and understand it from `/ai-settings`. No
   migration needed for any of it.
@@ -1073,7 +1268,7 @@ Then ask me what to work on next rather than assuming.
   (+6, explicit word recognition and its priority over conflicting
   markers), `tests/test_ai_settings.py` (+6, the tester route including a
   regression test for the `is_submitted()` bug above).
-- **Twelve sessions before that's work** (on top of everything below) — a Telegram bot
+- **Thirteen sessions before that's work** (on top of everything below) — a Telegram bot
   integration, built in three parts in sequence (the first two planned via
   plan-mode with the user before implementation; the third — build/deploy
   notifications — was a small enough follow-up request to just implement
@@ -1188,7 +1383,7 @@ Then ask me what to work on next rather than assuming.
   (start/finish hooks + the workflow-driven skip); plus additions to the
   existing `tests/test_telegram.py` (`notify_run_finished`,
   `notify_awaiting_review`).
-- **Thirteen sessions before that's work** (on top of everything below), already
+- **Fourteen sessions before that's work** (on top of everything below), already
   committed and pushed to `origin/main`:
   1. **Workflow build steps can auto-generate their Version Bump/Change
      Type/Object/Message at run time instead of requiring them typed in at
@@ -1279,7 +1474,7 @@ Then ask me what to work on next rather than assuming.
   the features themselves: the `menus` and `permissions` blueprints had **no
   test file at all** before this session (`tests/test_menus.py`,
   `tests/test_permissions.py` are new).
-- **Fourteen sessions before that's work** (on top of everything below), already
+- **Fifteen sessions before that's work** (on top of everything below), already
   pushed to `origin/main`:
   1. **The container image never had `kubectl` installed at all** — every
      `DeploymentServer` action (test-connection, apply/delete, pods/

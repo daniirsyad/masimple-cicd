@@ -137,7 +137,7 @@ class TestHelmForm:
     def test_index_shows_the_chart_and_release(self, perm_client, app, servers):
         _helm_manifest(app, servers["kube"])
         html = perm_client(*MANAGE).get("/deployment-manifests/").get_data(as_text=True)
-        assert "web@1.2.3" in html and "Load chart defaults" in html
+        assert "web 1.2.3" in html and "Load chart defaults" in html
 
 
 class TestDefaultValuesApi:

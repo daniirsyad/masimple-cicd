@@ -17,13 +17,17 @@ def _normalize_path(path):
     return path if path == "/" else path.rstrip("/")
 
 
-def _is_active(url):
-    if not url:
-        return False
-    return _normalize_path(url) == _normalize_path(request.path)
+def _active_url(menus):
+    """The menu URL the current page belongs to: its own URL, or the longest one
+    it sits under (/builders/archived -> /builders; /logs/errors -> /logs/errors,
+    not /logs). "/" only matches itself."""
+    path = _normalize_path(request.path)
+    urls = {_normalize_path(m.url) for m in menus if m.url}
+    matches = [u for u in urls if u == path or (u != "/" and path.startswith(u + "/"))]
+    return max(matches, key=len, default=None)
 
 
-def _to_dict(menu, children=None):
+def _to_dict(menu, active_url, children=None):
     children = children or []
     return {
         "id": menu.id,
@@ -31,7 +35,7 @@ def _to_dict(menu, children=None):
         "icon": menu.icon,
         "url": menu.url,
         "children": children,
-        "active": _is_active(menu.url),
+        "active": menu.url is not None and _normalize_path(menu.url) == active_url,
         "has_active_child": any(child["active"] for child in children),
     }
 
@@ -39,6 +43,7 @@ def _to_dict(menu, children=None):
 def build_sidebar_menu(user):
     """Build the nested (max 1-level) sidebar tree, filtered by the user's permissions."""
     all_menus = Menu.query.filter_by(show_in_sidebar=True).order_by(Menu.order).all()
+    active_url = _active_url(all_menus)
 
     children_by_parent = {}
     for menu in all_menus:
@@ -51,14 +56,14 @@ def build_sidebar_menu(user):
             continue
 
         children = [
-            _to_dict(child) for child in children_by_parent.get(menu.id, []) if _visible(child, user)
+            _to_dict(child, active_url) for child in children_by_parent.get(menu.id, []) if _visible(child, user)
         ]
 
         # A parent-only group (no url) with no visible children has nothing to show.
         if menu.url is None and not children:
             continue
 
-        tree.append(_to_dict(menu, children))
+        tree.append(_to_dict(menu, active_url, children))
 
     return tree
 
@@ -66,7 +71,8 @@ def build_sidebar_menu(user):
 def build_navbar_menu(user):
     """Flat list of menu items flagged for the navbar, filtered by the user's permissions."""
     all_menus = Menu.query.filter_by(show_in_navbar=True).order_by(Menu.order).all()
-    return [_to_dict(menu) for menu in all_menus if _visible(menu, user)]
+    active_url = _active_url(all_menus)
+    return [_to_dict(menu, active_url) for menu in all_menus if _visible(menu, user)]
 
 
 def menu_builder(user):

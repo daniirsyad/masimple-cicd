@@ -416,7 +416,7 @@ class TestDeployCommandAndSelect:
         calls = _patch_client(monkeypatch)
         _dispatch(app, client, _select_interaction("deploy_select", f"deploy:{manifest_id}", "600"))
 
-        assert "disabled manifest" in calls["responded"][0]["data"]["content"]
+        assert "archived manifest" in calls["responded"][0]["data"]["content"]
 
     def test_stop_on_a_disabled_but_still_live_manifest_still_works(self, app, client, deploy_linked_user, monkeypatch):
         with app.app_context():

@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Registries -
+{% extends "base.html" %} {% from "partials/_macros.html" import delete_impact, entry_actions %} {% block title %}Registries -
 MASIMPLE CICD{% endblock %} {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Registries</h1>
@@ -21,59 +21,41 @@ MASIMPLE CICD{% endblock %} {% block content %}
 
 <div class="card mt-4 bg-base-100 shadow-sm">
   <div class="card-body p-4">
-    <div class="mt-2 overflow-x-auto">
-      <table class="table table-sm">
+    <div class="mt-2">
+      {% set provider_labels = {'dockerhub': 'Docker Hub', 'ghcr': 'GitHub Container Registry', 'harbor': 'Harbor', 'ecr': 'Amazon ECR', 'custom': 'Custom registry'} %}
+      <table class="table entry-table">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Provider</th>
-            <th>Username</th>
-            <th>Token</th>
-            <th>Registry URL</th>
-            <th></th>
+            <th>Registry</th>
+            <th class="w-1">Used by</th>
+            <th class="w-1"><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
         <tbody>
           {% for target in targets %}
-          <tr>
-            <td>{{ target.name }}</td>
-            <td>{{ target.provider_type }}</td>
-            <td>{{ target.username or "—" }}</td>
-            <td>
-              {% if target.encrypted_token %}
-              <span class="badge badge-success badge-sm">Set</span>
-              {% else %}
-              <span class="badge badge-ghost badge-sm">Not set</span>
+          {% set builder_count = builder_counts.get(target.id, 0) %}
+          <tr class="entry-row">
+            <td class="min-w-0">
+              <div class="text-[0.9375rem] font-semibold">{{ target.name }}</div>
+              <div class="mt-0.5 text-xs text-base-content/60">
+                {{ provider_labels.get(target.provider_type, target.provider_type) }}{% if target.registry_url %} at <span class="font-mono">{{ target.registry_url }}</span>{% endif %}{% if target.username %}, signs in as <span class="font-mono">{{ target.username }}</span>{% endif %}
+              </div>
+              {% if not target.encrypted_token %}
+              <div class="mt-1 text-xs text-warning">No token saved, so pushes only work if this registry allows them without signing in.</div>
               {% endif %}
             </td>
-            <td>{{ target.registry_url or "—" }}</td>
-            <td class="flex gap-2">
-              <button
-                type="button"
-                class="btn btn-sm"
-                onclick="document.getElementById('edit-registry-modal-{{ target.id }}').showModal()"
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                class="btn btn-sm btn-error"
-                onclick="document.getElementById('delete-registry-modal-{{ target.id }}').showModal()"
-                {{ disabled_attrs(delete_reasons.get(target.id)) }}
-              >
-                Delete
-              </button>
-              {% if delete_reasons.get(target.id) %}
-              <form method="POST" action="{{ url_for('registries.disable', target_id=target.id) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-                <button type="submit" class="btn btn-sm btn-warning">Disable</button>
-              </form>
-              {% endif %}
+            <td class="whitespace-nowrap text-sm {{ '' if builder_count else 'text-base-content/60' }}">
+              {{ builder_count ~ ' Builder' ~ ('' if builder_count == 1 else 's') if builder_count else 'No Builders' }}
+            </td>
+            <td>
+              <div class="flex items-center justify-end gap-1">
+                {{ entry_actions(target.name, "edit-registry-modal-" ~ target.id, "delete-registry-modal-" ~ target.id, url_for('registries.archive', target_id=target.id)) }}
+              </div>
             </td>
           </tr>
           {% else %}
           <tr>
-            <td colspan="6">No registries configured yet.</td>
+            <td colspan="3" class="text-sm text-base-content/60">No registries yet. Add one so Builders have somewhere to push images.</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -201,8 +183,9 @@ MASIMPLE CICD{% endblock %} {% block content %}
   <div class="modal-box w-11/12 max-w-sm">
     <h3 class="text-lg font-bold">Delete Registry</h3>
     <p class="py-4 text-sm">
-      Are you sure you want to delete "{{ target.name }}"? Any Builder still using it will block this.
+      Are you sure you want to delete "{{ target.name }}"?
     </p>
+    {{ delete_impact(delete_impacts.get(target.id)) }}
     <div class="modal-action">
       <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
         Cancel

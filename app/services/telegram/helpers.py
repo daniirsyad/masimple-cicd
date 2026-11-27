@@ -63,7 +63,7 @@ def notify_run_finished(run):
         "failed": "failed",
         "completed_with_failures": "completed with failures",
     }.get(run.status, run.status)
-    text = f"Workflow \"{run.workflow.name}\" {status_label}."
+    text = f"Workflow \"{run.workflow_label}\" {status_label}."
     return notify_user(user, text)
 
 
@@ -114,7 +114,7 @@ def notify_build_started(batch):
         return False
 
     user = User.query.get(batch.requested_by)
-    text = f'Build for "{batch.version.name} {batch.full_version_string}" started.'
+    text = f'Build for "{batch.version_label} {batch.full_version_string}" started.'
     return notify_user(user, text)
 
 
@@ -131,7 +131,7 @@ def notify_build_finished(batch):
 
     user = User.query.get(batch.requested_by)
     status_label = BATCH_STATUS_LABELS.get(batch.status, batch.status)
-    text = f'Build for "{batch.version.name} {batch.full_version_string}" {status_label}.'
+    text = f'Build for "{batch.version_label} {batch.full_version_string}" {status_label}.'
     return notify_user(user, text)
 
 

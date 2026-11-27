@@ -15,7 +15,7 @@ class GitSource(db.Model):
     encrypted_token = db.Column(db.Text, nullable=True)
     # Disabled (archived) connections drop off the main list onto a separate
     # Archived page, and can no longer register new Repositories — see
-    # git_sources.routes.disable/enable/register_repo.
+    # git_sources.routes.archive/restore/register_repo.
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

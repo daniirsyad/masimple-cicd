@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime
 
@@ -16,7 +17,9 @@ class BuildBatch(db.Model):
     __tablename__ = "build_batches"
 
     id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    version_id = db.Column(UUID(as_uuid=True), db.ForeignKey("versions.id"), nullable=False)
+    # Null once the Version is deleted; version_name then keeps its name.
+    version_id = db.Column(UUID(as_uuid=True), db.ForeignKey("versions.id"), nullable=True)
+    version_name = db.Column(db.String, nullable=True)
     # Null until the worker actually claims this batch's first ImageBuild —
     # the version bump itself is deferred to that point too (see
     # worker._claim_next_job), so a batch that fails outright never leaves
@@ -44,3 +47,19 @@ class BuildBatch(db.Model):
     # batch that fails is never documented, so these otherwise just sit here
     # unused for its lifetime.
     objects = db.relationship("Object", secondary=build_batch_objects, backref=db.backref("batches", lazy="dynamic"))
+
+    @property
+    def version_label(self):
+        """Version name, or the name saved when it was deleted (see its delete route)."""
+        if self.version is not None:
+            return self.version.name
+        return f"{self.version_name or 'Version'} (deleted)"
+
+    @property
+    def short_version(self):
+        """"2.4.11" out of full_version_string "DEV.2.4.11.261127091502" (the
+        timestamp suffix is for uniqueness, not reading). None until bumped."""
+        if not self.full_version_string:
+            return None
+        match = re.search(r"\d+\.\d+\.\d+", self.full_version_string)
+        return match.group(0) if match else self.full_version_string

@@ -123,7 +123,7 @@ def _builders_in_group(group_hash):
     builders = [
         builder
         for builder in Builder.query.filter(Builder.group_name.isnot(None), Builder.is_active.is_(True)).all()
-        if builder.default_branch
+        if builder.default_branch and not builder.missing_links()
     ]
     matched_name = next((b.group_name for b in builders if _group_hash(b.group_name) == group_hash), None)
     if matched_name is None:
@@ -179,7 +179,7 @@ def format_review_summary(step_run):
     """
     change_type_name = step_run.suggested_change_type.name if step_run.suggested_change_type else None
     return (
-        f'Workflow "{step_run.run.workflow.name}" needs review before building:\n'
+        f'Workflow "{step_run.run.workflow_label}" needs review before building:\n'
         f"Version Bump: {step_run.suggested_bump_type or '(not suggested — set on the web)'}\n"
         f"Change Type: {change_type_name or '(not suggested — set on the web)'}\n"
         f"Object(s): {step_run.suggested_object_names or '(none)'}\n"
@@ -213,5 +213,5 @@ def _deploy_label(run):
     """
     if run.group_name:
         return run.group_name
-    names = sorted({execution.manifest.name for execution in run.executions if execution.manifest is not None})
+    names = sorted({execution.manifest_label for execution in run.executions})
     return ", ".join(names) if names else "a manifest"

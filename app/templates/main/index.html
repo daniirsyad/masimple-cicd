@@ -18,7 +18,7 @@ block content %}
       {% for step_run in awaiting_review_step_runs %}
       <li>
         <a class="link link-primary" href="{{ url_for('workflows.view_run', run_id=step_run.workflow_run_id) }}"
-          >{{ step_run.run.workflow.name }} — Build Step {{ step_run.step_order + 1 }}</a
+          >{{ step_run.run.workflow_label }} — Build Step {{ step_run.step_order + 1 }}</a
         >
         <span class="text-xs text-base-content/60">({{ step_run.created_at|localtime }})</span>
       </li>
@@ -117,7 +117,7 @@ block content %}
               <span
                 class="badge badge-sm {{ 'badge-success' if batch.status == 'success' else 'badge-error' if batch.status in ('failed', 'partial_failure') else 'badge-warning' }}"
               >
-                {{ batch.status }}
+                {{ batch.status|status_word }}
               </span>
             </td>
             <td>{{ batch.requester.username if batch.requester else "—" }}</td>

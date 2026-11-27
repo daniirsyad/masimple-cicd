@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% block title %}Namespaces: {{ server.name }} - MASIMPLE CICD{% endblock %} {% block content %}
+{% extends "base.html" %} {% from "partials/_macros.html" import entry_actions, status_line %} {% block title %}Namespaces: {{ server.name }} - MASIMPLE CICD{% endblock %} {% block content %}
 <span id="deployment-pods-list-page" data-server-id="{{ server.id }}" class="hidden"></span>
 {% set active_kind = 'namespaces' %}
 <div class="flex flex-wrap items-center justify-between gap-2">
@@ -25,43 +25,24 @@
     {% elif not rows %}
     <p class="text-sm text-base-content/60">No namespaces found.</p>
     {% else %}
-    <div class="overflow-x-auto">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Status</th>
-            <th>Created</th>
-            <th></th>
-          </tr>
-        </thead>
+    <div class="">
+      <table class="table entry-table">
+        <thead class="sr-only"><tr><th>Name</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
           {% for row in rows %}
-          <tr>
-            <td>{{ row.name }}</td>
-            <td>
-              <span class="badge badge-sm {{ 'badge-success' if row.phase == 'Active' else 'badge-ghost' }}">
-                {{ row.phase }}
-              </span>
+          <tr class="entry-row">
+            <td class="min-w-0">
+              <div class="font-mono text-[0.9375rem] font-semibold">{{ row.name }}</div>
+              <div class="mt-0.5 text-xs text-base-content/60">Namespace</div>
+              <div class="mt-0.5 text-xs text-base-content/50">Created {{ row.created_at or "at an unknown time" }}</div>
             </td>
-            <td class="text-xs text-base-content/60">{{ row.created_at or "—" }}</td>
-            <td class="flex gap-2">
-              {% if current_user.has_permission("deployment_namespace.manage") %}
-              <button
-                type="button"
-                class="btn btn-xs"
-                onclick="document.getElementById('edit-namespace-modal-{{ row.name }}').showModal()"
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                class="btn btn-xs btn-error"
-                onclick="document.getElementById('delete-namespace-modal-{{ row.name }}').showModal()"
-              >
-                Delete
-              </button>
-              {% endif %}
+            <td class="w-1 whitespace-nowrap">{{ status_line('success', 'Active') if row.phase == 'Active' else status_line('busy' if row.phase == 'Terminating' else 'none', row.phase or 'Unknown') }}</td>
+            <td class="w-1">
+              <div class="flex items-center justify-end gap-1">
+                {% if current_user.has_permission("deployment_namespace.manage") %}
+                {{ entry_actions(row.name, 'edit-namespace-modal-' ~ row.name ~ '', 'delete-namespace-modal-' ~ row.name ~ '') }}
+                {% endif %}
+              </div>
             </td>
           </tr>
           {% endfor %}

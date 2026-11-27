@@ -182,7 +182,7 @@ def _workflow_keyboard(workflows):
 def _run_keyboard(runs):
     return {
         "inline_keyboard": [
-            [{"text": f"{run.workflow.name} ({run.status})", "callback_data": f"status:{run.id}"}] for run in runs
+            [{"text": f"{run.workflow_label} ({run.status})", "callback_data": f"status:{run.id}"}] for run in runs
         ]
     }
 
@@ -314,7 +314,7 @@ def _review_keyboard_for_list(step_runs):
         "inline_keyboard": [
             [
                 {
-                    "text": f"{step_run.run.workflow.name} (step {step_run.step_order})",
+                    "text": f"{step_run.run.workflow_label} (step {step_run.step_order})",
                     "callback_data": f"review:{step_run.id}",
                 }
             ]
@@ -337,7 +337,7 @@ def _handle_review_command(notifier, chat_id, user):
         for step_run in WorkflowStepRun.query.filter_by(status="awaiting_review")
         .order_by(WorkflowStepRun.created_at.desc())
         .all()
-        if step_run.run.workflow.is_accessible_to(user)
+        if step_run.run.is_accessible_to(user)
     ][:REVIEW_LIST_LIMIT]
 
     if not step_runs:
@@ -410,7 +410,7 @@ def _handle_run_callback(notifier, callback_query_id, chat_id, user, workflow_id
 
 
 def _format_run_status(run):
-    lines = [f'Workflow "{run.workflow.name}" — {run.status}']
+    lines = [f'Workflow "{run.workflow_label}" — {run.status}']
     for step_run in run.step_runs.all():
         line = f"  Step {step_run.step_order} ({step_run.step_type}): {step_run.status}"
         if step_run.error:
@@ -442,7 +442,7 @@ def _awaiting_review_step_run_for_user(step_run_id, user):
     step_run = WorkflowStepRun.query.get(step_run_id)
     if step_run is None or step_run.status != "awaiting_review":
         return None
-    if not step_run.run.workflow.is_accessible_to(user):
+    if not step_run.run.is_accessible_to(user):
         return None
     return step_run
 
@@ -496,11 +496,11 @@ def _handle_approve_review_callback(notifier, callback_query_id, chat_id, user, 
         action="APPROVE_WORKFLOW_BUILD_STEP",
         target_type="workflow_run",
         target_id=str(run.id),
-        description=f"Approved AI-suggested build metadata for a step in workflow '{run.workflow.name}' via Telegram by {user.username}",
+        description=f"Approved AI-suggested build metadata for a step in workflow '{run.workflow_label}' via Telegram by {user.username}",
         user=user,
     )
     _answer(notifier, callback_query_id, "Approved.")
-    _reply(notifier, chat_id, f'Approved and queued the build for "{run.workflow.name}".')
+    _reply(notifier, chat_id, f'Approved and queued the build for "{run.workflow_label}".')
 
 
 def _handle_reject_review_callback(notifier, callback_query_id, chat_id, user, step_run_id):
@@ -519,11 +519,11 @@ def _handle_reject_review_callback(notifier, callback_query_id, chat_id, user, s
         action="REJECT_WORKFLOW_BUILD_STEP",
         target_type="workflow_run",
         target_id=str(run.id),
-        description=f"Rejected AI-suggested build metadata for a step in workflow '{run.workflow.name}' via Telegram by {user.username}",
+        description=f"Rejected AI-suggested build metadata for a step in workflow '{run.workflow_label}' via Telegram by {user.username}",
         user=user,
     )
     _answer(notifier, callback_query_id, "Rejected.")
-    _reply(notifier, chat_id, f'Rejected the build step for "{run.workflow.name}".')
+    _reply(notifier, chat_id, f'Rejected the build step for "{run.workflow_label}".')
 
 
 def _handle_manifest_action_callback(notifier, callback_query_id, chat_id, user, base_action, payload, is_group):
@@ -559,7 +559,7 @@ def _handle_manifest_action_callback(notifier, callback_query_id, chat_id, user,
     if not spec["teardown"]:
         disabled = [m.name for m in manifests if not m.is_active]
         if disabled:
-            _answer(notifier, callback_query_id, f"Cannot {spec['verb']}: disabled manifest(s) — {', '.join(disabled)}.")
+            _answer(notifier, callback_query_id, f"Cannot {spec['verb']}: archived manifest(s) — {', '.join(disabled)}.")
             return
 
     if any(not m.is_accessible_to(user) for m in manifests):
@@ -627,7 +627,13 @@ def _build_confirm_keyboard(builder):
 
 
 def _builder_still_buildable(builder, user):
-    return builder is not None and builder.is_active and builder.default_branch and builder.is_accessible_to(user)
+    return (
+        builder is not None
+        and builder.is_active
+        and builder.default_branch
+        and not builder.missing_links()
+        and builder.is_accessible_to(user)
+    )
 
 
 def _handle_build_callback(notifier, callback_query_id, chat_id, user, builder_id):

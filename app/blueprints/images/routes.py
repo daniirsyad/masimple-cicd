@@ -81,7 +81,7 @@ def status():
         running_payload = {
             "batch_id": str(running.batch_id),
             "full_version_string": running.batch.full_version_string,
-            "builder": running.builder.name,
+            "builder": running.builder_label,
             "log_tail": _log_tail(running.build_log),
             "progress": get_batch_progress(running.batch_id),
         }
@@ -92,7 +92,7 @@ def status():
             # Not yet assigned — the Version bump only happens once the
             # worker actually claims a batch's first image (see worker.py).
             "full_version_string": build.batch.full_version_string or "pending",
-            "builder": build.builder.name,
+            "builder": build.builder_label,
             "position": index + 1,
         }
         for index, build in enumerate(engine_status["queued"])

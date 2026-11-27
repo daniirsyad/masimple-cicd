@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Roles -
+{% extends "base.html" %} {% from "partials/_macros.html" import delete_impact, entry_actions %} {% block title %}Roles -
 MASIMPLE CICD{% endblock %} {% block content %}
 
 {% macro permission_picker(form) %}
@@ -37,59 +37,50 @@ MASIMPLE CICD{% endblock %} {% block content %}
   {% endif %}
 </div>
 
-<div class="mt-4 overflow-x-auto">
-  <table class="table table-sm">
+<div class="card mt-4 bg-base-100 shadow-sm">
+  <div class="card-body p-4">
+  <table class="table entry-table">
     <thead>
       <tr>
-        <th>Name</th>
-        <th>Description</th>
-        <th>Permissions</th>
-        <th>Type</th>
-        <th></th>
+        <th>Role</th>
+        <th class="w-1">Members</th>
+        <th class="w-1"><span class="sr-only">Actions</span></th>
       </tr>
     </thead>
     <tbody>
       {% for role in roles %}
-      <tr>
-        <td>{{ role.name }}</td>
-        <td>{{ role.description }}</td>
-        <td>{{ role.permissions | length }}</td>
-        <td>
-          <span
-            class="badge badge-sm {{ 'badge-neutral' if role.is_system else 'badge-ghost' }}"
-          >
-            {{ 'System' if role.is_system else 'Custom' }}
-          </span>
+      {% set user_count = role.users|length %}
+      {% set permission_count = role.permissions|length %}
+      <tr class="entry-row">
+        <td class="min-w-0">
+          <div class="text-[0.9375rem] font-semibold">
+            {{ role.name }}
+            {% if role.is_system %}<span class="badge badge-ghost badge-sm ml-1 align-middle" title="Created by the app; recreated on restart if deleted">Built in</span>{% endif %}
+          </div>
+          {% if role.description %}<div class="mt-0.5 text-xs text-base-content/60">{{ role.description }}</div>{% endif %}
+          <div class="mt-1 text-xs {{ 'text-warning' if not permission_count else 'text-base-content/60' }}">
+            {{ permission_count ~ ' permission' ~ ('' if permission_count == 1 else 's') if permission_count else 'No permissions yet, so its users can only sign in' }}
+          </div>
         </td>
-        <td class="flex gap-2">
-          {% if current_user.has_permission("role.edit") %}
-          <button
-            type="button"
-            class="btn btn-sm"
-            onclick="document.getElementById('edit-modal-{{ role.id }}').showModal()"
-          >
-            Edit
-          </button>
-          {% endif %}
-          {% if not role.is_system and current_user.has_permission("role.delete") %}
-          <button
-            type="button"
-            class="btn btn-sm btn-error"
-            onclick="document.getElementById('delete-modal-{{ role.id }}').showModal()"
-            {{ disabled_attrs(role_delete_reasons.get(role.id)) }}
-          >
-            Delete
-          </button>
-          {% endif %}
+        <td class="whitespace-nowrap text-sm {{ '' if user_count else 'text-base-content/60' }}">
+          {{ user_count ~ ' user' ~ ('' if user_count == 1 else 's') if user_count else 'No users' }}
+        </td>
+        <td>
+          <div class="flex items-center justify-end gap-1">
+            {{ entry_actions(role.name,
+                             ("edit-modal-" ~ role.id) if current_user.has_permission("role.edit") else None,
+                             ("delete-modal-" ~ role.id) if current_user.has_permission("role.delete") else None) }}
+          </div>
         </td>
       </tr>
       {% else %}
       <tr>
-        <td colspan="5">No roles found.</td>
+        <td colspan="3" class="text-sm text-base-content/60">No roles yet.</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 
 {% if current_user.has_permission("role.create") %}
@@ -199,7 +190,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
 </dialog>
 {% endif %}
 
-{% if not role.is_system and current_user.has_permission("role.delete") %}
+{% if current_user.has_permission("role.delete") %}
 <dialog id="delete-modal-{{ role.id }}" class="modal">
   <div class="modal-box w-11/12 max-w-sm">
     <h3 class="text-lg font-bold">Delete Role</h3>
@@ -207,6 +198,8 @@ MASIMPLE CICD{% endblock %} {% block content %}
       Are you sure you want to delete the role "{{ role.name }}"? This cannot
       be undone.
     </p>
+    {{ delete_impact(role_delete_impacts.get(role.id)) }}
+    {{ delete_impact('This is the built-in system role.' if role.is_system else None) }}
     <div class="modal-action">
       <button
         type="button"

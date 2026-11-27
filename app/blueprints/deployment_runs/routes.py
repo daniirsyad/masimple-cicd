@@ -47,7 +47,7 @@ def _run_display_name(run, executions):
     names = []
     seen = set()
     for execution in executions:
-        name = execution.manifest.name if execution.manifest else "(deleted manifest)"
+        name = execution.manifest_label
         if name not in seen:
             seen.add(name)
             names.append(name)
@@ -142,8 +142,8 @@ def status():
     if running is not None:
         running_payload = {
             "id": str(running.id),
-            "manifest": running.manifest.name if running.manifest else "(deleted manifest)",
-            "server": running.server.name,
+            "manifest": running.manifest_label,
+            "server": running.server_label,
             "run_id": str(running.run_id),
             "log_tail": _log_tail(running.log),
             "progress": get_run_progress(running.run_id),
@@ -152,8 +152,8 @@ def status():
     queue = [
         {
             "id": str(execution.id),
-            "manifest": execution.manifest.name if execution.manifest else "(deleted manifest)",
-            "server": execution.server.name,
+            "manifest": execution.manifest_label,
+            "server": execution.server_label,
             "run_id": str(execution.run_id),
             "position": index + 1,
         }

@@ -166,12 +166,11 @@ def edit_menu(menu_id):
 def delete_menu(menu_id):
     menu = Menu.query.get_or_404(menu_id)
 
-    if menu.children:
-        flash(f"Menu '{menu.label}' still has sub-items and cannot be deleted.", "error")
-        return redirect(url_for("menus.list_menus"))
-
     menu_label = menu.label
     menu_id_str = str(menu.id)
+    child_count = len(menu.children)
+    for child in menu.children:  # depth is at most 1, so children have none
+        db.session.delete(child)
     db.session.delete(menu)
     db.session.commit()
 
@@ -179,10 +178,10 @@ def delete_menu(menu_id):
         action="DELETE_MENU",
         target_type="menu",
         target_id=menu_id_str,
-        description=f"Deleted menu '{menu_label}'",
+        description=f"Deleted menu '{menu_label}'" + (f" and its {child_count} sub-item(s)" if child_count else ""),
     )
 
-    flash(f"Menu '{menu_label}' deleted.", "success")
+    flash(f"Menu '{menu_label}' deleted." + (f" {child_count} sub-item(s) deleted with it." if child_count else ""), "success")
     return redirect(url_for("menus.list_menus"))
 
 

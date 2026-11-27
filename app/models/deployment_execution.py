@@ -40,7 +40,11 @@ class DeploymentExecution(db.Model):
     # "this execution's manifest was deleted"; the run/execution row itself,
     # its log, and its rendered_yaml survive for audit.
     manifest_id = db.Column(UUID(as_uuid=True), db.ForeignKey("deployment_manifests.id"), nullable=True)
-    server_id = db.Column(UUID(as_uuid=True), db.ForeignKey("deployment_servers.id"), nullable=False)
+    # Null once the server is deleted. manifest_name/server_name keep the
+    # deleted manifest's/server's name for history pages.
+    server_id = db.Column(UUID(as_uuid=True), db.ForeignKey("deployment_servers.id"), nullable=True)
+    manifest_name = db.Column(db.String, nullable=True)
+    server_name = db.Column(db.String, nullable=True)
     # Set on "stop"- and "restart"-action executions — points back at the
     # deployment being torn down/restarted. For "stop", the worker deletes
     # exactly this execution's rendered_yaml, without re-resolving. For
@@ -86,3 +90,18 @@ class DeploymentExecution(db.Model):
     manifest = db.relationship("DeploymentManifest", backref=db.backref("executions", lazy="dynamic"))
     server = db.relationship("DeploymentServer", backref=db.backref("executions", lazy="dynamic"))
     source_execution = db.relationship("DeploymentExecution", remote_side=[id])
+
+    @property
+    def manifest_label(self):
+        """Manifest name, or the name saved when it was deleted (see its delete route)."""
+        if self.manifest is not None:
+            return self.manifest.name
+        return f"{self.manifest_name or 'Manifest'} (deleted)"
+
+
+    @property
+    def server_label(self):
+        """Server name, or the name saved when it was deleted (see its delete route)."""
+        if self.server is not None:
+            return self.server.name
+        return f"{self.server_name or 'Server'} (deleted)"

@@ -15,7 +15,7 @@
       {% for item in sidebar_menu %}
         {% if item.children %}
           <li>
-            <details name="sidebar-accordion" {% if item.has_active_child %}open{% endif %}>
+            <details name="sidebar-accordion" {{ 'open data-sidebar-current' if item.has_active_child else '' }}>
               <summary class="flex items-center gap-2 {{ 'font-semibold text-primary' if item.has_active_child else '' }}">
                 {% if item.icon %}<span class="sidebar-icon shrink-0 [&>svg]:h-4 [&>svg]:w-4">{{ item.icon | safe }}</span>{% endif %}
                 {{ item.label }}

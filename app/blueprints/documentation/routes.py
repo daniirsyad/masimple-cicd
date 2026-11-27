@@ -52,6 +52,8 @@ def _linked_batch_choices(batch):
     # page (Version.linked_versions, e.g. "QAS" linked with "DEV") — not
     # every successful batch in the system regardless of Version, like
     # before this was added.
+    if batch.version is None:  # Version deleted: nothing left to bundle with
+        return []
     allowed_version_ids = {batch.version_id} | {v.id for v in batch.version.linked_versions}
     return [
         (str(b.id), b.full_version_string)

@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs %} {% block title %}Permissions - MASIMPLE CICD{% endblock %}
+{% extends "base.html" %} {% from "partials/_macros.html" import delete_impact, entry_actions, list_search %} {% block title %}Permissions - MASIMPLE CICD{% endblock %}
 {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Permissions</h1>
@@ -13,51 +13,49 @@
   {% endif %}
 </div>
 
-<div class="mt-4 overflow-x-auto">
-  <table class="table table-sm">
-    <thead>
-      <tr>
-        <th>Code</th>
-        <th>Description</th>
-        <th>Roles</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for permission in permissions %}
-      <tr>
-        <td><code>{{ permission.code }}</code></td>
-        <td>{{ permission.description }}</td>
-        <td>{{ permission.roles | length }}</td>
-        <td class="flex gap-2">
-          {% if current_user.has_permission("permission.edit") %}
-          <button
-            type="button"
-            class="btn btn-sm"
-            onclick="document.getElementById('edit-modal-{{ permission.id }}').showModal()"
+{% if permission_groups %}{{ list_search("#permission-lists", "permissions", "what it allows, code or role") }}{% endif %}
+<div id="permission-lists" class="mt-4 flex flex-col gap-4">
+  {% for group in permission_groups %}
+  <div class="card bg-base-100 shadow-sm" data-search-card="{{ group.label|lower }}">
+    <div class="card-body p-4">
+      <h2 class="card-title text-base">
+        {{ group.label }}
+        <span class="badge badge-ghost badge-sm">{{ group.permissions|length }}</span>
+      </h2>
+      <table class="table entry-table">
+        <thead class="sr-only">
+          <tr><th>Permission</th><th>Given to</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+          {% for permission in group.permissions %}
+          {% set role_count = permission.roles|length %}
+          <tr
+            class="entry-row"
+            data-search="{{ [permission.description, permission.code, permission.roles|map(attribute='name')|join(' ')]|select|join(' ')|lower }}"
           >
-            Edit
-          </button>
-          {% endif %}
-          {% if current_user.has_permission("permission.delete") %}
-          <button
-            type="button"
-            class="btn btn-sm btn-error"
-            onclick="document.getElementById('delete-modal-{{ permission.id }}').showModal()"
-            {{ disabled_attrs(delete_reasons.get(permission.id)) }}
-          >
-            Delete
-          </button>
-          {% endif %}
-        </td>
-      </tr>
-      {% else %}
-      <tr>
-        <td colspan="4">No permissions found.</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+            <td class="min-w-0">
+              <div class="text-[0.9375rem] font-semibold">{{ permission.description or permission.code }}</div>
+              <div class="mt-0.5 font-mono text-xs text-base-content/60">{{ permission.code }}</div>
+            </td>
+            <td class="w-1 whitespace-nowrap text-sm {{ '' if role_count else 'text-base-content/60' }}" title="{{ permission.roles|map(attribute='name')|join(', ') }}">
+              {{ ('Given to ' ~ (permission.roles|map(attribute='name')|join(', ') if role_count <= 2 else role_count ~ ' roles')) if role_count else 'Not given to any role' }}
+            </td>
+            <td class="w-1">
+              <div class="flex items-center justify-end gap-1">
+                {{ entry_actions(permission.code,
+                                 ("edit-modal-" ~ permission.id) if current_user.has_permission("permission.edit") else None,
+                                 ("delete-modal-" ~ permission.id) if current_user.has_permission("permission.delete") else None) }}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <p class="text-sm text-base-content/60">No permissions yet.</p>
+  {% endfor %}
 </div>
 
 {% if current_user.has_permission("permission.create") %}
@@ -160,6 +158,7 @@
       Are you sure you want to delete "{{ permission.code }}"? This cannot be
       undone.
     </p>
+    {{ delete_impact(delete_impacts.get(permission.id)) }}
     <div class="modal-action">
       <button
         type="button"
@@ -182,4 +181,6 @@
   </form>
 </dialog>
 {% endif %}
-{% endfor %} {% endblock %}
+{% endfor %} 
+<script src="{{ url_for('static', filename='js/list-search.js') }}"></script>
+{% endblock %}

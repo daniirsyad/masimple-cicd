@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% from "partials/_macros.html" import disabled_attrs, list_search %} {% block title %}Builders -
+{% extends "base.html" %} {% from "partials/_macros.html" import delete_impact, list_search, more_menu %} {% block title %}Builders -
 MASIMPLE CICD{% endblock %} {% block content %}
 {# Shared by every Group field's searchable-history dropdown below (the create
    form plus one per Builder's edit form) — see builders.js. Not an HTML
@@ -58,82 +58,108 @@ MASIMPLE CICD{% endblock %} {% block content %}
   </div>
 </div>
 
-{% macro builder_row(builder, show_build_button=True) %}
+{% macro builder_row(builder, show_build_button=True, show_version=True) %}
 {% set last = last_builds.get(builder.id) %}
+{% set missing = builder.missing_links() %}
+{% set rail = 'entry-rail-warning' if missing else ('entry-rail-building' if last and last.status in ('running', 'queued') else ('entry-rail-error' if last and last.status == 'failed' else ('entry-rail-success' if last and last.status == 'success' else ''))) %}
 <tr
-  class="builder-row"
+  class="builder-row entry-row {{ rail }}"
   data-search="{{ [builder.name, builder.group_name, builder.image_name, builder.version.name, builder.repository.full_name, builder.default_branch, builder.registry_target.name]|select|join(' ')|lower }}"
   data-builder-id="{{ builder.id }}"
   data-builder-name="{{ builder.name }}"
   data-default-branch="{{ builder.default_branch or '' }}"
 >
-  <td>{{ builder.name }}</td>
-  <td><span class="badge badge-ghost badge-sm">{{ builder.version.name }}</span></td>
-  <td>{{ builder.repository.full_name }}</td>
-  <td>{{ builder.default_branch or "—" }}</td>
-  <td>{{ builder.registry_target.name }}</td>
-  <td>
-    {% if builder.allowed_roles %}
-    {% for role in builder.allowed_roles %}
-    <span class="badge badge-ghost badge-sm">{{ role.name }}</span>
-    {% endfor %}
-    {% else %}
-    <span class="text-xs text-base-content/60">Admins only</span>
-    {% endif %}
-  </td>
-  <td>
-    {% if last %}
-    <code class="text-xs">{{ last.batch.full_version_string or "pending" }}</code>
-    {% if last.status == 'running' %}
-    <span class="loading loading-spinner loading-xs text-warning"></span>
-    {% endif %}
-    <span
-      class="badge badge-sm {{ 'badge-success' if last.status == 'success' else ('badge-error' if last.status == 'failed' else 'badge-warning') }}"
-    >
-      {{ last.status }}
-    </span>
-    <div class="text-xs text-base-content/60">
-      {{ last.created_at | localtime("%Y-%m-%d %H:%M") }}
+  <td class="min-w-0">
+    <div class="text-[0.9375rem] font-semibold">{{ builder.name }}</div>
+    {% if missing %}
+    <div class="mt-0.5 text-xs text-warning">
+      Its {{ missing|join(' and ')|lower }} was deleted. Edit this Builder to pick a new one.
     </div>
     {% else %}
-    <span class="text-xs text-base-content/60">Never built</span>
+    <div class="mt-0.5 text-xs text-base-content/60">
+      Builds <span class="font-mono">{{ builder.repository.full_name }}</span> on
+      <span class="font-mono">{{ builder.default_branch or "no branch set" }}</span>, pushes to {{ builder.registry_target.name }}
+    </div>
+    {% endif %}
+    <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-base-content/60">
+      {% if show_version and builder.version %}<span>Version {{ builder.version.name }}</span>{% endif %}
+      {% if builder.allowed_roles %}
+      <span>{{ builder.allowed_roles|map(attribute='name')|join(', ') }} can build</span>
+      {% else %}
+      <span class="inline-flex items-center gap-1" title="Only users who can manage Builders can see and build this one.">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-3 w-3" aria-hidden="true"><path fill-rule="evenodd" d="M10 1a4.5 4.5 0 0 0-4.5 4.5V9H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-.5V5.5A4.5 4.5 0 0 0 10 1Zm3 8V5.5a3 3 0 1 0-6 0V9h6Z" clip-rule="evenodd" /></svg>
+        Admins only
+      </span>
+      {% endif %}
+    </div>
+  </td>
+  <td class="whitespace-nowrap">
+    {% if last %}
+    {% set version_label = last.batch.short_version or "next version" %}
+    <div class="flex items-center gap-2 text-sm" title="{{ last.batch.full_version_string or 'Version assigned when the build starts' }}">
+      {% if last.status == 'running' %}
+      <span class="loading loading-spinner loading-xs text-warning"></span>
+      <span>Building <span class="font-mono">{{ version_label }}</span></span>
+      {% elif last.status == 'queued' %}
+      <span class="status-dot status-dot-warning"></span><span>Queued <span class="font-mono">{{ version_label }}</span></span>
+      {% elif last.status == 'failed' %}
+      <span class="status-dot status-dot-error"></span><span class="text-error">Failed <span class="font-mono">{{ version_label }}</span></span>
+      {% else %}
+      <span class="status-dot status-dot-success"></span><span>Built <span class="font-mono">{{ version_label }}</span></span>
+      {% endif %}
+    </div>
+    <div class="mt-0.5 pl-4 text-xs text-base-content/60" title="{{ last.created_at|localtime }}">
+      {{ 'started ' if last.status == 'running' else '' }}{{ last.created_at|timeago }}
+      {% if last.status == 'failed' and current_user.has_permission("image.view") %}
+      — <a class="link" href="{{ url_for('images.list_images') }}">see the log in Images</a>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="flex items-center gap-2 text-sm text-base-content/60"><span class="status-dot"></span>Never built</div>
     {% endif %}
   </td>
-  <td class="flex gap-2">
-    {% if show_build_button and current_user.has_permission("builder.build") %}
-    <button
-      type="button"
-      class="build-one-btn btn btn-sm btn-primary"
-      data-builder-id="{{ builder.id }}"
-      data-builder-name="{{ builder.name }}"
-      data-default-branch="{{ builder.default_branch or '' }}"
-    >
-      Build
-    </button>
-    {% endif %}
-    {% if current_user.has_permission("builder.manage") %}
-    <button
-      type="button"
-      class="btn btn-sm"
-      onclick="document.getElementById('edit-builder-modal-{{ builder.id }}').showModal()"
-    >
-      Edit
-    </button>
-    <button
-      type="button"
-      class="btn btn-sm btn-error"
-      onclick="document.getElementById('delete-builder-modal-{{ builder.id }}').showModal()"
-      {{ disabled_attrs(delete_reasons.get(builder.id)) }}
-    >
-      Delete
-    </button>
-    {% if delete_reasons.get(builder.id) %}
-    <form method="POST" action="{{ url_for('builders.disable_builder', builder_id=builder.id) }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-      <button type="submit" class="btn btn-sm btn-warning">Disable</button>
-    </form>
-    {% endif %}
-    {% endif %}
+  <td>
+    <div class="flex items-center justify-end gap-1">
+      {% if show_build_button and current_user.has_permission("builder.build") %}
+      <button
+        type="button"
+        class="build-one-btn btn btn-primary btn-sm"
+        data-builder-id="{{ builder.id }}"
+        data-builder-name="{{ builder.name }}"
+        data-default-branch="{{ builder.default_branch or '' }}"
+        {{ 'disabled' if missing else '' }}
+        title="{{ 'Edit this Builder first: its ' ~ missing|join(' and ')|lower ~ ' was deleted.' if missing else 'Build ' ~ builder.name }}"
+      >
+        Build
+      </button>
+      {% endif %}
+      {% if current_user.has_permission("builder.manage") %}
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        onclick="document.getElementById('edit-builder-modal-{{ builder.id }}').showModal()"
+      >
+        Edit
+      </button>
+      {% call more_menu(builder.name) %}
+      <li>
+        <form method="POST" action="{{ url_for('builders.archive_builder', builder_id=builder.id) }}" class="p-0">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+          <button type="submit" class="w-full px-3 py-2 text-left">Archive</button>
+        </form>
+      </li>
+      <li>
+        <button
+          type="button"
+          class="text-error"
+          onclick="document.getElementById('delete-builder-modal-{{ builder.id }}').showModal()"
+        >
+          Delete
+        </button>
+      </li>
+      {% endcall %}
+      {% endif %}
+    </div>
   </td>
 </tr>
 {% endmacro %}
@@ -148,6 +174,7 @@ MASIMPLE CICD{% endblock %} {% block content %}
       <h2 class="card-title text-base">
         {{ group.name }}
         <span class="badge badge-ghost badge-sm">{{ group.builders|length }} builder{{ '' if group.builders|length == 1 else 's' }}</span>
+        {% if group.shared_version %}<span class="text-sm font-normal text-base-content/60">Version {{ group.shared_version.name }}</span>{% endif %}
       </h2>
       {% if current_user.has_permission("builder.build") %}
       <button type="button" class="build-group-btn btn btn-primary btn-sm">
@@ -156,22 +183,17 @@ MASIMPLE CICD{% endblock %} {% block content %}
       {% endif %}
     </div>
 
-    <div class="mt-2 overflow-x-auto">
-      <table class="table table-sm">
+    <div class="mt-2">
+      <table class="table entry-table">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Version</th>
-            <th>Repository</th>
-            <th>Branch</th>
-            <th>Registry</th>
-            <th>Access</th>
-            <th>Last Build</th>
-            <th></th>
+            <th>Builder</th>
+            <th class="w-1">Last build</th>
+            <th class="w-1"><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
         <tbody>
-          {% for builder in group.builders %} {{ builder_row(builder, show_build_button=False) }} {% endfor %}
+          {% for builder in group.builders %} {{ builder_row(builder, show_build_button=False, show_version=not group.shared_version) }} {% endfor %}
         </tbody>
       </table>
     </div>
@@ -188,18 +210,13 @@ MASIMPLE CICD{% endblock %} {% block content %}
     </h2>
     <p class="text-xs text-base-content/60">Not assigned to a group — build these one at a time.</p>
 
-    <div class="mt-2 overflow-x-auto">
-      <table class="table table-sm">
+    <div class="mt-2">
+      <table class="table entry-table">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Version</th>
-            <th>Repository</th>
-            <th>Branch</th>
-            <th>Registry</th>
-            <th>Access</th>
-            <th>Last Build</th>
-            <th></th>
+            <th>Builder</th>
+            <th class="w-1">Last build</th>
+            <th class="w-1"><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
         <tbody>
@@ -494,8 +511,9 @@ MASIMPLE CICD{% endblock %} {% block content %}
   <div class="modal-box w-11/12 max-w-sm">
     <h3 class="text-lg font-bold">Delete Builder</h3>
     <p class="py-4 text-sm">
-      Are you sure you want to delete "{{ builder.name }}"? Builders with any recorded build history can't be deleted.
+      Are you sure you want to delete "{{ builder.name }}"?
     </p>
+    {{ delete_impact(delete_impacts.get(builder.id)) }}
     <div class="modal-action">
       <button type="button" class="btn btn-sm" onclick="this.closest('dialog').close()">
         Cancel

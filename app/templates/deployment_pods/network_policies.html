@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% block title %}Network Policies: {{ server.name }} - MASIMPLE CICD{% endblock %}
+{% extends "base.html" %} {% from "partials/_macros.html" import entry_actions %} {% block title %}Network Policies: {{ server.name }} - MASIMPLE CICD{% endblock %}
 {% block content %}
 <span id="deployment-pods-list-page" data-server-id="{{ server.id }}" class="hidden"></span>
 {% set active_kind = 'network_policies' %}
@@ -42,48 +42,23 @@
       No network policies found{{ ' in namespace "' ~ namespace_filter ~ '"' if namespace_filter }}.
     </p>
     {% else %}
-    <div class="mt-4 overflow-x-auto">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Namespace</th>
-            <th>Applies To</th>
-            <th>Directions</th>
-            <th>Created</th>
-            <th></th>
-          </tr>
-        </thead>
+    <div class="mt-4">
+      <table class="table entry-table">
+        <thead class="sr-only"><tr><th>Name</th><th>Actions</th></tr></thead>
         <tbody>
           {% for row in rows %}
-          <tr>
-            <td>{{ row.name }}</td>
-            <td>{{ row.namespace }}</td>
-            <td class="text-xs text-base-content/60">
-              {{ (row.pod_selector.items() | map('join', '=') | join(', ')) if row.pod_selector else 'all pods' }}
+          <tr class="entry-row">
+            <td class="min-w-0">
+              <div class="font-mono text-[0.9375rem] font-semibold">{{ row.name }}</div>
+              <div class="mt-0.5 text-xs text-base-content/60">In <span class="font-mono">{{ row.namespace }}</span>, applies to {{ (row.pod_selector.items() | map('join', '=') | join(', ')) if row.pod_selector else 'all pods' }}, controls {{ (row.policy_types | join(' and ') | lower) if row.policy_types else 'no' }} traffic ({{ row.ingress_rule_count }} ingress, {{ row.egress_rule_count }} egress rules)</div>
+              <div class="mt-0.5 text-xs text-base-content/50">Created {{ row.created_at or "at an unknown time" }}</div>
             </td>
-            <td class="text-xs text-base-content/60">
-              {{ row.policy_types | join(', ') if row.policy_types else '—' }}
-              ({{ row.ingress_rule_count }} ingress rule(s), {{ row.egress_rule_count }} egress rule(s))
-            </td>
-            <td class="text-xs text-base-content/60">{{ row.created_at or "—" }}</td>
-            <td class="flex gap-2">
-              {% if current_user.has_permission("deployment_network_policy.manage") %}
-              <button
-                type="button"
-                class="btn btn-xs"
-                onclick="document.getElementById('edit-netpol-modal-{{ row.namespace }}-{{ row.name }}').showModal()"
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                class="btn btn-xs btn-error"
-                onclick="document.getElementById('delete-netpol-modal-{{ row.namespace }}-{{ row.name }}').showModal()"
-              >
-                Delete
-              </button>
-              {% endif %}
+            <td class="w-1">
+              <div class="flex items-center justify-end gap-1">
+                {% if current_user.has_permission("deployment_network_policy.manage") %}
+                {{ entry_actions(row.name, 'edit-netpol-modal-' ~ row.namespace ~ '-' ~ row.name ~ '', 'delete-netpol-modal-' ~ row.namespace ~ '-' ~ row.name ~ '') }}
+                {% endif %}
+              </div>
             </td>
           </tr>
           {% endfor %}

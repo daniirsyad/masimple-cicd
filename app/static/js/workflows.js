@@ -69,7 +69,7 @@ onPageReady(() => {
         formData.append("additional_description", notesField.value.trim());
       }
 
-      previewStatus.textContent = "Reading commits since the last build...";
+      showLoading(previewStatus, "Reading commits since the last build...");
 
       fetch(previewUrl, { method: "POST", body: formData })
         .then((response) => response.json().then((data) => ({ ok: response.ok, data })))
@@ -170,6 +170,17 @@ onPageReady(() => {
   const stepsTableBody = document.getElementById("workflow-run-steps-body");
 
   const TERMINAL_STATUSES = ["success", "failed", "completed_with_failures"];
+  // Twin of STATUS_WORDS in app/utils/status_words.py (the status_word filter).
+  const STATUS_WORDS = {
+    success: "Succeeded",
+    failed: "Failed",
+    partial_failure: "Partly failed",
+    completed_with_failures: "Finished with failures",
+    running: "Running",
+    queued: "Queued",
+    skipped: "Skipped",
+    awaiting_review: "Waiting for review",
+  };
 
   // The "Awaiting Review" panel (workflows/run.html) is server-rendered
   // once, outside #workflow-run-steps-body, so it never gets wiped by
@@ -210,7 +221,7 @@ onPageReady(() => {
     `;
 
     row.children[0].textContent = stepRun.step_order + 1;
-    row.querySelector(".step-run-status").textContent = stepRun.status;
+    row.querySelector(".step-run-status").textContent = STATUS_WORDS[stepRun.status] || stepRun.status;
     if (stepRun.error) {
       row.querySelector(".step-run-details .text-error").textContent = stepRun.error;
     }
@@ -236,7 +247,7 @@ onPageReady(() => {
         }
         hadAwaitingReview = nowAwaitingReview;
 
-        statusBadge.textContent = data.status;
+        statusBadge.textContent = STATUS_WORDS[data.status] || data.status;
         statusBadge.className = `badge ${badgeClass(data.status)}`;
 
         stepsTableBody.innerHTML = "";
