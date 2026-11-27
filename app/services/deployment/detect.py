@@ -291,12 +291,15 @@ def _detect_helm(manifest, provider, result):
     for path, template in _locators(values_doc):
         marker_values.update(_extract(template, _lookup(info["values"], path)) or {})
 
-    prefix = f"{manifest.helm_chart_name}-"
-    live_chart_version = info["chart"][len(prefix):] if info["chart"].startswith(prefix) else info["chart"]
-    chart = f"{manifest.helm_chart_name}@{live_chart_version}"
-    if live_chart_version != manifest.helm_chart_version:
+    live_chart_version = info["chart_version"]
+    # An unreadable version records as "unknown", which never matches a
+    # deploy, so Update is offered and brings it onto a known chart.
+    chart = f"{manifest.helm_chart_name}@{live_chart_version or 'unknown'}"
+    if not live_chart_version:
+        result["chart_note"] = "Couldn't read which chart version is running. Update would install the manifest's."
+    elif live_chart_version != manifest.helm_chart_version:
         result["chart_note"] = (
-            f"Running chart {info['chart'] or 'unknown'}; the manifest has {manifest.helm_chart_version}. "
+            f"Running chart version {live_chart_version}; the manifest has {manifest.helm_chart_version}. "
             "Update would change it."
         )
 

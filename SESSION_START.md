@@ -27,7 +27,17 @@ Then ask me what to work on next rather than assuming.
 
 ## Current state
 
-- **1261 tests passing** (as of the last full run).
+- **1266 tests passing** (as of the last full run).
+- **This session's work, part 14** — Detect failed on the production server
+  with "unknown flag: --all": the image pins Helm 4 (v4.3.2), whose
+  `helm list` has no `--all`; dev has Helm 3.22. `helm_release_info` now
+  avoids `helm list`: `helm status -o json` (same call the poller already
+  makes on the server) for status + chart version, `helm get metadata` as
+  a fallback for the version, `helm get values`. Returns `chart_version`
+  ("" if unreadable -> recorded as `chart@unknown`, so Update is offered).
+  Helm 4 itself wasn't run here (downloading it was blocked). Tests:
+  `TestHelmReleaseInfo`. Full suite 1266 passed. Lesson: dev Helm is 3.x,
+  prod is 4.x — only use helm flags both have.
 - **This session's work, part 13** — live-status check timing out
   (`kubectl get -f - -o name` killed after 10s in `_refresh_live_status`):
   1. The background poller reused the Test connection button's 10s limit.

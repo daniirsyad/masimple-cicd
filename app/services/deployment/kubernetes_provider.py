@@ -953,25 +953,39 @@ class KubernetesProvider(DeploymentProvider):
 
     def helm_release_info(self, release, namespace):
         """None if the release isn't installed, else {"status": "deployed"|...,
-        "chart": "name-1.2.3", "values": {user-supplied values}}. Read-only."""
+        "chart_version": "1.2.3" or "" if it can't be read, "values": {the
+        values it was installed with}}. Read-only.
+
+        Only uses commands Helm 3 and 4 share: `helm status` (the same call
+        helm_live_status makes every poll) and `helm get values`. `helm list`
+        is avoided: its flags differ between versions (Helm 4 has no --all)."""
         try:
             with helm_session(self.kubeconfig) as (run, _home):
-                listing = run(["list", "--namespace", namespace, "--all", "--filter", f"^{release}$", "-o", "json"],
-                              timeout=TEST_CONNECTION_TIMEOUT_SECONDS)
-                if listing.returncode != 0:
-                    raise RuntimeError(listing.stderr.strip() or "helm list failed.")
-                matches = [r for r in json.loads(listing.stdout or "[]") if r.get("name") == release]
-                if not matches:
-                    return None
+                status = run(["status", release, "--namespace", namespace, "-o", "json"],
+                             timeout=LIVE_STATUS_TIMEOUT_SECONDS)
+                if status.returncode != 0:
+                    if "not found" in status.stderr.lower():
+                        return None
+                    raise RuntimeError(status.stderr.strip() or "helm status failed.")
+                release_json = json.loads(status.stdout or "{}")
+                chart_version = str(((release_json.get("chart") or {}).get("metadata") or {}).get("version") or "")
+                if not chart_version:
+                    # Not in every version's status output; `helm get metadata` has it.
+                    metadata = run(["get", "metadata", release, "--namespace", namespace, "-o", "json"],
+                                   timeout=LIVE_STATUS_TIMEOUT_SECONDS)
+                    if metadata.returncode == 0:
+                        chart_version = str(json.loads(metadata.stdout or "{}").get("version") or "")
                 values = run(["get", "values", release, "--namespace", namespace, "-o", "json"],
-                             timeout=TEST_CONNECTION_TIMEOUT_SECONDS)
+                             timeout=LIVE_STATUS_TIMEOUT_SECONDS)
                 if values.returncode != 0:
                     raise RuntimeError(values.stderr.strip() or "helm get values failed.")
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(f"Could not read Helm release: {exc}") from None
+        except ValueError:
+            raise RuntimeError("Helm's answer couldn't be read.") from None
         return {
-            "status": matches[0].get("status"),
-            "chart": matches[0].get("chart") or "",
+            "status": (release_json.get("info") or {}).get("status") or "unknown",
+            "chart_version": chart_version,
             "values": json.loads(values.stdout or "null") or {},
         }
 

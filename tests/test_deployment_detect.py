@@ -236,7 +236,7 @@ class TestDetectHelm:
         manifest_id = _manifest(app, world, HELM_VALUES, ["web", "api", "worker"], helm=True)
         fake_cluster.release = {
             "status": "deployed",
-            "chart": "shop-1.1.0",
+            "chart_version": "1.1.0",
             "values": {
                 "frontend": {"image": {"tag": "DEV.1.1.0"}},
                 "worker": {"image": "registry.acme.dev/worker:DEV.3.0.0"},
@@ -259,7 +259,7 @@ class TestDetectHelm:
 
     def test_failed_release_is_not_markable(self, app, world, fake_cluster):
         manifest_id = _manifest(app, world, HELM_VALUES, ["web", "api", "worker"], helm=True)
-        fake_cluster.release = {"status": "failed", "chart": "shop-1.2.0", "values": {}}
+        fake_cluster.release = {"status": "failed", "chart_version": "1.2.0", "values": {}}
         assert _detect(app, manifest_id, world["kube"])["state"] == "unhealthy"
 
 
@@ -311,7 +311,7 @@ class TestMarkAsDeployed:
 
     def test_helm_mark_records_the_release(self, app, world, fake_cluster, perm_client):
         manifest_id = _manifest(app, world, HELM_VALUES, ["web", "api", "worker"], helm=True)
-        fake_cluster.release = {"status": "deployed", "chart": "shop-1.2.0", "values": {}}
+        fake_cluster.release = {"status": "deployed", "chart_version": "1.2.0", "values": {}}
         self._mark(perm_client(*DEPLOY_CODES), manifest_id, world["kube"])
         with app.app_context():
             execution = DeploymentExecution.query.one()
@@ -391,3 +391,61 @@ class TestFindImages:
         client = perm_client("deployment_manifest.view")
         assert client.post("/deployment-manifests/api/find-images", data={"yaml_content": "a: 1"}).status_code == 403
         assert client.post("/deployment-manifests/api/apply-images", data={"yaml_content": "a: 1"}).status_code == 403
+
+
+class TestHelmReleaseInfo:
+    """helm_release_info only uses commands Helm 3 and 4 share (status,
+    get metadata, get values); Helm 4's `helm list` has no --all."""
+
+    def _provider(self, monkeypatch, answers):
+        import subprocess
+
+        from app.services.deployment import helm
+
+        calls = []
+
+        def fake_run(args, **kwargs):
+            command = args[1:3]
+            calls.append(command)
+            code, out, err = answers.get(command[0] if command[0] != "get" else f"get {command[1]}", (0, "{}", ""))
+            return subprocess.CompletedProcess(args, code, stdout=out, stderr=err)
+
+        monkeypatch.setattr(helm.subprocess, "run", fake_run)
+        return KubernetesProvider("kubeconfig"), calls
+
+    def test_reads_status_chart_version_and_values(self, monkeypatch):
+        provider, calls = self._provider(monkeypatch, {
+            "status": (0, json.dumps({"info": {"status": "deployed"}, "chart": {"metadata": {"version": "0.1.0"}}}), ""),
+            "get values": (0, json.dumps({"image": {"tag": "DEV.1"}}), ""),
+        })
+        info = provider.helm_release_info("shop", "apps")
+        assert info == {"status": "deployed", "chart_version": "0.1.0", "values": {"image": {"tag": "DEV.1"}}}
+        assert all(call[0] != "list" for call in calls)
+
+    def test_falls_back_to_get_metadata_for_the_chart_version(self, monkeypatch):
+        provider, _calls = self._provider(monkeypatch, {
+            "status": (0, json.dumps({"info": {"status": "deployed"}}), ""),
+            "get metadata": (0, json.dumps({"version": "0.2.0"}), ""),
+            "get values": (0, "null", ""),
+        })
+        info = provider.helm_release_info("shop", "apps")
+        assert info["chart_version"] == "0.2.0" and info["values"] == {}
+
+    def test_unreadable_chart_version_is_empty_not_an_error(self, monkeypatch):
+        provider, _calls = self._provider(monkeypatch, {
+            "status": (0, json.dumps({"info": {"status": "deployed"}}), ""),
+            "get metadata": (1, "", "Error: unknown command"),
+        })
+        assert provider.helm_release_info("shop", "apps")["chart_version"] == ""
+
+    def test_not_installed_is_none(self, monkeypatch):
+        provider, _calls = self._provider(monkeypatch, {"status": (1, "", "Error: release: not found")})
+        assert provider.helm_release_info("shop", "apps") is None
+
+    def test_unknown_chart_version_is_noted_and_offers_update(self, app, world, fake_cluster):
+        manifest_id = _manifest(app, world, HELM_VALUES, ["web", "api", "worker"], helm=True)
+        fake_cluster.release = {"status": "deployed", "chart_version": "", "values": {}}
+        result = _detect(app, manifest_id, world["kube"])
+        assert result["state"] == "found"
+        assert "Couldn't read which chart version" in result["chart_note"]
+        assert result["_record"]["resolved_version_string"].endswith("helm chart=shop@unknown")
