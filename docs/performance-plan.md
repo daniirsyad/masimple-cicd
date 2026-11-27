@@ -131,7 +131,7 @@ in the browser:
 |---|---|---|---|
 | Deployment Manifests | 230 ms | **5.9 s** (5.3 s of main thread blocked) | 0.7 s |
 | YAML Generator (after Manifests) | 10 ms | 480 ms | 230 ms |
-| Deployment Runs | 1000 ms | 1.1 s | not measured yet (needs deploy) |
+| Deployment Runs | 1000 ms -> 17 ms | 1.1 s | 0.1 s |
 
 - **Manifests built 52 CodeMirror editors on load**, one per edit/view
   modal (26,000 DOM nodes). Editors are now built when their modal first
@@ -143,8 +143,10 @@ in the browser:
   now serves both.
 - **Deployment Runs** loaded each run's executions twice with their logs
   and rendered YAML, plus every manifest's YAML for the filter dropdown.
-  It now loads them once, without those columns. Dev data is too small to
-  show the gain, so measure it on production after deploy.
+  It now loads them once, without those columns (46 -> 14 queries).
+
+Re-measured after deploying `a60ae18`: every Deployment menu page paints
+within 0.75 s of the click, and the live edit modal still builds its editor.
 
 ## Plan
 

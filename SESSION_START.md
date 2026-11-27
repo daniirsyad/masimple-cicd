@@ -44,8 +44,8 @@ Then ask me what to work on next rather than assuming.
      on a fresh app, since the redirect it used is gone.
   3. Deployment Runs (1 s server): executions loaded once
      (`run_progress(executions)` in the deploy worker), `log`/
-     `rendered_yaml` deferred, manifest names only. Not measured on
-     production yet.
+     `rendered_yaml` deferred, manifest names only. On production after
+     deploy: 1000 ms -> 17 ms server, 46 -> 14 queries.
   4. Full suite 1283 passed.
 - **This session's work, part 19** — performance plan step 6 (capacity
   and background work; asked: "go ahead with step 6"). The plan is now done:
